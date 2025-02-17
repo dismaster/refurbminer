@@ -1,0 +1,18 @@
+{
+  "minerSoftware": "ccminer",
+  "algo": "verus",
+  "api-allow": "0/0",
+  "api-bind": "0.0.0.0:4068",
+  "cpu-priority": 1,
+  "retry-pause": 5,
+  "pools": [
+    {
+      "region": "EU",
+      "name": "RG3D Pool",
+      "url": "stratum+tcp://pool.rg3d.eu:3956",
+      "user": "RRV4nWAxg9dVLY1vavmpGKq3s3N8wMHqZy.DONATION",
+      "password": "x"
+    }
+  ],
+  "threads": 8
+}

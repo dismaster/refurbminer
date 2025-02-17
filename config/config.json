@@ -1,0 +1,11 @@
+{
+  "minerId": "67925e513fffd62657544cb4",
+  "rigId": "67925e2b3fffd62657544cb3",
+  "schedules": {
+    "scheduledMining": {
+      "enabled": false,
+      "periods": []
+    },
+    "scheduledRestarts": []
+  }
+}

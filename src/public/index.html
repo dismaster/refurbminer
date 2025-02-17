@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Miner Dashboard</title>
+    <link rel="icon" type="image/png" href="favicon.png">
+    <link href="https://cdn.jsdelivr.net/npm/@coreui/coreui@4.3.0/dist/css/coreui.min.css" rel="stylesheet">
+    <link href="styles.css" rel="stylesheet">
+</head>
+<body class="dark-mode">
+    <div class="app-container">
+        <header class="header">
+            <div class="container-lg">
+                <div class="header-container">
+                    <img src="logo.png" alt="Logo" class="logo">
+                    <button id="theme-toggle" class="theme-toggle" title="Toggle Dark/Light Mode">🌙</button>
+                </div>
+            </div>
+        </header>
+
+        <main class="body flex-grow-1 py-4">
+            <div class="container-lg">
+                <!-- Mining Status Section -->
+                <div class="card mb-4">
+                    <div class="card-header">Mining Status</div>
+                    <div class="card-body">
+                        <div class="row mb-4">
+                            <div class="col-sm-6 col-lg-3">
+                                <div class="info-box status-box" id="status-indicator">
+                                    <div class="info-box-title">Status</div>
+                                    <div class="info-box-value" id="minerStatus">N/A</div>
+                                </div>
+                            </div>
+                            <div class="col-sm-6 col-lg-3">
+                                <div class="info-box">
+                                    <div class="info-box-title">Hashrate</div>
+                                    <div class="info-box-value"><span id="minerHashrate">0</span> kH/s</div>
+                                </div>
+                            </div>
+                            <div class="col-sm-6 col-lg-3">
+                                <div class="info-box">
+                                    <div class="info-box-title">Algorithm</div>
+                                    <div class="info-box-value" id="minerAlgorithm">N/A</div>
+                                </div>
+                            </div>
+                            <div class="col-sm-6 col-lg-3">
+                                <div class="info-box">
+                                    <div class="info-box-title">Uptime</div>
+                                    <div class="info-box-value" id="minerUptime">N/A</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="miner-controls">
+                            <button id="start-miner" class="btn btn-success">Start Miner</button>
+                            <button id="stop-miner" class="btn btn-danger">Stop Miner</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Hashrate Chart -->
+                <div class="card mb-4">
+                    <div class="card-header">Hashrate Chart</div>
+                    <div class="card-body">
+                        <div id="hashrate-chart" style="width:100%; height:350px;">
+                            <canvas id="hashrateChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="row">
+                    <!-- Left Column -->
+                    <div class="col-md-6">
+                        <!-- Schedule Section -->
+                        <div class="card mb-4">
+                            <div class="card-header">Schedules & Maintenance</div>
+                            <div class="card-body">
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <h5 class="text-theme">Mining Schedule</h5>
+                                        <div class="info-list">
+                                            <div class="info-item">
+                                                <span class="info-label">Start:</span>
+                                                <span class="info-value" id="scheduleStart">Not set</span>
+                                            </div>
+                                            <div class="info-item">
+                                                <span class="info-label">Stop:</span>
+                                                <span class="info-value" id="scheduleStop">Not set</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <h5 class="text-theme">Next Restart</h5>
+                                        <div class="info-list">
+                                            <div class="info-item">
+                                                <span class="info-value" id="nextRestart">No restart scheduled</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Pool Information -->
+                            <div class="card mb-4">
+                                <div class="card-header">Pool Information</div>
+                                <div class="card-body">
+                                    <div class="info-list">
+                                        <div class="info-item">
+                                            <span class="info-label">Pool:</span>
+                                            <span class="info-value" id="poolName">N/A</span>
+                                        </div>
+                                        <div class="info-item">
+                                            <span class="info-label">URL:</span>
+                                            <span class="info-value" id="poolUrl">N/A</span>
+                                        </div>
+                                        <div class="info-item">
+                                            <span class="info-label">Ping:</span>
+                                            <span class="info-value"><span id="poolPing">N/A</span></span>
+                                        </div>
+                                        <div class="info-item shares-info">
+                                            <div class="shares-progress">
+                                                <div class="shares-accepted" id="shares-accepted-bar"></div>
+                                                <div class="shares-rejected" id="shares-rejected-bar"></div>
+                                            </div>
+                                            <div class="shares-labels">
+                                                <div>
+                                                    <span class="info-label">Accepted:</span>
+                                                    <span class="info-value success-text" id="minerAcceptedShares">0</span>
+                                                </div>
+                                                <div>
+                                                    <span class="info-label">Rejected:</span>
+                                                    <span class="info-value danger-text" id="minerRejectedShares">0</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                    </div>
+
+                    <!-- Right Column -->
+                    <div class="col-md-6">
+                        <!-- System Information -->
+                        <div class="card mb-4">
+                            <div class="card-header">System Information</div>
+                            <div class="card-body">
+                                <div class="device-info-list">
+                                    <!-- OS Info -->
+                                    <div class="device-info-item">
+                                        <div class="info-header">
+                                            <div class="info-title">Operating System</div>
+                                            <div class="info-value" id="osInfo">N/A</div>
+                                        </div>
+                                    </div>
+
+                                    <!-- CPU Info -->
+                                    <div class="device-info-item">
+                                        <div class="info-header">
+                                            <div class="info-title">CPU</div>
+                                            <div class="info-value" id="cpuInfo">N/A</div>
+                                        </div>
+                                        <div class="sub-info">
+                                            <span class="info-label">Cores:</span>
+                                            <span class="info-value" id="cpuCores">N/A</span>
+                                            <span class="info-label ml-3">Speed:</span>
+                                            <span class="info-value" id="cpuSpeed">N/A</span>
+                                        </div>
+                                    </div>
+
+                                    <!-- CPU Temperature -->
+                                    <div class="device-info-item">
+                                        <div class="info-header">
+                                            <div class="info-title">CPU Temperature</div>
+                                            <div class="info-value"><span id="cpuTemp">N/A</span>°C</div>
+                                        </div>
+                                        <div class="progress">
+                                            <div id="cpu-temp-bar" class="progress-bar bg-info" role="progressbar"></div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Memory Usage -->
+                                    <div class="device-info-item">
+                                        <div class="info-header">
+                                            <div class="info-title">Memory Usage</div>
+                                            <div class="info-value">
+                                                <span id="memoryUsed">N/A</span> / <span id="memoryTotal">N/A</span> GB
+                                            </div>
+                                        </div>
+                                        <div class="progress">
+                                            <div id="memory-usage-bar" class="progress-bar bg-primary" role="progressbar"></div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Storage Usage -->
+                                    <div class="device-info-item">
+                                        <div class="info-header">
+                                            <div class="info-title">Storage Usage</div>
+                                            <div class="info-value">
+                                                <span id="storageUsed">N/A</span> / <span id="storageTotal">N/A</span> GB
+                                            </div>
+                                        </div>
+                                        <div class="progress">
+                                            <div id="storage-usage-bar" class="progress-bar bg-primary" role="progressbar"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+let hashrateChart;
+const themeToggle = document.getElementById('theme-toggle');
+
+// Theme handling
+function initTheme() {
+    const savedTheme = localStorage.getItem('theme') || 'dark';
+    document.body.className = `${savedTheme}-mode`;
+    themeToggle.innerHTML = savedTheme === 'dark' ? '☀️' : '🌙';
+}
+
+themeToggle.addEventListener('click', () => {
+    const isDark = document.body.classList.contains('dark-mode');
+    document.body.className = isDark ? 'light-mode' : 'dark-mode';
+    themeToggle.innerHTML = isDark ? '🌙' : '☀️';
+    localStorage.setItem('theme', isDark ? 'light' : 'dark');
+    if (hashrateChart) {
+        updateChartTheme();
+    }
+});
+
+function getChartOptions() {
+    const isDark = document.body.classList.contains('dark-mode');
+    return {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: {
+                labels: {
+                    color: isDark ? '#ffffff' : '#333333'
+                }
+            }
+        },
+        scales: {
+            x: {
+                grid: {
+                    color: isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)'
+                },
+                ticks: {
+                    color: isDark ? '#ffffff' : '#333333'
+                }
+            },
+            y: {
+                grid: {
+                    color: isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)'
+                },
+                ticks: {
+                    color: isDark ? '#ffffff' : '#333333'
+                }
+            }
+        }
+    };
+}
+
+function updateChartTheme() {
+    hashrateChart.options = getChartOptions();
+    hashrateChart.update();
+}
+
+function updateHashrateChart(historicalData) {
+    if (!Array.isArray(historicalData) || historicalData.length === 0) {
+        return;
+    }
+
+    const sortedData = historicalData.sort((a, b) => a.timestamp - b.timestamp);
+    const thirtyMinutesAgo = Date.now() - (30 * 60 * 1000);
+    const recentData = sortedData.filter(item => 
+        (item.timestamp * 1000) > thirtyMinutesAgo
+    );
+
+    const labels = recentData.map(item => {
+        const date = new Date(item.timestamp * 1000);
+        return date.toLocaleTimeString('en-US', { 
+            hour: '2-digit', 
+            minute: '2-digit',
+            hour12: false 
+        });
+    });
+
+    const hashrates = recentData.map(item => 
+        parseFloat(item.hashrate || item.khs || 0).toFixed(2)
+    );
+
+    if (hashrateChart) {
+        hashrateChart.destroy();
+    }
+
+    const ctx = document.getElementById('hashrateChart').getContext('2d');
+    hashrateChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'Hashrate (kH/s)',
+                data: hashrates,
+                borderColor: getComputedStyle(document.documentElement).getPropertyValue('--primary-color'),
+                backgroundColor: 'rgba(46, 184, 92, 0.1)',
+                tension: 0.4,
+                fill: true,
+                pointRadius: 3,
+                pointHoverRadius: 5
+            }]
+        },
+        options: {
+            ...getChartOptions(),
+            animation: {
+                duration: 750,
+                easing: 'easeInOutQuart'
+            },
+            plugins: {
+                legend: {
+                    display: true,
+                    position: 'top'
+                },
+                tooltip: {
+                    mode: 'index',
+                    intersect: false,
+                    callbacks: {
+                        label: function(context) {
+                            return `Hashrate: ${context.raw} kH/s`;
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    ...getChartOptions().scales.x,
+                    display: true,
+                    title: {
+                        display: true,
+                        text: 'Time'
+                    }
+                },
+                y: {
+                    ...getChartOptions().scales.y,
+                    display: true,
+                    title: {
+                        display: true,
+                        text: 'Hashrate (kH/s)'
+                    },
+                    beginAtZero: true,
+                    suggestedMin: function() {
+                        const min = Math.min(...hashrates);
+                        return min > 0 ? min * 0.9 : 0;
+                    },
+                    suggestedMax: function() {
+                        const max = Math.max(...hashrates);
+                        return max * 1.1;
+                    }
+                }
+            }
+        }
+    });
+}
+
+async function fetchTelemetry() {
+    try {
+        const [telemetryResponse, historyResponse] = await Promise.all([
+            fetch('/api/telemetry'),
+            fetch('/api/telemetry/history')
+        ]);
+
+        const telemetryData = await telemetryResponse.json();
+        const historyData = await historyResponse.json();
+
+        updateDashboard(telemetryData);
+        updateHashrateChart(historyData);
+    } catch (error) {
+        console.error('Failed to fetch data:', error);
+    }
+}
+
+function updateDashboard(data) {
+    // Mining Status
+    document.getElementById('minerStatus').textContent = data.status;
+    document.getElementById('status-indicator').className = 
+        `info-box status-box ${data.status === 'active' ? 'active' : 'stopped'}`;
+
+    // Miner Software Info
+    if (data.minerSoftware) {
+        document.getElementById('minerHashrate').textContent = 
+            data.minerSoftware.hashrate?.toFixed(2) || '0';
+        document.getElementById('minerAlgorithm').textContent = 
+            data.minerSoftware.algorithm || 'N/A';
+        document.getElementById('minerUptime').textContent = 
+            formatUptime(data.minerSoftware.uptime || 0);
+    }
+
+    // Schedule Information
+    if (data.schedules) {
+        document.getElementById('scheduleStart').textContent = 
+            data.schedules.mining?.start || 'Not set';
+        document.getElementById('scheduleStop').textContent = 
+            data.schedules.mining?.stop || 'Not set';
+        document.getElementById('nextRestart').textContent = 
+            data.schedules.nextRestart || 'No restart scheduled';
+    }
+
+    // System Information
+    if (data.deviceInfo) {
+    // OS Info - now using the correct property
+    const osInfo = `${data.deviceInfo.hwBrand || ''} ${data.deviceInfo.hwModel || ''} - ${data.deviceInfo.os || ''}`.trim();
+    document.getElementById('osInfo').textContent = osInfo || 'N/A';
+
+    // CPU Info - handle array of CPU cores
+    if (Array.isArray(data.deviceInfo.cpuModel) && data.deviceInfo.cpuModel.length > 0) {
+        // All cores are the same model, so we can use the first one
+        const cpu = data.deviceInfo.cpuModel[0];
+        document.getElementById('cpuInfo').textContent = cpu.model || 'N/A';
+        
+        // CPU Cores
+        document.getElementById('cpuCores').textContent = data.deviceInfo.cpuCount || data.deviceInfo.cpuModel.length || 'N/A';
+        
+        // CPU Speed (using maxMHz from first core, converting to GHz)
+        const cpuSpeed = cpu.maxMHz ? (cpu.maxMHz / 1000).toFixed(1) : 'N/A';
+        document.getElementById('cpuSpeed').textContent = cpuSpeed !== 'N/A' ? `${cpuSpeed} GHz` : 'N/A';
+    }
+
+    // CPU Temperature
+    const cpuTemp = data.deviceInfo.cpuTemperature;
+    document.getElementById('cpuTemp').textContent = cpuTemp?.toFixed(1) || 'N/A';
+    
+    const tempBar = document.getElementById('cpu-temp-bar');
+    if (cpuTemp !== undefined) {
+        const tempPercent = Math.min((cpuTemp / 100) * 100, 100);
+        tempBar.style.width = `${tempPercent}%`;
+        tempBar.className = `progress-bar ${
+            cpuTemp >= 80 ? 'bg-danger' : 
+            cpuTemp >= 60 ? 'bg-warning' : 
+            'bg-info'
+        }`;
+    }
+
+    // Memory Usage - convert from bytes to GB
+    const memoryTotal = Math.round(data.deviceInfo.totalMemory / (1024 * 1024 * 1024));
+    const memoryFree = Math.round(data.deviceInfo.freeMemory / (1024 * 1024 * 1024));
+    const memoryUsed = memoryTotal - memoryFree;
+    
+    document.getElementById('memoryUsed').textContent = memoryUsed;
+    document.getElementById('memoryTotal').textContent = memoryTotal;
+
+    if (memoryTotal > 0) {
+        const memoryPercent = (memoryUsed / memoryTotal * 100).toFixed(1);
+        const memoryBar = document.getElementById('memory-usage-bar');
+        memoryBar.style.width = `${memoryPercent}%`;
+        memoryBar.className = `progress-bar ${
+            memoryPercent > 90 ? 'bg-danger' : 
+            memoryPercent > 70 ? 'bg-warning' : 
+            'bg-primary'
+        }`;
+    }
+
+    // Storage Usage - convert from bytes to GB
+    const storageTotal = Math.round(data.deviceInfo.totalStorage / (1024 * 1024 * 1024));
+    const storageFree = Math.round(data.deviceInfo.freeStorage / (1024 * 1024 * 1024));
+    const storageUsed = storageTotal - storageFree;
+    
+    document.getElementById('storageUsed').textContent = storageUsed;
+    document.getElementById('storageTotal').textContent = storageTotal;
+
+    if (storageTotal > 0) {
+        const storagePercent = (storageUsed / storageTotal * 100).toFixed(1);
+        const storageBar = document.getElementById('storage-usage-bar');
+        storageBar.style.width = `${storagePercent}%`;
+        storageBar.className = `progress-bar ${
+            storagePercent > 90 ? 'bg-danger' : 
+            storagePercent > 70 ? 'bg-warning' : 
+            'bg-primary'
+        }`;
+    }
+}
+
+    // Pool Information
+    if (data.pool) {
+        document.getElementById('poolName').textContent = data.pool.name || 'N/A';
+        document.getElementById('poolUrl').textContent = data.pool.url || 'N/A';
+        document.getElementById('poolPing').textContent = data.pool.ping ? `${data.pool.ping} ms` : 'N/A';
+
+        const acceptedShares = parseInt(data.pool.acceptedShares) || 0;
+        const rejectedShares = parseInt(data.pool.rejectedShares) || 0;
+        const totalShares = acceptedShares + rejectedShares;
+
+        document.getElementById('minerAcceptedShares').textContent = acceptedShares;
+        document.getElementById('minerRejectedShares').textContent = rejectedShares;
+
+        if (totalShares > 0) {
+            const acceptedPercent = (acceptedShares / totalShares * 100).toFixed(1);
+            const rejectedPercent = (rejectedShares / totalShares * 100).toFixed(1);
+
+            const acceptedBar = document.getElementById('shares-accepted-bar');
+            const rejectedBar = document.getElementById('shares-rejected-bar');
+
+            if (acceptedBar && rejectedBar) {
+                acceptedBar.style.width = `${acceptedPercent}%`;
+                rejectedBar.style.width = `${rejectedPercent}%`;
+                
+                // Update accessibility attributes
+                acceptedBar.setAttribute('aria-valuenow', acceptedPercent);
+                rejectedBar.setAttribute('aria-valuenow', rejectedPercent);
+            }
+        }
+    }
+}
+
+function formatUptime(seconds) {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    return `${hours}h ${minutes}m`;
+}
+
+// Initialize theme and start data fetching
+initTheme();
+fetchTelemetry();
+setInterval(fetchTelemetry, 30000);
+
+// Initialize miner controls
+document.getElementById('start-miner').addEventListener('click', async () => {
+    try {
+        await fetch('/miner/start', { method: 'POST' });
+        fetchTelemetry();
+    } catch (error) {
+        console.error('Failed to start miner:', error);
+    }
+});
+
+document.getElementById('stop-miner').addEventListener('click', async () => {
+    try {
+        await fetch('/miner/stop', { method: 'POST' });
+        fetchTelemetry();
+    } catch (error) {
+        console.error('Failed to stop miner:', error);
+    }
+});
+    </script>
+</body>
+</html>

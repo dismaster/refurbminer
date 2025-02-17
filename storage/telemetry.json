@@ -1,0 +1,135 @@
+{
+  "status": "active",
+  "minerSoftware": {
+    "name": "ccminer",
+    "version": "3.8.3",
+    "algorithm": "verus",
+    "hashrate": 6275.98,
+    "acceptedShares": 245,
+    "rejectedShares": 4,
+    "uptime": 5763,
+    "averageShareRate": 2.551,
+    "solvedBlocks": 0
+  },
+  "pool": {
+    "name": "RG3D Pool",
+    "url": "stratum+tcp://pool.rg3d.eu:3956",
+    "user": "RRV4nWAxg9dVLY1vavmpGKq3s3N8wMHqZy.DONATION",
+    "acceptedShares": 245,
+    "rejectedShares": 4,
+    "staleShares": 0,
+    "ping": 10,
+    "uptime": 5527
+  },
+  "deviceInfo": {
+    "hwBrand": "RASPBERRY",
+    "hwModel": "PI 5",
+    "architecture": "arm64",
+    "os": "Debian GNU/Linux 12 (bookworm)",
+    "cpuCount": 4,
+    "cpuModel": [
+      {
+        "model": "Cortex-A76",
+        "coreId": 0,
+        "maxMHz": 3100,
+        "minMHz": 1500,
+        "khs": 184.36752905599042
+      },
+      {
+        "model": "Cortex-A76",
+        "coreId": 1,
+        "maxMHz": 3100,
+        "minMHz": 1500,
+        "khs": 361.9393165055382
+      },
+      {
+        "model": "Cortex-A76",
+        "coreId": 2,
+        "maxMHz": 3100,
+        "minMHz": 1500,
+        "khs": 113.61920020982397
+      },
+      {
+        "model": "Cortex-A76",
+        "coreId": 3,
+        "maxMHz": 3100,
+        "minMHz": 1500,
+        "khs": 387.0924276533737
+      }
+    ],
+    "cpuTemperature": 52.9,
+    "totalMemory": 4241637376,
+    "freeMemory": 3691790336,
+    "totalStorage": 15071420416,
+    "freeStorage": 1983115264,
+    "adbEnabled": false,
+    "suAvailable": false
+  },
+  "network": {
+    "primaryIp": "10.0.10.148",
+    "externalIp": "94.31.113.153",
+    "gateway": "10.0.10.1\n10.0.30.1",
+    "interfaces": [
+      "eth0",
+      "lo",
+      "wlan0"
+    ]
+  },
+  "battery": {
+    "health": "GOOD",
+    "percentage": 100,
+    "plugged": "AC",
+    "status": "CHARGING",
+    "temperature": 0,
+    "current": 0
+  },
+  "schedules": {
+    "mining": {
+      "start": null,
+      "stop": null
+    },
+    "restarts": []
+  },
+  "historicalHashrate": [
+    {
+      "timestamp": 1739532376,
+      "khs": 6276.57
+    },
+    {
+      "timestamp": 1739532423,
+      "khs": 6276.4
+    },
+    {
+      "timestamp": 1739532436,
+      "khs": 6276.64
+    },
+    {
+      "timestamp": 1739532483,
+      "khs": 6276.91
+    },
+    {
+      "timestamp": 1739532496,
+      "khs": 6276.91
+    },
+    {
+      "timestamp": 1739532543,
+      "khs": 6276.24
+    },
+    {
+      "timestamp": 1739532556,
+      "khs": 6276.24
+    },
+    {
+      "timestamp": 1739532588,
+      "khs": 6275.98
+    },
+    {
+      "timestamp": 1739532589,
+      "khs": 6275.98
+    },
+    {
+      "timestamp": 1739532603,
+      "khs": 6275.98
+    }
+  ]
+}
