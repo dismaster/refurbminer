@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="http://gui.refurbminer.de/" target="blank"><img src="https://gui.rg3d.eu/assets/img/logo.png" width="120" alt="Refurbminer Logo" /></a>
+  <a href="http://gui.refurbminer.de/" target="blank"><img src="https://gui.rg3d.eu/assets/img/logo.png" width="250" alt="Refurbminer Logo" /></a>
 </p>
 
 [circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
