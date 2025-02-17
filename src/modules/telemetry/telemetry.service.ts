@@ -19,7 +19,7 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
   private readonly telemetryFilePath: string;
   private readonly historyFilePath: string;
   private updateInterval?: NodeJS.Timeout;
-  private readonly MAX_HISTORY_POINTS = 30;
+  private readonly MAX_HISTORY_POINTS = 10; // 1 hour of data at 1-minute intervals
 
   constructor(
     private readonly loggingService: LoggingService,
@@ -113,10 +113,56 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
   private getPreviousTelemetry(): any {
     try {
       if (fs.existsSync(this.telemetryFilePath)) {
-        return JSON.parse(fs.readFileSync(this.telemetryFilePath, 'utf8'));
+        const rawData = fs.readFileSync(this.telemetryFilePath, 'utf8');
+        
+        try {
+          // Try to parse and validate the JSON
+          const parsedData = JSON.parse(rawData);
+          
+          // Basic validation of required fields
+          if (typeof parsedData === 'object' && parsedData !== null) {
+            return parsedData;
+          } else {
+            throw new Error('Invalid telemetry data structure');
+          }
+        } catch (parseError) {
+          // If JSON is invalid, backup the corrupted file and create new one
+          const backupPath = `${this.telemetryFilePath}.${Date.now()}.bak`;
+          fs.renameSync(this.telemetryFilePath, backupPath);
+          
+          this.loggingService.log(
+            `📦 Corrupted telemetry file backed up to: ${backupPath}`,
+            'WARN',
+            'telemetry'
+          );
+          
+          // Create new empty telemetry file
+          const emptyTelemetry = {
+            status: 'stopped',
+            minerSoftware: {},
+            pool: {},
+            deviceInfo: {},
+            network: {},
+            battery: {},
+            schedules: { mining: { start: null, stop: null }, restarts: [] },
+            historicalHashrate: []
+          };
+          
+          fs.writeFileSync(
+            this.telemetryFilePath,
+            JSON.stringify(emptyTelemetry, null, 2),
+            'utf8'
+          );
+          
+          return emptyTelemetry;
+        }
       }
     } catch (error) {
-      this.loggingService.log(`⚠️ Failed to read previous telemetry: ${error.message}`, 'WARN', 'telemetry');
+      this.loggingService.log(
+        `⚠️ Failed to read previous telemetry: ${error.message}`,
+        'WARN',
+        'telemetry'
+      );
     }
     return null;
   }

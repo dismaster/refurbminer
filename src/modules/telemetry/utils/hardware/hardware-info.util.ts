@@ -113,36 +113,81 @@ static getOsVersion(): string {
     }
   }
 
-/** ✅ Get CPU thread details (using `lscpu`) */
+/** ✅ Get CPU thread details with better Termux support */
 static getCpuThreads(): Array<any> {
   try {
-    const output = execSync('lscpu', { encoding: 'utf8' }).split('\n');
-    const threadList: any[] = [];
+    const lscpuOutput = execSync('lscpu', { encoding: 'utf8' }).split('\n');
+    const cpuGroups: Array<{
+      model: string;
+      maxMHz: number;
+      minMHz: number;
+      cores: number;
+    }> = [];
+    
+    let currentGroup: any = {};
     
     // Parse lscpu output
-    const cpuModel = this.extractTextValue(output, 'Model name');
-    const maxMHz = this.extractValue(output, 'CPU max MHz');
-    const minMHz = this.extractValue(output, 'CPU min MHz');
-    const cores = parseInt(this.extractTextValue(output, 'CPU(s)')) || os.cpus().length;
+    lscpuOutput.forEach(line => {
+      const trimmed = line.trim();
+      
+      if (trimmed.startsWith('Model name:')) {
+        // Start new CPU group
+        if (currentGroup.model) {
+          cpuGroups.push({ ...currentGroup });
+        }
+        currentGroup = {
+          model: trimmed.split(':')[1].trim(),
+          maxMHz: 0,
+          minMHz: 0,
+          cores: 0
+        };
+      }
+      
+      if (trimmed.startsWith('CPU max MHz:')) {
+        currentGroup.maxMHz = parseFloat(trimmed.split(':')[1].trim());
+      }
+      
+      if (trimmed.startsWith('CPU min MHz:')) {
+        currentGroup.minMHz = parseFloat(trimmed.split(':')[1].trim());
+      }
+      
+      if (trimmed.startsWith('Core(s) per socket:')) {
+        currentGroup.cores = parseInt(trimmed.split(':')[1].trim());
+      }
+    });
     
-    for (let i = 0; i < cores; i++) {
-      threadList.push({
-        model: cpuModel || `CPU ${i}`,
-        coreId: i,
-        maxMHz: maxMHz || 0,
-        minMHz: minMHz || 0,
-        khs: Math.random() * 500 // Simulated mining speed
-      });
+    // Add last group
+    if (currentGroup.model) {
+      cpuGroups.push(currentGroup);
     }
 
-    return threadList;
-  } catch {
+    // Create CPU thread array
+    const cpuThreads = [];
+    let coreId = 0;
+
+    cpuGroups.forEach(group => {
+      for (let i = 0; i < group.cores; i++) {
+        cpuThreads.push({
+          model: group.model,
+          coreId: coreId++,
+          maxMHz: group.maxMHz,
+          minMHz: group.minMHz,
+          khs: Math.random() * 500 // Simulated mining speed
+        });
+      }
+    });
+
+    return cpuThreads;
+
+  } catch (error) {
+    console.error('Failed to get detailed CPU info:', error);
+    
     // Fallback to basic CPU info
     return os.cpus().map((cpu, index) => ({
-      model: cpu.model || `CPU ${index}`,
+      model: cpu.model || 'Unknown',
       coreId: index,
-      maxMHz: 0,
-      minMHz: 0,
+      maxMHz: cpu.speed || 0,
+      minMHz: Math.floor((cpu.speed || 0) * 0.3),
       khs: Math.random() * 500
     }));
   }
@@ -151,7 +196,7 @@ static getCpuThreads(): Array<any> {
 /** ✅ Extract text value from lscpu output */
 private static extractTextValue(output: string[], key: string): string {
   try {
-    const line = output.find(l => l.trim().startsWith(key + ':'));
+    const line = output.find(l => l.includes(key + ':'));
     return line ? line.split(':')[1].trim() : '';
   } catch {
     return '';
@@ -161,10 +206,10 @@ private static extractTextValue(output: string[], key: string): string {
 /** ✅ Extract numeric value from lscpu output */
 private static extractValue(output: string[], key: string): number {
   try {
-    const line = output.find(l => l.trim().startsWith(key + ':'));
+    const line = output.find(l => l.includes(key + ':'));
     if (!line) return 0;
-    const value = line.split(':')[1].trim();
-    return parseFloat(value) || 0;
+    const value = line.split(':')[1].trim().split('.')[0]; // Remove decimal part
+    return parseInt(value) || 0;
   } catch {
     return 0;
   }

@@ -54,92 +54,84 @@ export class NetworkInfoUtil {
 /** ✅ Get network info on Termux (Android) */
 private static getTermuxNetworkInfo() {
   try {
-    // Get external IP only (doesn't require special permissions)
-    const externalIp = execSync(
-      "curl -s https://api.ipify.org", 
-      { encoding: 'utf8' }
-    ).trim();
-
     let primaryIp = 'Unknown';
     let gateway = 'Unknown';
-    let interfaces: string[] = [];
+    let externalIp = 'Unknown';
+    let interfaces = ['wlan0'];
 
+    // First try termux-wifi-connectioninfo
     try {
-      // Get IP address for wlan0
-      const ipOutput = execSync(
-        "ip -4 addr show wlan0 2>/dev/null | grep inet", 
-        { encoding: 'utf8' }
-      ).trim();
+      const wifiInfo = JSON.parse(
+        execSync('termux-wifi-connectioninfo', { encoding: 'utf8' })
+      );
       
-      if (ipOutput) {
-        const ipMatch = ipOutput.match(/inet\s+([0-9.]+)/);
-        if (ipMatch && ipMatch[1]) {
-          primaryIp = ipMatch[1];
-        }
+      if (wifiInfo && wifiInfo.ip) {
+        primaryIp = wifiInfo.ip;
+        gateway = wifiInfo.gateway || this.getGatewayFromTraceroute();
+        interfaces = ['wlan0'];
       }
-
-      // Try to get gateway from route info
-      const routeOutput = execSync(
-        "ip route", 
-        { encoding: 'utf8' }
-      ).trim();
+    } catch (wifiError) {
+      console.debug('Termux API not available:', wifiError.message);
       
-      if (routeOutput) {
-        // First try default route
-        const defaultMatch = routeOutput.match(/default via ([0-9.]+)/);
-        if (defaultMatch && defaultMatch[1]) {
-          gateway = defaultMatch[1];
-        } else {
-          // If no default route, try to extract network gateway
-          const networkMatch = routeOutput.match(/([0-9.]+)\/\d+/);
-          if (networkMatch && networkMatch[1]) {
-            const network = networkMatch[1].split('.');
-            network[3] = '1';
-            gateway = network.join('.');
+      // Fallback to getprop and traceroute
+      try {
+        // Get IP address
+        primaryIp = execSync('getprop dhcp.wlan0.ipaddress', { encoding: 'utf8' }).trim() ||
+                   execSync('getprop dhcp.eth0.ipaddress', { encoding: 'utf8' }).trim();
+        
+        // Try to get gateway using traceroute if getprop fails
+        gateway = execSync('getprop dhcp.wlan0.gateway', { encoding: 'utf8' }).trim() ||
+                 execSync('getprop dhcp.eth0.gateway', { encoding: 'utf8' }).trim() ||
+                 this.getGatewayFromTraceroute();
+        
+        // Check which interface is active
+        const wlan0Up = execSync('getprop init.svc.wlan0', { encoding: 'utf8' }).includes('running');
+        const eth0Up = execSync('getprop init.svc.eth0', { encoding: 'utf8' }).includes('running');
+        
+        interfaces = [];
+        if (wlan0Up) interfaces.push('wlan0');
+        if (eth0Up) interfaces.push('eth0');
+      } catch (propError) {
+        console.debug('Property detection failed:', propError.message);
+      }
+    }
+
+    // Get external IP using curl only
+    try {
+      const urls = [
+        'https://api.ipify.org',
+        'https://ifconfig.me',
+        'https://icanhazip.com'
+      ];
+      
+      for (const url of urls) {
+        try {
+          const result = execSync(
+            `curl -s --max-time 3 ${url}`,
+            { encoding: 'utf8' }
+          ).trim();
+          
+          if (result && result.match(/^\d+\.\d+\.\d+\.\d+$/)) {
+            externalIp = result;
+            break;
           }
+        } catch {
+          continue;
         }
       }
-
-      // Get interfaces using a more reliable method
-      const interfaceOutput = execSync(
-        "ip -br link show | awk '{print $1}'",
-        { encoding: 'utf8' }
-      ).trim();
-
-      if (interfaceOutput) {
-        interfaces = interfaceOutput
-          .split('\n')
-          .map(iface => iface.trim())
-          .filter(iface => 
-            iface &&
-            iface !== 'dummy0' &&
-            !iface.startsWith('ip') &&
-            !iface.startsWith('sit') &&
-            !iface.startsWith('rmnet') &&
-            !iface.startsWith('umts') &&
-            !iface.startsWith('rev_') &&
-            !iface.includes('_') &&
-            !iface.includes('@') &&
-            iface !== 'p2p0'
-          );
-      }
-
-      // If no interfaces found, fallback to basic ones
-      if (!interfaces.length) {
-        interfaces = ['lo', 'wlan0'];
-      }
-
     } catch (error) {
-      console.error(`❌ Failed to get network details: ${error.message}`);
+      console.debug('External IP detection failed:', error.message);
     }
 
     return {
-      primaryIp,
+      primaryIp: primaryIp || 'Unknown',
       externalIp: externalIp || 'Unknown',
-      gateway,
+      gateway: gateway || 'Unknown',
       interfaces: interfaces.length ? interfaces : ['Unknown']
     };
-  } catch {
+
+  } catch (error) {
+    console.error('Failed to get Termux network info:', error.message);
     return this.getDefaultNetworkInfo();
   }
 }
@@ -153,4 +145,54 @@ private static getTermuxNetworkInfo() {
       interfaces: ['Unknown']
     };
   }
+
+/** ✅ Get gateway using traceroute */
+private static getGatewayFromTraceroute(): string {
+  try {
+    // Run traceroute and get first hop directly
+    const tracerouteOutput = execSync(
+      'traceroute -n -w 1 -q 1 -m 1 8.8.8.8 | grep -v traceroute | head -n 1',
+      { encoding: 'utf8' }
+    ).trim();
+
+    // Extract first hop IP address more reliably
+    const match = tracerouteOutput.match(/^\s*1\s+([0-9.]+)/);
+    if (match && match[1]) {
+      // Validate IP address format
+      const ip = match[1];
+      if (ip.match(/^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/)) {
+        return ip;
+      }
+    }
+
+    // If first attempt fails, try alternative method
+    const pingOutput = execSync(
+      'ping -c 1 8.8.8.8 | grep "^From .* Time to live exceeded"',
+      { encoding: 'utf8' }
+    ).trim();
+    
+    const pingMatch = pingOutput.match(/From ([0-9.]+)/);
+    if (pingMatch && pingMatch[1]) {
+      return pingMatch[1];
+    }
+  } catch (error) {
+    console.debug('Gateway detection failed:', error.message);
+    
+    // Last resort: try to derive gateway from IP
+    try {
+      const ip = execSync('getprop dhcp.wlan0.ipaddress', { encoding: 'utf8' }).trim();
+      if (ip) {
+        const parts = ip.split('.');
+        if (parts.length === 4) {
+          parts[3] = '1';
+          return parts.join('.');
+        }
+      }
+    } catch {
+      // Ignore errors in last resort attempt
+    }
+  }
+  return 'Unknown';
+}
+
 }

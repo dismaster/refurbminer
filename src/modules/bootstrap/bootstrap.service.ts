@@ -70,9 +70,9 @@ export class BootstrapService implements OnModuleInit {
       let installCommand = '';
   
       if (osType === 'linux' || osType === 'raspberry-pi') {
-        installCommand = 'sudo apt-get install -yq screen git gnu-which netcat-openbsd dnsutils';
+        installCommand = 'sudo apt-get install -yq screen git gnu-which netcat-openbsd dnsutils traceroute';
       } else if (osType === 'termux') {
-        installCommand = 'pkg install -y screen git which nmap-ncat getconf dnsutils';
+        installCommand = 'pkg install -y screen git which nmap-ncat getconf dnsutils traceroute';
       }
   
       if (!installCommand) {
