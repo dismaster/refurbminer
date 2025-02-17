@@ -22,9 +22,15 @@ $ cd refurbminer
 $ npm install
 ```
 
-## Compile and run the project
+## Compile and run the app
 
 ```bash
+# Update RigToken
+# RIG_TOKEN=
+
+$ nano .env
+
+# Build an run the app
 $ npm run build && npm start
 ```
 
