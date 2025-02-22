@@ -450,15 +450,16 @@ function updateDashboard(data) {
     }
 
     // Memory Usage - convert from bytes to GB
-    const memoryTotal = Math.round(data.deviceInfo.totalMemory / (1024 * 1024 * 1024));
-    const memoryFree = Math.round(data.deviceInfo.freeMemory / (1024 * 1024 * 1024));
-    const memoryUsed = memoryTotal - memoryFree;
-    
-    document.getElementById('memoryUsed').textContent = memoryUsed;
+    const memoryTotal = (data.deviceInfo.totalMemory / (1024 * 1024 * 1024)).toFixed(1);
+    const memoryFree = (data.deviceInfo.freeMemory / (1024 * 1024 * 1024)).toFixed(1);
+    const memoryUsed = (data.deviceInfo.totalMemory - data.deviceInfo.freeMemory) / (1024 * 1024 * 1024);
+    const memoryUsedFormatted = memoryUsed.toFixed(1);
+
+    document.getElementById('memoryUsed').textContent = memoryUsedFormatted;
     document.getElementById('memoryTotal').textContent = memoryTotal;
 
-    if (memoryTotal > 0) {
-        const memoryPercent = (memoryUsed / memoryTotal * 100).toFixed(1);
+    if (data.deviceInfo.totalMemory > 0) {
+        const memoryPercent = (memoryUsed / parseFloat(memoryTotal) * 100).toFixed(1);
         const memoryBar = document.getElementById('memory-usage-bar');
         memoryBar.style.width = `${memoryPercent}%`;
         memoryBar.className = `progress-bar ${
