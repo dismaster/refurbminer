@@ -19,7 +19,7 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
   private readonly telemetryFilePath: string;
   private readonly historyFilePath: string;
   private updateInterval?: NodeJS.Timeout;
-  private readonly MAX_HISTORY_POINTS = 10; // 1 hour of data at 1-minute intervals
+  private readonly MAX_HISTORY_POINTS = 20; // 1 hour of data at 1-minute intervals
 
   constructor(
     private readonly loggingService: LoggingService,
