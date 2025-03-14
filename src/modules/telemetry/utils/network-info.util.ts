@@ -57,43 +57,54 @@ private static getTermuxNetworkInfo() {
     let primaryIp = 'Unknown';
     let gateway = 'Unknown';
     let externalIp = 'Unknown';
-    let interfaces = ['wlan0'];
+    let interfaces: string[] = [];
 
-    // First try termux-wifi-connectioninfo
+    // Try to get interface and IP from ifconfig
     try {
-      const wifiInfo = JSON.parse(
-        execSync('termux-wifi-connectioninfo', { encoding: 'utf8' })
-      );
+      const ifconfigOutput = execSync('ifconfig', { encoding: 'utf8' });
+      const sections = ifconfigOutput.split(/\n\n+/);
       
-      if (wifiInfo && wifiInfo.ip) {
-        primaryIp = wifiInfo.ip;
-        gateway = wifiInfo.gateway || this.getGatewayFromTraceroute();
-        interfaces = ['wlan0'];
+      for (const section of sections) {
+        if (section.includes('lo:')) continue; // Skip loopback
+
+        // Extract interface name
+        const interfaceMatch = section.match(/^([a-zA-Z0-9]+):/);
+        const interface = interfaceMatch ? interfaceMatch[1] : null;
+        
+        if (interface) {
+          interfaces.push(interface);
+          
+          // Extract IP address
+          const ipMatch = section.match(/inet\s+(\d+\.\d+\.\d+\.\d+)/);
+          if (ipMatch && ipMatch[1] && primaryIp === 'Unknown') {
+            primaryIp = ipMatch[1];
+          }
+        }
       }
-    } catch (wifiError) {
-      console.debug('Termux API not available:', wifiError.message);
-      
-      // Fallback to getprop and traceroute
+    } catch (ifconfigError) {
+      console.debug('ifconfig failed:', ifconfigError.message);
+    }
+
+    // If ifconfig didn't give us an IP, try termux-wifi-connectioninfo
+    if (primaryIp === 'Unknown') {
       try {
-        // Get IP address
-        primaryIp = execSync('getprop dhcp.wlan0.ipaddress', { encoding: 'utf8' }).trim() ||
-                   execSync('getprop dhcp.eth0.ipaddress', { encoding: 'utf8' }).trim();
+        const wifiInfo = JSON.parse(
+          execSync('termux-wifi-connectioninfo', { encoding: 'utf8' })
+        );
         
-        // Try to get gateway using traceroute if getprop fails
-        gateway = execSync('getprop dhcp.wlan0.gateway', { encoding: 'utf8' }).trim() ||
-                 execSync('getprop dhcp.eth0.gateway', { encoding: 'utf8' }).trim() ||
-                 this.getGatewayFromTraceroute();
-        
-        // Check which interface is active
-        const wlan0Up = execSync('getprop init.svc.wlan0', { encoding: 'utf8' }).includes('running');
-        const eth0Up = execSync('getprop init.svc.eth0', { encoding: 'utf8' }).includes('running');
-        
-        interfaces = [];
-        if (wlan0Up) interfaces.push('wlan0');
-        if (eth0Up) interfaces.push('eth0');
-      } catch (propError) {
-        console.debug('Property detection failed:', propError.message);
+        if (wifiInfo && wifiInfo.ip) {
+          primaryIp = wifiInfo.ip;
+          gateway = wifiInfo.gateway || 'Unknown';
+          if (!interfaces.includes('wlan0')) interfaces.push('wlan0');
+        }
+      } catch (wifiError) {
+        console.debug('Termux API not available:', wifiError.message);
       }
+    }
+
+    // Try to get gateway using traceroute
+    if (gateway === 'Unknown') {
+      gateway = this.getGatewayFromTraceroute();
     }
 
     // Get external IP using curl only
@@ -123,11 +134,16 @@ private static getTermuxNetworkInfo() {
       console.debug('External IP detection failed:', error.message);
     }
 
+    // If we still don't have interfaces, add a default
+    if (interfaces.length === 0) {
+      interfaces.push('Unknown');
+    }
+
     return {
-      primaryIp: primaryIp || 'Unknown',
+      primaryIp,
       externalIp: externalIp || 'Unknown',
       gateway: gateway || 'Unknown',
-      interfaces: interfaces.length ? interfaces : ['Unknown']
+      interfaces
     };
 
   } catch (error) {
