@@ -69,10 +69,10 @@ private static getTermuxNetworkInfo() {
 
         // Extract interface name
         const interfaceMatch = section.match(/^([a-zA-Z0-9]+):/);
-        const interface = interfaceMatch ? interfaceMatch[1] : null;
+        const ifaceName = interfaceMatch ? interfaceMatch[1] : null;
         
-        if (interface) {
-          interfaces.push(interface);
+        if (ifaceName) {
+          interfaces.push(ifaceName);
           
           // Extract IP address
           const ipMatch = section.match(/inet\s+(\d+\.\d+\.\d+\.\d+)/);
