@@ -59,9 +59,9 @@ private static getTermuxNetworkInfo() {
     let externalIp = 'Unknown';
     let interfaces: string[] = [];
 
-    // Try to get interface and IP from ifconfig
+    // Try to get interface and IP from ifconfig with suppressed stderr
     try {
-      const ifconfigOutput = execSync('ifconfig', { encoding: 'utf8' });
+      const ifconfigOutput = execSync('ifconfig 2>/dev/null', { encoding: 'utf8' });
       const sections = ifconfigOutput.split(/\n\n+/);
       
       for (const section of sections) {
