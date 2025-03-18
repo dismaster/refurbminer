@@ -394,6 +394,20 @@ function updateDashboard(data) {
     document.getElementById('status-indicator').className = 
         `info-box status-box ${data.status === 'active' ? 'active' : 'stopped'}`;
 
+    // Add this code right after it:
+    // Toggle button states based on miner status
+    const startButton = document.getElementById('start-miner');
+    const stopButton = document.getElementById('stop-miner');
+    const isMinerActive = data.status === 'active';
+
+    startButton.disabled = isMinerActive;
+    startButton.classList.toggle('btn-disabled', isMinerActive);
+    startButton.title = isMinerActive ? 'Miner is already running' : 'Start the miner';
+
+    stopButton.disabled = !isMinerActive;
+    stopButton.classList.toggle('btn-disabled', !isMinerActive);
+    stopButton.title = isMinerActive ? 'Stop the miner' : 'Miner is not running';
+
     // Miner Software Info
     if (data.minerSoftware) {
         document.getElementById('minerHashrate').textContent = 
@@ -420,18 +434,39 @@ function updateDashboard(data) {
     const osInfo = `${data.deviceInfo.hwBrand || ''} ${data.deviceInfo.hwModel || ''} - ${data.deviceInfo.os || ''}`.trim();
     document.getElementById('osInfo').textContent = osInfo || 'N/A';
 
-    // CPU Info - handle array of CPU cores
+    // CPU Info - handle heterogeneous CPU cores
     if (Array.isArray(data.deviceInfo.cpuModel) && data.deviceInfo.cpuModel.length > 0) {
-        // All cores are the same model, so we can use the first one
-        const cpu = data.deviceInfo.cpuModel[0];
-        document.getElementById('cpuInfo').textContent = cpu.model || 'N/A';
+        // Get unique CPU models and count them
+        const cpuModels = {};
+        data.deviceInfo.cpuModel.forEach(cpu => {
+            if (!cpuModels[cpu.model]) {
+                cpuModels[cpu.model] = {
+                    count: 1,
+                    maxMHz: cpu.maxMHz
+                };
+            } else {
+                cpuModels[cpu.model].count++;
+            }
+        });
+        
+        // Format CPU info for display
+        const cpuModelText = Object.entries(cpuModels)
+            .map(([model, info]) => `${model} (${info.count}x)`)
+            .join(' + ');
+        
+        document.getElementById('cpuInfo').textContent = cpuModelText || 'N/A';
         
         // CPU Cores
-        document.getElementById('cpuCores').textContent = data.deviceInfo.cpuCount || data.deviceInfo.cpuModel.length || 'N/A';
+        document.getElementById('cpuCores').textContent = 
+            data.deviceInfo.cpuCount || data.deviceInfo.cpuModel.length || 'N/A';
         
-        // CPU Speed (using maxMHz from first core, converting to GHz)
-        const cpuSpeed = cpu.maxMHz ? (cpu.maxMHz / 1000).toFixed(1) : 'N/A';
-        document.getElementById('cpuSpeed').textContent = cpuSpeed !== 'N/A' ? `${cpuSpeed} GHz` : 'N/A';
+        // CPU Speed (calculate average max speed from all cores)
+        const totalMaxMHz = data.deviceInfo.cpuModel.reduce((sum, cpu) => 
+            sum + (cpu.maxMHz || 0), 0);
+        const avgMaxGHz = (totalMaxMHz / data.deviceInfo.cpuModel.length / 1000).toFixed(1);
+        
+        document.getElementById('cpuSpeed').textContent = 
+            avgMaxGHz > 0 ? `${avgMaxGHz} GHz avg` : 'N/A';
     }
 
     // CPU Temperature
