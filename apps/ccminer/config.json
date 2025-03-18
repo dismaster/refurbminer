@@ -8,8 +8,8 @@
   "pools": [
     {
       "region": "EU",
-      "name": "RG3D Pool",
-      "url": "stratum+tcp://pool.rg3d.eu:3956",
+      "name": "LuckPool",
+      "url": "stratum+tcp://eu.luckpool.net:3956",
       "user": "RRV4nWAxg9dVLY1vavmpGKq3s3N8wMHqZy.DONATION",
       "password": "x"
     }
