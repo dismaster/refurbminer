@@ -1,5 +1,5 @@
 #!/bin/bash
-cd \$(dirname "\$0")
+cd $HOME/refurbminer
 if screen -list | grep -q "refurbminer"; then
     echo "RefurbMiner is already running!"
 else
