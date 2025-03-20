@@ -89,7 +89,8 @@ export class BootstrapService implements OnModuleInit {
       const osType = this.deviceMonitoringService.getOS();
       let installCommand = '';
       let hasSudo = false;
-  
+      let packageManager = '';
+
       // Check if sudo is available
       try {
         execSync('command -v sudo', { stdio: 'ignore' });
@@ -97,12 +98,10 @@ export class BootstrapService implements OnModuleInit {
       } catch (e) {
         this.loggingService.log('sudo not available, will attempt direct installation', 'INFO', 'bootstrap');
       }
-  
+
       // Determine installation command based on OS type and sudo availability
       if (osType === 'linux' || osType === 'raspberry-pi') {
         // Detect package manager
-        let packageManager = '';
-        
         try {
           // Check for apt/apt-get (Debian/Ubuntu)
           execSync('command -v apt-get', { stdio: 'ignore' });
@@ -128,13 +127,14 @@ export class BootstrapService implements OnModuleInit {
             }
           }
         }
-  
+
         if (packageManager) {
           const sudoPrefix = hasSudo ? 'sudo ' : '';
           
           // Different package names for different distributions
           if (packageManager === 'apt-get') {
-            installCommand = `${sudoPrefix}${packageManager} install -yq screen git gnupg curl which netcat-openbsd dnsutils traceroute`;
+            // 'which' is part of debianutils
+            installCommand = `${sudoPrefix}${packageManager} install -yq screen git gnupg curl debianutils netcat-openbsd dnsutils traceroute`;
           } else if (packageManager === 'dnf' || packageManager === 'yum') {
             installCommand = `${sudoPrefix}${packageManager} install -y screen git gnupg curl which nc bind-utils traceroute`;
           } else if (packageManager === 'pacman -S --noconfirm') {
@@ -142,17 +142,17 @@ export class BootstrapService implements OnModuleInit {
           }
         }
       } else if (osType === 'termux') {
-        installCommand = 'pkg install -y screen git gnupg curl which nmap-ncat getconf dnsutils traceroute';
+        installCommand = 'pkg install -y screen git gnupg curl termux-tools nmap-ncat getconf dnsutils traceroute';
       }
-  
+
       if (!installCommand) {
         this.loggingService.log(`No install command found for OS: ${osType}`, 'WARN', 'bootstrap');
         return;
       }
-  
+
       this.loggingService.log(`Installing dependencies for ${osType}...`, 'INFO', 'bootstrap');
       this.loggingService.log(`Running: ${installCommand}`, 'DEBUG', 'bootstrap');
-  
+
       // Execute command & suppress stdout unless DEBUG mode is enabled
       const logLevel = process.env.LOG_LEVEL || 'INFO';
       try {
@@ -193,7 +193,7 @@ export class BootstrapService implements OnModuleInit {
           return; // Continue without failing
         }
       }
-  
+
       this.loggingService.log('All dependencies installed successfully!', 'INFO', 'bootstrap');
     } catch (error) {
       this.loggingService.log(`Dependency verification failed: ${error.message}`, 'WARN', 'bootstrap');
