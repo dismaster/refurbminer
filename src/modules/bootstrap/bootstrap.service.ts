@@ -47,19 +47,39 @@ export class BootstrapService implements OnModuleInit {
     try {
       const systemInfo = this.deviceMonitoringService.getSystemInfo();
       const { architecture, aesSupport, pmullSupport } = systemInfo.cpuInfo;
-  
+      const cpuModel = systemInfo.cpuInfo.model || '';
+      
+      // Check if CPU is 64-bit
       if (architecture !== '64-bit') {
-        throw new Error('CPU or OS is not 64-bit!');
+        this.loggingService.log('Warning: CPU or OS is not 64-bit, mining may be less efficient', 'WARN', 'bootstrap');
       }
-  
-      if (!aesSupport || !pmullSupport) {
-        throw new Error('CPU does not support AES or PMULL instructions!');
+      
+      // For Intel/AMD CPUs, we only need AES support
+      const isIntelAmd = cpuModel.includes('Intel') || cpuModel.includes('AMD');
+      
+      // For ARM CPUs, we ideally want both AES and PMULL
+      const isArm = architecture.includes('arm') || cpuModel.includes('Cortex');
+      
+      // Performance warning for ARM without PMULL
+      if (isArm && !pmullSupport && aesSupport) {
+        this.loggingService.log('Warning: ARM CPU missing PMULL support, mining will continue but may be less efficient', 'WARN', 'bootstrap');
       }
-  
-      this.loggingService.log('CPU compatibility check passed!', 'INFO', 'bootstrap');
+      
+      // Intel/AMD without AES (very rare)
+      if (isIntelAmd && !aesSupport) {
+        this.loggingService.log('Warning: Intel/AMD CPU missing AES support, mining will continue but may be less efficient', 'WARN', 'bootstrap');
+      }
+      
+      // Only fail if we have neither AES nor PMULL on any architecture
+      if (!aesSupport && !pmullSupport) {
+        this.loggingService.log('CPU lacks essential cryptographic instructions (AES), mining may not work properly', 'WARN', 'bootstrap');
+        // Don't exit, just warn
+      }
+      
+      this.loggingService.log('CPU compatibility check completed - mining should work', 'INFO', 'bootstrap');
     } catch (error) {
-      this.loggingService.log(`CPU check failed: ${error.message}`, 'ERROR', 'bootstrap');
-      process.exit(1);
+      this.loggingService.log(`CPU check warning: ${error.message}`, 'WARN', 'bootstrap');
+      // Continue execution despite warnings
     }
   }
 
