@@ -88,11 +88,61 @@ export class BootstrapService implements OnModuleInit {
     try {
       const osType = this.deviceMonitoringService.getOS();
       let installCommand = '';
+      let hasSudo = false;
   
+      // Check if sudo is available
+      try {
+        execSync('command -v sudo', { stdio: 'ignore' });
+        hasSudo = true;
+      } catch (e) {
+        this.loggingService.log('sudo not available, will attempt direct installation', 'INFO', 'bootstrap');
+      }
+  
+      // Determine installation command based on OS type and sudo availability
       if (osType === 'linux' || osType === 'raspberry-pi') {
-        installCommand = 'sudo apt-get install -yq screen git gnu-which netcat-openbsd dnsutils traceroute';
+        // Detect package manager
+        let packageManager = '';
+        
+        try {
+          // Check for apt/apt-get (Debian/Ubuntu)
+          execSync('command -v apt-get', { stdio: 'ignore' });
+          packageManager = 'apt-get';
+        } catch {
+          try {
+            // Check for dnf (Fedora/RHEL 8+)
+            execSync('command -v dnf', { stdio: 'ignore' });
+            packageManager = 'dnf';
+          } catch {
+            try {
+              // Check for yum (CentOS/RHEL)
+              execSync('command -v yum', { stdio: 'ignore' });
+              packageManager = 'yum';
+            } catch {
+              try {
+                // Check for pacman (Arch)
+                execSync('command -v pacman', { stdio: 'ignore' });
+                packageManager = 'pacman -S --noconfirm';
+              } catch {
+                this.loggingService.log('No supported package manager found', 'WARN', 'bootstrap');
+              }
+            }
+          }
+        }
+  
+        if (packageManager) {
+          const sudoPrefix = hasSudo ? 'sudo ' : '';
+          
+          // Different package names for different distributions
+          if (packageManager === 'apt-get') {
+            installCommand = `${sudoPrefix}${packageManager} install -yq screen git gnupg curl which netcat-openbsd dnsutils traceroute`;
+          } else if (packageManager === 'dnf' || packageManager === 'yum') {
+            installCommand = `${sudoPrefix}${packageManager} install -y screen git gnupg curl which nc bind-utils traceroute`;
+          } else if (packageManager === 'pacman -S --noconfirm') {
+            installCommand = `${sudoPrefix}${packageManager} screen git gnupg curl which openbsd-netcat bind-tools traceroute`;
+          }
+        }
       } else if (osType === 'termux') {
-        installCommand = 'pkg install -y screen git which nmap-ncat getconf dnsutils traceroute';
+        installCommand = 'pkg install -y screen git gnupg curl which nmap-ncat getconf dnsutils traceroute';
       }
   
       if (!installCommand) {
@@ -101,19 +151,54 @@ export class BootstrapService implements OnModuleInit {
       }
   
       this.loggingService.log(`Installing dependencies for ${osType}...`, 'INFO', 'bootstrap');
+      this.loggingService.log(`Running: ${installCommand}`, 'DEBUG', 'bootstrap');
   
       // Execute command & suppress stdout unless DEBUG mode is enabled
       const logLevel = process.env.LOG_LEVEL || 'INFO';
-      if (logLevel === 'DEBUG') {
-        execSync(installCommand, { stdio: 'inherit' });
-      } else {
-        execSync(installCommand + ' > /dev/null 2>&1');
+      try {
+        if (logLevel === 'DEBUG') {
+          execSync(installCommand, { stdio: 'inherit' });
+        } else {
+          execSync(installCommand + ' > /dev/null 2>&1');
+        }
+      } catch (error) {
+        // If we're running as root without sudo and fail, try setting up package sources
+        if (!hasSudo && process.getuid && process.getuid() === 0) {
+          this.loggingService.log('Initial installation failed, checking package sources...', 'WARN', 'bootstrap');
+          
+          try {
+            // Check /etc/apt/sources.list for Debian/Ubuntu
+            if (packageManager === 'apt-get') {
+              this.loggingService.log('Setting up minimal apt repository', 'INFO', 'bootstrap');
+              const sourcesList = '/etc/apt/sources.list';
+              
+              // Check if sources.list exists and has content
+              if (!fs.existsSync(sourcesList) || fs.readFileSync(sourcesList, 'utf8').trim() === '') {
+                const distro = execSync('lsb_release -sc 2>/dev/null || echo bookworm', { encoding: 'utf8' }).trim();
+                fs.writeFileSync(sourcesList, `deb http://deb.debian.org/debian ${distro} main\n`);
+                execSync('apt-get update');
+              }
+              
+              // Try installation again
+              execSync(installCommand);
+            }
+          } catch (sourceError) {
+            this.loggingService.log(`Repository setup failed: ${sourceError.message}`, 'ERROR', 'bootstrap');
+            this.loggingService.log('Continuing without all dependencies...', 'WARN', 'bootstrap');
+            return; // Continue without failing
+          }
+        } else {
+          this.loggingService.log(`Dependency installation warning: ${error.message}`, 'WARN', 'bootstrap');
+          this.loggingService.log('Continuing without all dependencies...', 'WARN', 'bootstrap');
+          return; // Continue without failing
+        }
       }
   
       this.loggingService.log('All dependencies installed successfully!', 'INFO', 'bootstrap');
     } catch (error) {
-      this.loggingService.log(`Dependency installation failed: ${error.message}`, 'ERROR', 'bootstrap');
-      process.exit(1);
+      this.loggingService.log(`Dependency verification failed: ${error.message}`, 'WARN', 'bootstrap');
+      this.loggingService.log('Continuing without dependency verification...', 'WARN', 'bootstrap');
+      // Don't exit, continue with warnings
     }
   }
 
