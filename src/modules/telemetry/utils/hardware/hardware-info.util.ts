@@ -269,21 +269,77 @@ private static extractValue(output: string[], key: string): number {
     }
   }
 
-  /** ✅ Linux: Default Method for CPU Temperature */
+  /** ✅ Linux: Default Method for CPU Temperature with better fallbacks */
   private static getLinuxCpuTemperature(): number {
     try {
-      // Try thermal zone
+      // Method 1: Try thermal zone (most reliable)
       if (fs.existsSync('/sys/class/thermal/thermal_zone0/temp')) {
         const tempRaw = execSync('cat /sys/class/thermal/thermal_zone0/temp', { encoding: 'utf8' }).trim();
         const temp = parseInt(tempRaw) / 1000;
-        if (!isNaN(temp)) return temp;
+        if (!isNaN(temp) && temp > 0 && temp < 150) return temp;
       }
 
-      // Try acpi as fallback
-      const tempOutput = execSync('acpi -t', { encoding: 'utf8' });
-      const match = tempOutput.match(/\d+\.\d+/);
-      if (match) return parseFloat(match[0]);
+      // Method 2: Try other thermal zones (1-9)
+      for (let i = 1; i < 10; i++) {
+        const zonePath = `/sys/class/thermal/thermal_zone${i}/temp`;
+        if (fs.existsSync(zonePath)) {
+          try {
+            const tempRaw = execSync(`cat ${zonePath}`, { encoding: 'utf8' }).trim();
+            const temp = parseInt(tempRaw) / 1000;
+            if (!isNaN(temp) && temp > 0 && temp < 150) return temp;
+          } catch {
+            continue;
+          }
+        }
+      }
 
+      // Method 3: Try sensors command (lm-sensors package)
+      try {
+        const sensorsOutput = execSync('sensors', { encoding: 'utf8' }).trim();
+        
+        // Format 1: "Package id 0:  +45.0°C"
+        const packageMatch = sensorsOutput.match(/Package id \d+:\s+\+(\d+\.\d+)°C/);
+        if (packageMatch && packageMatch[1]) {
+          return parseFloat(packageMatch[1]);
+        }
+        
+        // Format 2: "Core 0:        +39.0°C"
+        const coreMatch = sensorsOutput.match(/Core \d+:\s+\+(\d+\.\d+)°C/);
+        if (coreMatch && coreMatch[1]) {
+          return parseFloat(coreMatch[1]);
+        }
+      } catch {
+        // Silently continue to next method
+      }
+
+      // Method 4: Try acpi as fallback (only if we have it installed)
+      try {
+        // Check if acpi exists before trying to use it
+        execSync('command -v acpi > /dev/null 2>&1');
+        
+        const tempOutput = execSync('acpi -t', { encoding: 'utf8' });
+        const match = tempOutput.match(/\d+\.\d+/);
+        if (match) return parseFloat(match[0]);
+      } catch {
+        // Silently continue to next method
+      }
+
+      // Method 5: Try /proc/acpi/thermal_zone
+      try {
+        if (fs.existsSync('/proc/acpi/thermal_zone')) {
+          const zones = execSync('ls /proc/acpi/thermal_zone', { encoding: 'utf8' }).trim().split('\n');
+          if (zones.length > 0) {
+            const tempOutput = execSync(`cat /proc/acpi/thermal_zone/${zones[0]}/temperature`, { encoding: 'utf8' });
+            const match = tempOutput.match(/\d+/);
+            if (match) return parseInt(match[0]);
+          }
+        }
+      } catch {
+        // No more methods to try
+      }
+
+      // No temperature data available
+      console.log('No CPU temperature sensors detected');
       return 0;
     } catch (error) {
       console.error(`❌ Failed to get Linux temperature: ${error.message}`);

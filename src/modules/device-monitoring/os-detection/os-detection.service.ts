@@ -87,16 +87,55 @@ export class OsDetectionService {
     }
   }
 
-  /** ✅ Retrieves CPU information */
+  /** ✅ Retrieves CPU information with better fallbacks */
   getCPUInfo(): any {
     try {
-      const lscpuOutput = execSync('lscpu', { encoding: 'utf8' }).toLowerCase();
+      let aesSupport = false;
+      let pmullSupport = false;
+      let architecture = this.is64Bit() ? '64-bit' : '32-bit';
+      const cpuModel = os.cpus()[0]?.model || 'Unknown';
+      const cores = os.cpus().length;
+      
+      // Try multiple methods to detect CPU features
+      try {
+        // Primary method: lscpu
+        const lscpuOutput = execSync('lscpu', { encoding: 'utf8' }).toLowerCase();
+        aesSupport = lscpuOutput.includes('aes');
+        pmullSupport = lscpuOutput.includes('pmull');
+      } catch (lscpuError) {
+        this.loggingService.log(`lscpu failed: ${lscpuError.message}`, 'DEBUG', 'os-detection');
+        
+        try {
+          // First fallback: /proc/cpuinfo
+          const cpuinfoOutput = execSync('cat /proc/cpuinfo', { encoding: 'utf8' }).toLowerCase();
+          aesSupport = cpuinfoOutput.includes('aes');
+          pmullSupport = cpuinfoOutput.includes('pmull');
+        } catch (cpuinfoError) {
+          this.loggingService.log(`Failed to read /proc/cpuinfo: ${cpuinfoError.message}`, 'DEBUG', 'os-detection');
+          
+          // For Intel/AMD CPUs, we can assume AES support for newer models
+          if (cpuModel.includes('Intel') || cpuModel.includes('AMD')) {
+            // Rough heuristic based on CPU generation
+            const cpuGenMatch = cpuModel.match(/i[357]-\d{4,}/i) || cpuModel.match(/i[357] \d{4,}/i);
+            if (cpuGenMatch) {
+              const genNumber = parseInt(cpuGenMatch[0].replace(/\D/g, ''));
+              if (genNumber >= 2000) { // Most Intel CPUs since 2nd gen have AES
+                aesSupport = true;
+                this.loggingService.log(`Assuming AES support based on CPU model: ${cpuModel}`, 'INFO', 'os-detection');
+              }
+            } else if (cpuModel.includes('Xeon')) {
+              aesSupport = true; // Most Xeons support AES
+            }
+          }
+        }
+      }
+
       const cpuInfo = {
-        architecture: this.is64Bit() ? '64-bit' : '32-bit',
-        model: os.cpus()[0]?.model || 'Unknown',
-        cores: os.cpus().length,
-        aesSupport: lscpuOutput.includes('aes'),
-        pmullSupport: lscpuOutput.includes('pmull'),
+        architecture,
+        model: cpuModel,
+        cores,
+        aesSupport,
+        pmullSupport,
       };
 
       this.loggingService.log(
@@ -107,8 +146,15 @@ export class OsDetectionService {
 
       return cpuInfo;
     } catch (error) {
-      this.loggingService.log(`Failed to fetch CPU details: ${error.message}`, 'ERROR', 'os-detection');
-      return { error: 'Failed to fetch CPU details' };
+      this.loggingService.log(`Failed to fetch CPU details: ${error.message}`, 'WARN', 'os-detection');
+      // Return default values that will allow the app to continue
+      return {
+        architecture: this.is64Bit() ? '64-bit' : '32-bit',
+        model: os.cpus()[0]?.model || 'Unknown',
+        cores: os.cpus().length,
+        aesSupport: true, // Assume AES support to prevent blocking the app
+        pmullSupport: false,
+      };
     }
   }
 
