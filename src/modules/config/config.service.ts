@@ -1,50 +1,114 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, OnModuleInit } from '@nestjs/common';
 import { LoggingService } from '../logging/logging.service';
+import { HttpService } from '@nestjs/axios';
+import { firstValueFrom } from 'rxjs';
 import * as fs from 'fs';
 import * as path from 'path';
 
 interface SchedulePeriod {
-  start: string;
-  end: string;
-  days: string[];
+  startTime: string;
+  endTime: string;
+  days: string[]; // Keep for future compatibility
 }
 
-interface ScheduleRestart {
-  time: string;
-  days: string[];
-}
-
+// Match database structure where scheduledRestarts is array of strings
 interface Config {
   minerId: string;
   rigId: string;
+  name: string;
+  thresholds: {
+    maxCpuTemp: number;
+    maxBatteryTemp: number;
+    maxStorageUsage: number;
+    minHashrate: number;
+    shareRatio: number;
+  };
   schedules: {
     scheduledMining: {
       enabled: boolean;
       periods: SchedulePeriod[];
     };
-    scheduledRestarts: ScheduleRestart[];
+    scheduledRestarts: string[]; // Array of times like ["16:00"]
   };
 }
 
 @Injectable()
-export class ConfigService {
-  constructor(private readonly loggingService: LoggingService) {}
+export class ConfigService implements OnModuleInit {
+  private configPath = path.join(process.cwd(), 'config', 'config.json');
+  private syncInterval: NodeJS.Timeout;
+  private apiUrl: string;
 
-  getConfig() {
+  constructor(
+    private readonly loggingService: LoggingService,
+    private readonly httpService: HttpService,
+  ) {
+    this.apiUrl = process.env.API_URL || 'https://api.refurbminer.de';
+  }
+
+  async onModuleInit() {
+    // Create config directory if it doesn't exist
+    const configDir = path.join(process.cwd(), 'config');
+    if (!fs.existsSync(configDir)) {
+      fs.mkdirSync(configDir, { recursive: true });
+    }
+
+    // Create default config if it doesn't exist
+    if (!fs.existsSync(this.configPath)) {
+      this.saveConfig({
+        minerId: this.generateMinerId(),
+        rigId: '',
+        name: 'Unnamed Rig',
+        thresholds: {
+          maxCpuTemp: 85,
+          maxBatteryTemp: 45,
+          maxStorageUsage: 90,
+          minHashrate: 0,
+          shareRatio: 0.5
+        },
+        schedules: {
+          scheduledMining: {
+            enabled: false,
+            periods: [],
+          },
+          scheduledRestarts: [], // Array of times
+        },
+      });
+    }
+
+    // Sync with API on startup
+    await this.syncConfigWithApi();
+
+    // Set up periodic sync (every 15 minutes)
+    this.syncInterval = setInterval(async () => {
+      await this.syncConfigWithApi();
+    }, 15 * 60 * 1000);
+  }
+
+  getConfig(): Config | null {
     try {
-      const configPath = path.join(process.cwd(), 'config', 'config.json');
-      this.loggingService.log(`📂 Reading config from: ${configPath}`, 'DEBUG', 'config');
+      this.loggingService.log(`📂 Reading config from: ${this.configPath}`, 'DEBUG', 'config');
       
-      if (!fs.existsSync(configPath)) {
+      if (!fs.existsSync(this.configPath)) {
         throw new Error('Config file not found');
       }
       
-      const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      const config = JSON.parse(fs.readFileSync(this.configPath, 'utf8'));
       this.loggingService.log('✅ Config loaded successfully', 'DEBUG', 'config');
       return config;
     } catch (error) {
       this.loggingService.log(`❌ Failed to load config: ${error.message}`, 'ERROR', 'config');
       return null;
+    }
+  }
+
+  saveConfig(config: Config): boolean {
+    try {
+      fs.writeFileSync(this.configPath, JSON.stringify(config, null, 2));
+      this.loggingService.log('✅ Config saved successfully', 'DEBUG', 'config');
+      return true;
+    } catch (error) {
+      this.loggingService.log(`❌ Failed to save config: ${error.message}`, 'ERROR', 'config');
+      return false;
     }
   }
 
@@ -54,5 +118,88 @@ export class ConfigService {
       this.loggingService.log('❌ RIG_TOKEN not found in environment', 'ERROR', 'config');
     }
     return token || null;
+  }
+
+  getMinerId(): string {
+    const config = this.getConfig();
+    return config?.minerId || this.generateMinerId();
+  }
+
+  /**
+   * Sync local config with backend API
+   */
+  async syncConfigWithApi(): Promise<boolean> {
+    try {
+      const rigToken = this.getRigToken();
+      if (!rigToken) {
+        this.loggingService.log('⚠️ Cannot sync config: RIG_TOKEN not found', 'WARN', 'config');
+        return false;
+      }
+
+      const currentConfig = this.getConfig();
+      if (!currentConfig) {
+        this.loggingService.log('⚠️ Cannot sync config: Local config not found', 'WARN', 'config');
+        return false;
+      }
+
+      this.loggingService.log('🔄 Syncing configuration with API...', 'INFO', 'config');
+      
+      // Get rig configuration from API
+      const response = await firstValueFrom(
+        this.httpService.get(`${this.apiUrl}/api/rigs/config?rigToken=${rigToken}`)
+      );
+
+      if (response.status !== 200) {
+        throw new Error(`API returned ${response.status}`);
+      }
+
+      const apiConfig = response.data;
+      
+      // Map API response to our config format
+      const updatedConfig = {
+        ...currentConfig,
+        rigId: apiConfig._id || currentConfig.rigId,
+        name: apiConfig.name || currentConfig.name,
+        thresholds: {
+          maxCpuTemp: apiConfig.thresholds?.maxCpuTemp || currentConfig.thresholds.maxCpuTemp,
+          maxBatteryTemp: apiConfig.thresholds?.maxBatteryTemp || currentConfig.thresholds.maxBatteryTemp,
+          maxStorageUsage: apiConfig.thresholds?.maxStorageUsage || currentConfig.thresholds.maxStorageUsage,
+          minHashrate: apiConfig.thresholds?.minHashrate || currentConfig.thresholds.minHashrate,
+          shareRatio: apiConfig.thresholds?.shareRatio || currentConfig.thresholds.shareRatio,
+        },
+        schedules: {
+          scheduledMining: {
+            enabled: apiConfig.scheduledMining?.enabled || false,
+            periods: (apiConfig.scheduledMining?.periods || []).map(period => ({
+              startTime: period.startTime,
+              endTime: period.endTime,
+              days: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] // Default to all days
+            }))
+          },
+          // Use restart times directly as strings
+          scheduledRestarts: apiConfig.scheduledRestarts || []
+        }
+      };
+
+      // Save updated config
+      const saved = this.saveConfig(updatedConfig);
+      if (saved) {
+        this.loggingService.log('✅ Config synchronized with API successfully', 'INFO', 'config');
+      }
+      return saved;
+
+    } catch (error) {
+      this.loggingService.log(`❌ Failed to sync config with API: ${error.message}`, 'ERROR', 'config');
+      return false;
+    }
+  }
+
+  /**
+   * Generate a unique miner ID if one doesn't exist
+   */
+  private generateMinerId(): string {
+    const timestamp = Date.now();
+    const random = Math.floor(Math.random() * 10000);
+    return `miner-${timestamp}-${random}`;
   }
 }
