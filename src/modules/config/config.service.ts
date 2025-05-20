@@ -73,6 +73,9 @@ export class ConfigService implements OnModuleInit {
           scheduledRestarts: [], // Array of times
         },
       });
+    } else {
+      // Clean up existing config to ensure consistent structure
+      await this.cleanupConfig();
     }
 
     // Sync with API on startup
@@ -136,31 +139,18 @@ export class ConfigService implements OnModuleInit {
         return false;
       }
 
+      // First clean up the config to ensure consistent structure
+      await this.cleanupConfig();
+      
       const currentConfig = this.getConfig();
       if (!currentConfig) {
         this.loggingService.log('⚠️ Cannot sync config: Local config not found', 'WARN', 'config');
         return false;
       }
 
-      // Ensure thresholds exist in current config
-      if (!currentConfig.thresholds) {
-        currentConfig.thresholds = {
-          maxCpuTemp: 85,
-          maxBatteryTemp: 45,
-          maxStorageUsage: 90,
-          minHashrate: 0,
-          shareRatio: 0.5
-        };
-      }
-      
-      // Ensure name exists
-      if (!currentConfig.name) {
-        currentConfig.name = 'Unnamed Rig';
-      }
-
       this.loggingService.log('🔄 Syncing configuration with API...', 'INFO', 'config');
       
-      // Get miner configuration from API - fixed endpoint URL
+      // Get miner configuration from API
       const url = `${this.apiUrl}/api/miners/config?rigToken=${rigToken}`;
       this.loggingService.log(`📡 Fetching config from: ${url}`, 'DEBUG', 'config');
       
@@ -175,35 +165,23 @@ export class ConfigService implements OnModuleInit {
       const apiConfig = response.data;
       this.loggingService.log(`📥 Received config data: ${JSON.stringify(apiConfig)}`, 'DEBUG', 'config');
       
-      // Create a deep copy of the current config as a base
-      const updatedConfig = JSON.parse(JSON.stringify(currentConfig));
-
-      // Update with API values using a more defensive approach
-      updatedConfig.minerId = apiConfig.minerId || updatedConfig.minerId;
-      updatedConfig.rigId = apiConfig.rigId || updatedConfig.rigId;
-      updatedConfig.name = apiConfig.name || updatedConfig.name;
-      
-      // Handle thresholds safely
-      if (apiConfig.thresholds) {
-        updatedConfig.thresholds = {
-          maxCpuTemp: apiConfig.thresholds.maxCpuTemp ?? updatedConfig.thresholds.maxCpuTemp,
-          maxBatteryTemp: apiConfig.thresholds.maxBatteryTemp ?? updatedConfig.thresholds.maxBatteryTemp,
-          maxStorageUsage: apiConfig.thresholds.maxStorageUsage ?? updatedConfig.thresholds.maxStorageUsage,
-          minHashrate: apiConfig.thresholds.minHashrate ?? updatedConfig.thresholds.minHashrate,
-          shareRatio: apiConfig.thresholds.shareRatio ?? updatedConfig.thresholds.shareRatio
-        };
-      }
-      
-      // Handle schedules safely
-      if (apiConfig.schedules) {
-        updatedConfig.schedules = {
-          scheduledMining: apiConfig.schedules.scheduledMining || {
-            enabled: false,
-            periods: []
-          },
-          scheduledRestarts: apiConfig.schedules.scheduledRestarts || []
-        };
-      }
+      // Create a clean config with API values
+      const updatedConfig: Config = {
+        minerId: apiConfig.minerId || currentConfig.minerId,
+        rigId: apiConfig.rigId || currentConfig.rigId,
+        name: apiConfig.name || currentConfig.name,
+        thresholds: {
+          maxCpuTemp: apiConfig.thresholds?.maxCpuTemp ?? currentConfig.thresholds.maxCpuTemp,
+          maxBatteryTemp: apiConfig.thresholds?.maxBatteryTemp ?? currentConfig.thresholds.maxBatteryTemp,
+          maxStorageUsage: apiConfig.thresholds?.maxStorageUsage ?? currentConfig.thresholds.maxStorageUsage,
+          minHashrate: apiConfig.thresholds?.minHashrate ?? currentConfig.thresholds.minHashrate,
+          shareRatio: apiConfig.thresholds?.shareRatio ?? currentConfig.thresholds.shareRatio
+        },
+        schedules: {
+          scheduledMining: apiConfig.schedules?.scheduledMining ?? currentConfig.schedules.scheduledMining,
+          scheduledRestarts: apiConfig.schedules?.scheduledRestarts ?? currentConfig.schedules.scheduledRestarts
+        }
+      };
 
       // Save updated config
       const saved = this.saveConfig(updatedConfig);
@@ -227,5 +205,50 @@ export class ConfigService implements OnModuleInit {
     const timestamp = Date.now();
     const random = Math.floor(Math.random() * 10000);
     return `miner-${timestamp}-${random}`;
+  }
+
+  /**
+   * Clean up config file to ensure consistent structure
+   */
+  async cleanupConfig(): Promise<boolean> {
+    try {
+      const currentConfig = this.getConfig();
+      if (!currentConfig) {
+        this.loggingService.log('⚠️ Cannot clean config: File not found', 'WARN', 'config');
+        return false;
+      }
+
+      // Create a new config with exactly the expected structure
+      const cleanConfig: Config = {
+        minerId: currentConfig.minerId || this.generateMinerId(),
+        rigId: currentConfig.rigId || '',
+        name: currentConfig.name || 'Unnamed Rig',
+        thresholds: {
+          maxCpuTemp: currentConfig.thresholds?.maxCpuTemp ?? 85,
+          maxBatteryTemp: currentConfig.thresholds?.maxBatteryTemp ?? 45,
+          maxStorageUsage: currentConfig.thresholds?.maxStorageUsage ?? 90,
+          minHashrate: currentConfig.thresholds?.minHashrate ?? 0,
+          shareRatio: currentConfig.thresholds?.shareRatio ?? 0.5
+        },
+        schedules: {
+          scheduledMining: {
+            enabled: currentConfig.schedules?.scheduledMining?.enabled ?? false,
+            periods: currentConfig.schedules?.scheduledMining?.periods || []
+          },
+          scheduledRestarts: currentConfig.schedules?.scheduledRestarts || []
+        }
+      };
+
+      // Save the cleaned config
+      const saved = this.saveConfig(cleanConfig);
+      if (saved) {
+        this.loggingService.log('✅ Config cleaned up successfully', 'INFO', 'config');
+        this.loggingService.log(`📄 Cleaned config: ${JSON.stringify(cleanConfig)}`, 'DEBUG', 'config');
+      }
+      return saved;
+    } catch (error) {
+      this.loggingService.log(`❌ Failed to clean config: ${error.message}`, 'ERROR', 'config');
+      return false;
+    }
   }
 }
