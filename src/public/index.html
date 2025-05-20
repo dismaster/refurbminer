@@ -440,23 +440,25 @@ function updateDashboard(data) {
             formatUptime(data.minerSoftware.uptime || 0);
     }    // Schedule Information
     if (data.schedules) {
-        // Handle the new schedule format
-        const miningSchedule = data.schedules?.scheduledMining || data.schedules.mining;
+        console.log('Schedule data:', data.schedules); // Debug log
+        
+        // Always use the format from the telemetry data (mining/restarts)
+        const miningSchedule = data.schedules.mining;
         
         if (miningSchedule?.enabled && miningSchedule.periods && miningSchedule.periods.length > 0) {
             // Display first period's times
             const firstPeriod = miningSchedule.periods[0];
             document.getElementById('scheduleStart').textContent = 
-                firstPeriod.startTime || firstPeriod.start || 'Not set';
+                firstPeriod.start || 'Not set';
             document.getElementById('scheduleStop').textContent = 
-                firstPeriod.endTime || firstPeriod.end || 'Not set';
+                firstPeriod.end || 'Not set';
         } else {
             document.getElementById('scheduleStart').textContent = 'Not set';
             document.getElementById('scheduleStop').textContent = 'Not set';
         }
         
         // Handle restart schedules
-        const restarts = data.schedules?.scheduledRestarts || data.schedules.restarts || [];
+        const restarts = data.schedules.restarts || [];
         document.getElementById('nextRestart').textContent = 
             restarts.length > 0 ? `${restarts[0]}` : 'No restart scheduled';
     }
@@ -589,16 +591,17 @@ function updateDashboard(data) {
     }    // Update schedule information
     const scheduleSection = document.getElementById('schedules-section');
     if (scheduleSection && data.schedules) {
-        const miningSchedules = data.schedules?.scheduledMining || data.schedules.mining;
-        const restartSchedules = data.schedules?.scheduledRestarts || data.schedules.restarts || [];
+        // Use only telemetry format for consistency (mining/restarts)
+        const miningSchedules = data.schedules.mining;
+        const restartSchedules = data.schedules.restarts || [];
         
         let scheduleHTML = '<h3>Mining Schedules</h3>';
         
         if (miningSchedules && miningSchedules.enabled && miningSchedules.periods && miningSchedules.periods.length > 0) {
             scheduleHTML += '<ul class="schedule-list">';
             miningSchedules.periods.forEach(period => {
-                const startTime = period.startTime || period.start;
-                const endTime = period.endTime || period.end;
+                const startTime = period.start;
+                const endTime = period.end;
                 const days = period.days ? period.days.join(', ') : 'all days';
                 scheduleHTML += `<li>Mine from ${startTime} to ${endTime} on ${days}</li>`;
             });
@@ -612,9 +615,8 @@ function updateDashboard(data) {
         if (restartSchedules && restartSchedules.length > 0) {
             scheduleHTML += '<ul class="schedule-list">';
             restartSchedules.forEach(restart => {
-                // Handle both string format and object format
-                const restartTime = typeof restart === 'string' ? restart : restart.time;
-                scheduleHTML += `<li>Restart at ${restartTime}</li>`;
+                // Restart times are always strings in telemetry format
+                scheduleHTML += `<li>Restart at ${restart}</li>`;
             });
             scheduleHTML += '</ul>';
         } else {

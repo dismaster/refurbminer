@@ -22,4 +22,21 @@ export class MinerManagerController {
     this.minerManagerService.restartMiner();
     return { message: 'Miner restart command sent.' };
   }
+
+  @Get('status')
+  getStatus() {
+    const isRunning = this.minerManagerService.isMinerRunning();
+    const shouldBeMining = this.minerManagerService.shouldBeMining();
+    
+    return {
+      status: isRunning ? 'running' : 'stopped',
+      shouldBeMining,
+      scheduleStatus: this.minerManagerService.getScheduleStatus(),
+      monitoring: {
+        apiSyncInterval: '5 minutes',
+        scheduleCheckInterval: '1 minute',
+        healthCheckInterval: '30 seconds'
+      }
+    };
+  }
 }

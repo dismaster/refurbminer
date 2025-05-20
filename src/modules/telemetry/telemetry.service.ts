@@ -110,10 +110,13 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
         battery: BatteryInfoUtil.getBatteryInfo(systemType)
       };
     
+      // Get mining schedules in the correct format for telemetry
+      const scheduleInfo = this.getMiningSchedule();
+      
       // Create full telemetry object
       const fullTelemetry = {
         ...apiTelemetry,
-        schedules: this.getMiningSchedule(),
+        schedules: scheduleInfo, // This will have mining and restarts in the format the UI expects
         historicalHashrate: this.updateHistoricalHashrate(
           previousData?.historicalHashrate || [],
           minerSummary?.hashrate
@@ -289,15 +292,16 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
     try {
       const config = this.configService.getConfig();
       if (!config) {
-        return { mining: { start: null, stop: null }, restarts: [] };
+        return { mining: { enabled: false, periods: [] }, restarts: [] };
       }
       
-      // Transform config schedules to expected format
+      // Transform config schedules to expected telemetry format
       return {
         mining: {
           enabled: config.schedules.scheduledMining.enabled,
           periods: config.schedules.scheduledMining.periods.map(period => ({
-            start: period.startTime,
+            // Map startTime/endTime to start/end for telemetry format
+            start: period.startTime, 
             end: period.endTime,
             days: period.days
           }))
@@ -306,7 +310,7 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
       };
     } catch (error) {
       this.loggingService.log(`Failed to get mining schedule: ${error.message}`, 'ERROR', 'telemetry');
-      return { mining: { start: null, stop: null }, restarts: [] };
+      return { mining: { enabled: false, periods: [] }, restarts: [] };
     }
   }
 }

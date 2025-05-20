@@ -76,16 +76,24 @@ export class MinerManagerService implements OnModuleInit, OnApplicationShutdown 
   private async initializeMonitoring(): Promise<void> {
     // Set up polling interval
     this.pollingInterval = setInterval(async () => {
-      this.loggingService.log('🔄 Checking for flightsheet updates...', 'DEBUG', 'miner-manager');
+      this.loggingService.log('🔄 Checking for API updates...', 'DEBUG', 'miner-manager');
+      
+      // Sync with API every 5 minutes
+      await this.configService.forceSyncWithApi();
+      
+      // Check flightsheet for changes
       const updated = await this.fetchAndUpdateFlightsheet();
       if (updated) {
         await this.logMinerError('Flightsheet changed, restarting miner');
         this.restartMiner();
       }
-    }, 60000);
+    }, 300000); // Every 5 minutes
   
-    // Set up schedule interval
+    // Set up schedule interval - check more frequently (every minute)
+    // Also sync config before checking to ensure latest schedule data
     this.scheduleInterval = setInterval(() => {
+      // Use local config cache for more frequent checks
+      // API sync happens in pollingInterval above
       this.checkSchedules();
     }, 60000);
   
@@ -93,6 +101,15 @@ export class MinerManagerService implements OnModuleInit, OnApplicationShutdown 
     this.crashMonitorInterval = setInterval(() => {
       this.checkMinerHealth();
     }, 30000);
+    
+    // Run an initial schedule check and dump status
+    // First sync with API to ensure we have the latest schedule
+    await this.configService.forceSyncWithApi();
+    this.checkSchedules();
+    this.dumpScheduleStatus();
+    
+    // Log configuration for monitoring intervals
+    this.loggingService.log('📋 Schedule monitoring configured: API sync every 5 minutes, local check every minute', 'INFO', 'miner-manager');
   }
 
   private async checkMinerHealth(): Promise<void> {
@@ -119,18 +136,52 @@ export class MinerManagerService implements OnModuleInit, OnApplicationShutdown 
     }
   }
 
-  private shouldBeMining(): boolean {
+  public shouldBeMining(): boolean {
       const config = this.configService.getConfig();
-      if (!config || !config.schedules.scheduledMining.enabled) return true;
+      if (!config) {
+        this.loggingService.log('ℹ️ No config available, defaulting to always mining', 'DEBUG', 'miner-manager');
+        return true;
+      }
+      
+      if (!config.schedules.scheduledMining.enabled) {
+        this.loggingService.log('ℹ️ Scheduled mining disabled, mining allowed at any time', 'DEBUG', 'miner-manager');
+        return true;
+      }
 
       const now = new Date();
       const currentDay = now.toLocaleString('en-US', { weekday: 'long' }).toLowerCase();
       const currentTime = now.toTimeString().split(' ')[0].substring(0, 5);
+      
+      this.loggingService.log(`🕒 Checking if mining should run at ${currentTime} on ${currentDay}`, 'DEBUG', 'miner-manager');
+      
+      // No periods configured means no mining allowed
+      if (!config.schedules.scheduledMining.periods || config.schedules.scheduledMining.periods.length === 0) {
+        this.loggingService.log('⚠️ No mining periods configured, mining not allowed', 'DEBUG', 'miner-manager');
+        return false;
+      }
 
-      return config.schedules.scheduledMining.periods.some(period =>
-        period.days.includes(currentDay) &&
-        this.isTimeInRange(currentTime, period.startTime, period.endTime)
-      );
+      const shouldMine = config.schedules.scheduledMining.periods.some(period => {
+        // Skip if period doesn't have required properties
+        if (!period.days || !Array.isArray(period.days) || !period.startTime || !period.endTime) {
+          this.loggingService.log(`⚠️ Invalid period configuration: ${JSON.stringify(period)}`, 'WARN', 'miner-manager');
+          return false;
+        }
+        
+        const inDay = period.days.includes(currentDay);
+        const inTimeRange = this.isTimeInRange(currentTime, period.startTime, period.endTime);
+        
+        if (inDay && inTimeRange) {
+          this.loggingService.log(`✅ Current time ${currentTime} is within schedule ${period.startTime}-${period.endTime} on ${currentDay}`, 'DEBUG', 'miner-manager');
+          return true;
+        }
+        return false;
+      });
+      
+      if (!shouldMine) {
+        this.loggingService.log(`❌ Current time ${currentTime} is outside of all scheduled mining periods`, 'DEBUG', 'miner-manager');
+      }
+      
+      return shouldMine;
   }
 
   public getMinerFromFlightsheet(): string | undefined {
@@ -249,49 +300,97 @@ export class MinerManagerService implements OnModuleInit, OnApplicationShutdown 
 
   private checkSchedules() {
     const config = this.configService.getConfig();
-    if (!config) return;
+    if (!config) {
+      this.loggingService.log('⚠️ Cannot check schedules: No config found', 'WARN', 'miner-manager');
+      return;
+    }
     
     const now = new Date();
     const currentDay = now.toLocaleString('en-US', { weekday: 'long' }).toLowerCase();
     const currentTime = now.toTimeString().split(' ')[0].substring(0, 5);
+    
+    this.loggingService.log(`🕒 Checking schedules at ${currentTime} on ${currentDay}`, 'DEBUG', 'miner-manager');
 
     // Check scheduled mining periods
-    if (config.schedules.scheduledMining.enabled) {
-      const periods = config.schedules.scheduledMining.periods;
+    if (config.schedules?.scheduledMining?.enabled) {
+      const periods = config.schedules.scheduledMining.periods || [];
+      
+      let shouldMine = false;
+      
+      // First check if we're in any mining period
       for (const period of periods) {
+        // Safety check for period properties
+        if (!period.days || !Array.isArray(period.days) || !period.startTime || !period.endTime) {
+          this.loggingService.log(`⚠️ Invalid period configuration: ${JSON.stringify(period)}`, 'WARN', 'miner-manager');
+          continue;
+        }
+        
         if (period.days.includes(currentDay)) {
           if (this.isTimeInRange(currentTime, period.startTime, period.endTime)) {
+            shouldMine = true;
             if (!this.isMinerRunning()) {
               this.loggingService.log(`⏰ Starting miner for scheduled period: ${period.startTime} - ${period.endTime} on ${currentDay}`, 'INFO', 'miner-manager');
               this.startMiner();
+            } else {
+              this.loggingService.log(`✅ Miner already running as scheduled: ${period.startTime} - ${period.endTime} on ${currentDay}`, 'DEBUG', 'miner-manager');
             }
-            return;
+            break;
           }
         }
       }
-      if (this.isMinerRunning()) {
-        this.loggingService.log(`⏰ Stopping miner outside scheduled periods on ${currentDay}`, 'INFO', 'miner-manager');
+      
+      // If we shouldn't be mining but miner is running, stop it
+      if (!shouldMine && this.isMinerRunning()) {
+        this.loggingService.log(`⏰ Stopping miner outside scheduled periods on ${currentDay} at ${currentTime}`, 'INFO', 'miner-manager');
         this.stopMiner();
+      }
+    } else {
+      // If scheduling is disabled, make sure miner is running
+      if (!this.isMinerRunning()) {
+        this.loggingService.log('ℹ️ Schedule disabled, ensuring miner is running', 'DEBUG', 'miner-manager');
+        this.startMiner();
       }
     }
 
-    // Check scheduled restarts
-    const restarts = config.schedules.scheduledRestarts;
+    // Check scheduled restarts - independent of mining schedule
+    const restarts = config.schedules?.scheduledRestarts || [];
     for (const restartTime of restarts) {
       // Since scheduledRestarts is now a string array, compare directly with currentTime
       if (currentTime === restartTime) {
         this.loggingService.log(`⏰ Restarting miner for scheduled restart at ${restartTime} on ${currentDay}`, 'INFO', 'miner-manager');
-        this.restartMiner();
+        // Use void to silence the unhandled promise warning
+        void this.restartMiner();
       }
     }
   }
 
   private isTimeInRange(currentTime: string, startTime: string, endTime: string): boolean {
-    if (startTime < endTime) {
-      return currentTime >= startTime && currentTime <= endTime;
-    } else {
-      return currentTime >= startTime || currentTime <= endTime;
+    // Convert all times to minutes for easier comparison
+    const current = this.timeToMinutes(currentTime);
+    const start = this.timeToMinutes(startTime);
+    const end = this.timeToMinutes(endTime);
+    
+    // Log the comparison for debugging
+    this.loggingService.log(
+      `⏱️ Time comparison - Current: ${currentTime}(${current}), Start: ${startTime}(${start}), End: ${endTime}(${end})`,
+      'DEBUG',
+      'miner-manager'
+    );
+    
+    // Normal time range (e.g., 08:00-17:00)
+    if (start <= end) {
+      return current >= start && current <= end;
+    } 
+    // Overnight time range (e.g., 22:00-06:00)
+    else {
+      return current >= start || current <= end;
     }
+  }
+  
+  // Helper to convert HH:MM to minutes
+  private timeToMinutes(time: string): number {
+    const [hours, minutes] = time.split(':').map(Number);
+    return (hours * 60) + minutes;
   }
 
   private async logMinerError(message: string, stack?: string): Promise<void> {
@@ -325,6 +424,140 @@ export class MinerManagerService implements OnModuleInit, OnApplicationShutdown 
         'ERROR',
         'miner-manager'
       );
+    }
+  }
+
+  /**
+   * Debug function to dump current schedule status
+   */
+  private dumpScheduleStatus(): void {
+    try {
+      const config = this.configService.getConfig();
+      if (!config) {
+        this.loggingService.log('No config available for schedule status', 'DEBUG', 'miner-manager');
+        return;
+      }
+
+      const now = new Date();
+      const currentDay = now.toLocaleString('en-US', { weekday: 'long' }).toLowerCase();
+      const currentTime = now.toTimeString().split(' ')[0].substring(0, 5);
+      
+      const schedulingEnabled = config.schedules?.scheduledMining?.enabled || false;
+      const periods = config.schedules?.scheduledMining?.periods || [];
+      const restarts = config.schedules?.scheduledRestarts || [];
+      
+      this.loggingService.log(
+        `📊 SCHEDULE STATUS - Day: ${currentDay}, Time: ${currentTime}, Enabled: ${schedulingEnabled}, Periods: ${periods.length}, Restarts: ${restarts.length}`,
+        'INFO',
+        'miner-manager'
+      );
+      
+      if (periods.length > 0) {
+        periods.forEach((period, index) => {
+          const inDay = period.days?.includes(currentDay);
+          const inTimeRange = period.startTime && period.endTime ? 
+            this.isTimeInRange(currentTime, period.startTime, period.endTime) : 
+            false;
+            
+          this.loggingService.log(
+            `📆 Period #${index + 1}: ${period.startTime}-${period.endTime}, Days: ${period.days?.join(',')}, ` +
+            `Active: ${inDay && inTimeRange}`,
+            'INFO',
+            'miner-manager'
+          );
+        });
+      }
+    } catch (error) {
+      this.loggingService.log(`Error dumping schedule status: ${error.message}`, 'ERROR', 'miner-manager');
+    }
+  }
+
+  /**
+   * Get current schedule status for debugging
+   * @returns Schedule status information
+   */
+  public getScheduleStatus(): any {
+    try {
+      const config = this.configService.getConfig();
+      if (!config) {
+        return {
+          status: 'error',
+          message: 'No config available'
+        };
+      }
+
+      const now = new Date();
+      const currentDay = now.toLocaleString('en-US', { weekday: 'long' }).toLowerCase();
+      const currentTime = now.toTimeString().split(' ')[0].substring(0, 5);
+      const currentMinutes = this.timeToMinutes(currentTime);
+      
+      const schedulingEnabled = config.schedules?.scheduledMining?.enabled || false;
+      const periods = config.schedules?.scheduledMining?.periods || [];
+      const restarts = config.schedules?.scheduledRestarts || [];
+
+      // Check each period and determine active status
+      const periodStatuses = periods.map((period, index) => {
+        const inDay = period.days?.includes(currentDay) || false;
+        const start = this.timeToMinutes(period.startTime);
+        const end = this.timeToMinutes(period.endTime);
+        
+        let inTimeRange = false;
+        if (start <= end) {
+          // Normal time range
+          inTimeRange = currentMinutes >= start && currentMinutes <= end;
+        } else {
+          // Overnight time range
+          inTimeRange = currentMinutes >= start || currentMinutes <= end;
+        }
+        
+        const isActive = inDay && inTimeRange;
+        
+        return {
+          id: index + 1,
+          startTime: period.startTime,
+          endTime: period.endTime,
+          days: period.days,
+          inDay,
+          inTimeRange,
+          isActive
+        };
+      });
+      
+      // Next restart time
+      let nextRestart = null;
+      if (restarts.length > 0) {
+        // Find the next restart time
+        const futureRestarts = restarts
+          .map(time => {
+            const timeMinutes = this.timeToMinutes(time);
+            return { 
+              time, 
+              minutes: timeMinutes, 
+              isToday: timeMinutes > currentMinutes,
+              timeUntil: timeMinutes > currentMinutes ? timeMinutes - currentMinutes : (24 * 60) - currentMinutes + timeMinutes
+            };
+          })
+          .sort((a, b) => a.timeUntil - b.timeUntil);
+          
+        nextRestart = futureRestarts.length > 0 ? futureRestarts[0] : null;
+      }
+      
+      return {
+        currentDay,
+        currentTime,
+        schedulingEnabled,
+        activePeriod: periodStatuses.find(p => p.isActive) || null,
+        allPeriods: periodStatuses,
+        nextRestart,
+        restartTimes: restarts,
+        shouldMine: this.shouldBeMining(),
+        isRunning: this.isMinerRunning()
+      };
+    } catch (error) {
+      return {
+        status: 'error',
+        message: `Failed to get schedule status: ${error.message}`
+      };
     }
   }
 

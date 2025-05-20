@@ -32,26 +32,41 @@ export class MinerPoolUtil {
     try {
       // Use same pattern as in summary and threads collection
       const poolRaw = execSync(`echo 'pool' | nc -w 1 127.0.0.1 4068`, { encoding: 'utf8' });
-  
+
       if (!poolRaw || !poolRaw.trim()) {
         return this.getDefaultPoolInfo();
       }
-  
+
       const parsed = this.parseCcminerOutput(poolRaw);
-  
+
       return {
         name: parsed.POOL || 'unknown',
         url: parsed.URL || 'unknown',
         user: parsed.USER || 'unknown',
         acceptedShares: parseInt(parsed.ACC) || 0,
         rejectedShares: parseInt(parsed.REJ) || 0,
-        staleShares: parseInt(parsed.STALE) || 0,
+        staleShares: parseInt(parsed.STALE) || 0, 
         ping: parseInt(parsed.PING) || 0,
         uptime: parseInt(parsed.UPTIME) || 0
       };
     } catch (error) {
-      console.error('CCMiner pool info error:', error);
-      return this.getDefaultPoolInfo();
+      // Instead of logging the error, handle it silently
+      // Only log detailed errors in debug mode
+      if (process.env.DEBUG === 'true') {
+        console.debug('CCMiner API not responsive:', error.message);
+      }
+      
+      // Return default pool info with zeros for statistics
+      return {
+        name: 'RefurbMiner Verus Pool',  // Use default pool name
+        url: 'stratum+tcp://pool.refurbminer.de:3956',  // Use default URL
+        user: 'unknown',
+        acceptedShares: 0,
+        rejectedShares: 0,
+        staleShares: 0,
+        ping: 0,
+        uptime: 0
+      };
     }
   }
 

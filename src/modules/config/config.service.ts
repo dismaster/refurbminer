@@ -165,9 +165,17 @@ export class ConfigService implements OnModuleInit {
       const apiConfig = response.data;
       this.loggingService.log(`📥 Received config data: ${JSON.stringify(apiConfig)}`, 'DEBUG', 'config');
       
-      // Create a clean config with API values
+      // Check if API is trying to change the minerId
+      if (apiConfig.minerId && apiConfig.minerId !== currentConfig.minerId) {
+        this.loggingService.log(`⚠️ API provided different minerId (${apiConfig.minerId}), keeping local minerId (${currentConfig.minerId})`, 'WARN', 'config');
+      }
+      
+      // Create a clean config with API values BUT preserve the local minerId
       const updatedConfig: Config = {
-        minerId: apiConfig.minerId || currentConfig.minerId,
+        // Always keep the local minerId
+        minerId: currentConfig.minerId,
+        
+        // Take the rest from API
         rigId: apiConfig.rigId || currentConfig.rigId,
         name: apiConfig.name || currentConfig.name,
         thresholds: {
@@ -196,6 +204,15 @@ export class ConfigService implements OnModuleInit {
       this.loggingService.log(`❌ Error stack: ${error.stack}`, 'DEBUG', 'config');
       return false;
     }
+  }
+
+  /**
+   * Force an immediate config sync with the API
+   * This can be called by services that need the latest config (like the MinerManagerService)
+   */
+  async forceSyncWithApi(): Promise<boolean> {
+    this.loggingService.log('🔄 Forcing immediate config sync...', 'INFO', 'config');
+    return await this.syncConfigWithApi();
   }
 
   /**
