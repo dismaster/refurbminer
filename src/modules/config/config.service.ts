@@ -144,9 +144,12 @@ export class ConfigService implements OnModuleInit {
 
       this.loggingService.log('🔄 Syncing configuration with API...', 'INFO', 'config');
       
-      // Get rig configuration from API
+      // Get miner configuration from API - fixed endpoint URL
+      const url = `${this.apiUrl}/api/miners/config?rigToken=${rigToken}`;
+      this.loggingService.log(`📡 Fetching config from: ${url}`, 'DEBUG', 'config');
+      
       const response = await firstValueFrom(
-        this.httpService.get(`${this.apiUrl}/api/rigs/config?rigToken=${rigToken}`)
+        this.httpService.get(url)
       );
 
       if (response.status !== 200) {
@@ -154,11 +157,12 @@ export class ConfigService implements OnModuleInit {
       }
 
       const apiConfig = response.data;
+      this.loggingService.log(`📥 Received config data: ${JSON.stringify(apiConfig)}`, 'DEBUG', 'config');
       
-      // Map API response to our config format
+      // Map API response to our config format - directly use the structure from the API
       const updatedConfig = {
-        ...currentConfig,
-        rigId: apiConfig._id || currentConfig.rigId,
+        minerId: apiConfig.minerId || currentConfig.minerId,
+        rigId: apiConfig.rigId || currentConfig.rigId,
         name: apiConfig.name || currentConfig.name,
         thresholds: {
           maxCpuTemp: apiConfig.thresholds?.maxCpuTemp || currentConfig.thresholds.maxCpuTemp,
@@ -168,16 +172,11 @@ export class ConfigService implements OnModuleInit {
           shareRatio: apiConfig.thresholds?.shareRatio || currentConfig.thresholds.shareRatio,
         },
         schedules: {
-          scheduledMining: {
-            enabled: apiConfig.scheduledMining?.enabled || false,
-            periods: (apiConfig.scheduledMining?.periods || []).map(period => ({
-              startTime: period.startTime,
-              endTime: period.endTime,
-              days: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] // Default to all days
-            }))
+          scheduledMining: apiConfig.schedules?.scheduledMining || {
+            enabled: false,
+            periods: []
           },
-          // Use restart times directly as strings
-          scheduledRestarts: apiConfig.scheduledRestarts || []
+          scheduledRestarts: apiConfig.schedules?.scheduledRestarts || []
         }
       };
 
