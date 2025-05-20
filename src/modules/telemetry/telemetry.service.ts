@@ -69,6 +69,25 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
     
       const minerSummary = await MinerSummaryUtil.getMinerSummary();
       const poolStats = await MinerPoolUtil.getPoolStatistics();
+      
+      // Get CPU info with per-thread hashrates
+      const deviceInfo = HardwareInfoUtil.getDeviceInfo(systemType);
+      const threadPerformance = await MinerThreadsUtil.getThreadPerformance();
+      
+      // Update the CPU model info with hashrates from threads
+      if (deviceInfo.cpuModel && deviceInfo.cpuModel.length > 0) {
+        deviceInfo.cpuModel = deviceInfo.cpuModel.map((cpu, index) => {
+          // Find matching thread data by coreId
+          const threadData = threadPerformance.find(t => t.coreId === cpu.coreId) || 
+                            threadPerformance[index] || 
+                            { khs: 0 };
+          
+          return {
+            ...cpu,
+            khs: threadData.khs || 0
+          };
+        });
+      }
     
       // Create API telemetry object without threads
       const apiTelemetry = {
@@ -84,7 +103,7 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
           solvedBlocks: minerSummary.solvedBlocks
         },
         pool: poolStats,
-        deviceInfo: HardwareInfoUtil.getDeviceInfo(systemType),
+        deviceInfo: deviceInfo, // Using updated deviceInfo with thread hashrates
         network: NetworkInfoUtil.getNetworkInfo(systemType),
         battery: BatteryInfoUtil.getBatteryInfo(systemType)
       };
