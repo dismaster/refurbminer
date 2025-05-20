@@ -3,10 +3,28 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Miner Dashboard</title>
+    <title>Miner Dashboard</title>    
     <link rel="icon" type="image/png" href="favicon.png">
     <link href="https://cdn.jsdelivr.net/npm/@coreui/coreui@4.3.0/dist/css/coreui.min.css" rel="stylesheet">
     <link href="styles.css" rel="stylesheet">
+    <style>
+        .schedule-list {
+            list-style: none;
+            padding-left: 0;
+        }
+        .schedule-list li {
+            background-color: rgba(50, 50, 50, 0.1);
+            padding: 8px 12px;
+            margin-bottom: 8px;
+            border-radius: 4px;
+        }
+        #schedules-section h3 {
+            font-size: 1rem;
+            margin-top: 16px;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+    </style>
 </head>
 <body class="dark-mode">
     <div class="app-container">
@@ -71,7 +89,7 @@
 
                 <div class="row">
                     <!-- Left Column -->
-                    <div class="col-md-6">
+                    <div class="col-md-6">                        
                         <!-- Schedule Section -->
                         <div class="card mb-4">
                             <div class="card-header">Schedules & Maintenance</div>
@@ -98,6 +116,10 @@
                                             </div>
                                         </div>
                                     </div>
+                                </div>
+                                <!-- Detailed schedule information -->
+                                <div id="schedules-section" class="mt-3">
+                                    <!-- This will be populated by JavaScript -->
                                 </div>
                             </div>
                         </div>
@@ -416,16 +438,27 @@ function updateDashboard(data) {
             data.minerSoftware.algorithm || 'N/A';
         document.getElementById('minerUptime').textContent = 
             formatUptime(data.minerSoftware.uptime || 0);
-    }
-
-    // Schedule Information
+    }    // Schedule Information
     if (data.schedules) {
-        document.getElementById('scheduleStart').textContent = 
-            data.schedules.mining?.start || 'Not set';
-        document.getElementById('scheduleStop').textContent = 
-            data.schedules.mining?.stop || 'Not set';
+        // Handle the new schedule format
+        const miningSchedule = data.schedules?.scheduledMining || data.schedules.mining;
+        
+        if (miningSchedule?.enabled && miningSchedule.periods && miningSchedule.periods.length > 0) {
+            // Display first period's times
+            const firstPeriod = miningSchedule.periods[0];
+            document.getElementById('scheduleStart').textContent = 
+                firstPeriod.startTime || firstPeriod.start || 'Not set';
+            document.getElementById('scheduleStop').textContent = 
+                firstPeriod.endTime || firstPeriod.end || 'Not set';
+        } else {
+            document.getElementById('scheduleStart').textContent = 'Not set';
+            document.getElementById('scheduleStop').textContent = 'Not set';
+        }
+        
+        // Handle restart schedules
+        const restarts = data.schedules?.scheduledRestarts || data.schedules.restarts || [];
         document.getElementById('nextRestart').textContent = 
-            data.schedules.nextRestart || 'No restart scheduled';
+            restarts.length > 0 ? `${restarts[0]}` : 'No restart scheduled';
     }
 
     // System Information
@@ -553,21 +586,21 @@ function updateDashboard(data) {
                 rejectedBar.setAttribute('aria-valuenow', rejectedPercent);
             }
         }
-    }
-
-    // Update schedule information
+    }    // Update schedule information
     const scheduleSection = document.getElementById('schedules-section');
     if (scheduleSection && data.schedules) {
-        const miningSchedules = data.schedules.mining;
-        const restartSchedules = data.schedules.restarts;
+        const miningSchedules = data.schedules?.scheduledMining || data.schedules.mining;
+        const restartSchedules = data.schedules?.scheduledRestarts || data.schedules.restarts || [];
         
         let scheduleHTML = '<h3>Mining Schedules</h3>';
         
         if (miningSchedules && miningSchedules.enabled && miningSchedules.periods && miningSchedules.periods.length > 0) {
             scheduleHTML += '<ul class="schedule-list">';
             miningSchedules.periods.forEach(period => {
-                const days = period.days.join(', ');
-                scheduleHTML += `<li>Mine from ${period.start} to ${period.end} on ${days}</li>`;
+                const startTime = period.startTime || period.start;
+                const endTime = period.endTime || period.end;
+                const days = period.days ? period.days.join(', ') : 'all days';
+                scheduleHTML += `<li>Mine from ${startTime} to ${endTime} on ${days}</li>`;
             });
             scheduleHTML += '</ul>';
         } else {
@@ -579,7 +612,9 @@ function updateDashboard(data) {
         if (restartSchedules && restartSchedules.length > 0) {
             scheduleHTML += '<ul class="schedule-list">';
             restartSchedules.forEach(restart => {
-                scheduleHTML += `<li>Restart at ${restart}</li>`;
+                // Handle both string format and object format
+                const restartTime = typeof restart === 'string' ? restart : restart.time;
+                scheduleHTML += `<li>Restart at ${restartTime}</li>`;
             });
             scheduleHTML += '</ul>';
         } else {
