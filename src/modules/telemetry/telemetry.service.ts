@@ -5,6 +5,7 @@ import * as path from 'path';
 import { LoggingService } from '../logging/logging.service';
 import { MinerManagerService } from '../miner-manager/miner-manager.service';
 import { OsDetectionService } from '../device-monitoring/os-detection/os-detection.service';
+import { ConfigService } from '../config/config.service';
 import { HardwareInfoUtil } from './utils/hardware/hardware-info.util';
 import { NetworkInfoUtil } from './utils/network-info.util';
 import { BatteryInfoUtil } from './utils/battery-info.util';
@@ -24,7 +25,8 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly loggingService: LoggingService,
     private readonly minerManagerService: MinerManagerService,
-    private readonly osDetectionService: OsDetectionService
+    private readonly osDetectionService: OsDetectionService,
+    private readonly configService: ConfigService
   ) {
     this.telemetryFilePath = path.join(process.cwd(), 'storage', 'telemetry.json');
     this.historyFilePath = path.join(process.cwd(), 'storage', 'hashrate-history.json');
@@ -285,13 +287,25 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
 
   private getMiningSchedule() {
     try {
-      const configPath = path.resolve('src/modules/config/config.json');
-      if (!fs.existsSync(configPath)) {
+      const config = this.configService.getConfig();
+      if (!config) {
         return { mining: { start: null, stop: null }, restarts: [] };
       }
-      const configData = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-      return configData.schedules ?? { mining: { start: null, stop: null }, restarts: [] };
-    } catch {
+      
+      // Transform config schedules to expected format
+      return {
+        mining: {
+          enabled: config.schedules.scheduledMining.enabled,
+          periods: config.schedules.scheduledMining.periods.map(period => ({
+            start: period.startTime,
+            end: period.endTime,
+            days: period.days
+          }))
+        },
+        restarts: config.schedules.scheduledRestarts
+      };
+    } catch (error) {
+      this.loggingService.log(`Failed to get mining schedule: ${error.message}`, 'ERROR', 'telemetry');
       return { mining: { start: null, stop: null }, restarts: [] };
     }
   }

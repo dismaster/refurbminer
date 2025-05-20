@@ -554,6 +554,40 @@ function updateDashboard(data) {
             }
         }
     }
+
+    // Update schedule information
+    const scheduleSection = document.getElementById('schedules-section');
+    if (scheduleSection && data.schedules) {
+        const miningSchedules = data.schedules.mining;
+        const restartSchedules = data.schedules.restarts;
+        
+        let scheduleHTML = '<h3>Mining Schedules</h3>';
+        
+        if (miningSchedules && miningSchedules.enabled && miningSchedules.periods && miningSchedules.periods.length > 0) {
+            scheduleHTML += '<ul class="schedule-list">';
+            miningSchedules.periods.forEach(period => {
+                const days = period.days.join(', ');
+                scheduleHTML += `<li>Mine from ${period.start} to ${period.end} on ${days}</li>`;
+            });
+            scheduleHTML += '</ul>';
+        } else {
+            scheduleHTML += '<p>No mining schedules configured</p>';
+        }
+        
+        scheduleHTML += '<h3>Restart Schedules</h3>';
+        
+        if (restartSchedules && restartSchedules.length > 0) {
+            scheduleHTML += '<ul class="schedule-list">';
+            restartSchedules.forEach(restart => {
+                scheduleHTML += `<li>Restart at ${restart}</li>`;
+            });
+            scheduleHTML += '</ul>';
+        } else {
+            scheduleHTML += '<p>No restart schedules configured</p>';
+        }
+        
+        scheduleSection.innerHTML = scheduleHTML;
+    }
 }
 
 function formatUptime(seconds) {

@@ -120,17 +120,17 @@ export class MinerManagerService implements OnModuleInit, OnApplicationShutdown 
   }
 
   private shouldBeMining(): boolean {
-    const config = this.configService.getConfig();
-    if (!config || !config.schedules.scheduledMining.enabled) return true;
+      const config = this.configService.getConfig();
+      if (!config || !config.schedules.scheduledMining.enabled) return true;
 
-    const now = new Date();
-    const currentDay = now.toLocaleString('en-US', { weekday: 'long' }).toLowerCase();
-    const currentTime = now.toTimeString().split(' ')[0].substring(0, 5);
+      const now = new Date();
+      const currentDay = now.toLocaleString('en-US', { weekday: 'long' }).toLowerCase();
+      const currentTime = now.toTimeString().split(' ')[0].substring(0, 5);
 
-    return config.schedules.scheduledMining.periods.some(period => 
-      period.days.includes(currentDay) && 
-      this.isTimeInRange(currentTime, period.startTime, period.endTime)
-    );
+      return config.schedules.scheduledMining.periods.some(period =>
+        period.days.includes(currentDay) &&
+        this.isTimeInRange(currentTime, period.startTime, period.endTime)
+      );
   }
 
   public getMinerFromFlightsheet(): string | undefined {
