@@ -142,6 +142,22 @@ export class ConfigService implements OnModuleInit {
         return false;
       }
 
+      // Ensure thresholds exist in current config
+      if (!currentConfig.thresholds) {
+        currentConfig.thresholds = {
+          maxCpuTemp: 85,
+          maxBatteryTemp: 45,
+          maxStorageUsage: 90,
+          minHashrate: 0,
+          shareRatio: 0.5
+        };
+      }
+      
+      // Ensure name exists
+      if (!currentConfig.name) {
+        currentConfig.name = 'Unnamed Rig';
+      }
+
       this.loggingService.log('🔄 Syncing configuration with API...', 'INFO', 'config');
       
       // Get miner configuration from API - fixed endpoint URL
@@ -159,36 +175,47 @@ export class ConfigService implements OnModuleInit {
       const apiConfig = response.data;
       this.loggingService.log(`📥 Received config data: ${JSON.stringify(apiConfig)}`, 'DEBUG', 'config');
       
-      // Map API response to our config format - directly use the structure from the API
-      const updatedConfig = {
-        minerId: apiConfig.minerId || currentConfig.minerId,
-        rigId: apiConfig.rigId || currentConfig.rigId,
-        name: apiConfig.name || currentConfig.name,
-        thresholds: {
-          maxCpuTemp: apiConfig.thresholds?.maxCpuTemp || currentConfig.thresholds.maxCpuTemp,
-          maxBatteryTemp: apiConfig.thresholds?.maxBatteryTemp || currentConfig.thresholds.maxBatteryTemp,
-          maxStorageUsage: apiConfig.thresholds?.maxStorageUsage || currentConfig.thresholds.maxStorageUsage,
-          minHashrate: apiConfig.thresholds?.minHashrate || currentConfig.thresholds.minHashrate,
-          shareRatio: apiConfig.thresholds?.shareRatio || currentConfig.thresholds.shareRatio,
-        },
-        schedules: {
-          scheduledMining: apiConfig.schedules?.scheduledMining || {
+      // Create a deep copy of the current config as a base
+      const updatedConfig = JSON.parse(JSON.stringify(currentConfig));
+
+      // Update with API values using a more defensive approach
+      updatedConfig.minerId = apiConfig.minerId || updatedConfig.minerId;
+      updatedConfig.rigId = apiConfig.rigId || updatedConfig.rigId;
+      updatedConfig.name = apiConfig.name || updatedConfig.name;
+      
+      // Handle thresholds safely
+      if (apiConfig.thresholds) {
+        updatedConfig.thresholds = {
+          maxCpuTemp: apiConfig.thresholds.maxCpuTemp ?? updatedConfig.thresholds.maxCpuTemp,
+          maxBatteryTemp: apiConfig.thresholds.maxBatteryTemp ?? updatedConfig.thresholds.maxBatteryTemp,
+          maxStorageUsage: apiConfig.thresholds.maxStorageUsage ?? updatedConfig.thresholds.maxStorageUsage,
+          minHashrate: apiConfig.thresholds.minHashrate ?? updatedConfig.thresholds.minHashrate,
+          shareRatio: apiConfig.thresholds.shareRatio ?? updatedConfig.thresholds.shareRatio
+        };
+      }
+      
+      // Handle schedules safely
+      if (apiConfig.schedules) {
+        updatedConfig.schedules = {
+          scheduledMining: apiConfig.schedules.scheduledMining || {
             enabled: false,
             periods: []
           },
-          scheduledRestarts: apiConfig.schedules?.scheduledRestarts || []
-        }
-      };
+          scheduledRestarts: apiConfig.schedules.scheduledRestarts || []
+        };
+      }
 
       // Save updated config
       const saved = this.saveConfig(updatedConfig);
       if (saved) {
         this.loggingService.log('✅ Config synchronized with API successfully', 'INFO', 'config');
+        this.loggingService.log(`📄 Updated config: ${JSON.stringify(updatedConfig)}`, 'DEBUG', 'config');
       }
       return saved;
 
     } catch (error) {
       this.loggingService.log(`❌ Failed to sync config with API: ${error.message}`, 'ERROR', 'config');
+      this.loggingService.log(`❌ Error stack: ${error.stack}`, 'DEBUG', 'config');
       return false;
     }
   }
