@@ -121,15 +121,15 @@ export class MinerManagerService implements OnModuleInit, OnApplicationShutdown 
 
   private shouldBeMining(): boolean {
     const config = this.configService.getConfig();
-    if (!config.schedules.scheduledMining.enabled) return true;
+    if (!config || !config.schedules.scheduledMining.enabled) return true;
 
     const now = new Date();
-    const currentDay = now.toLocaleString('en-US', { weekday: 'long' }).toUpperCase();
+    const currentDay = now.toLocaleString('en-US', { weekday: 'long' }).toLowerCase();
     const currentTime = now.toTimeString().split(' ')[0].substring(0, 5);
 
     return config.schedules.scheduledMining.periods.some(period => 
       period.days.includes(currentDay) && 
-      this.isTimeInRange(currentTime, period.start, period.end)
+      this.isTimeInRange(currentTime, period.startTime, period.endTime)
     );
   }
 
@@ -249,8 +249,10 @@ export class MinerManagerService implements OnModuleInit, OnApplicationShutdown 
 
   private checkSchedules() {
     const config = this.configService.getConfig();
+    if (!config) return;
+    
     const now = new Date();
-    const currentDay = now.toLocaleString('en-US', { weekday: 'long' }).toUpperCase();
+    const currentDay = now.toLocaleString('en-US', { weekday: 'long' }).toLowerCase();
     const currentTime = now.toTimeString().split(' ')[0].substring(0, 5);
 
     // Check scheduled mining periods
@@ -258,9 +260,9 @@ export class MinerManagerService implements OnModuleInit, OnApplicationShutdown 
       const periods = config.schedules.scheduledMining.periods;
       for (const period of periods) {
         if (period.days.includes(currentDay)) {
-          if (this.isTimeInRange(currentTime, period.start, period.end)) {
+          if (this.isTimeInRange(currentTime, period.startTime, period.endTime)) {
             if (!this.isMinerRunning()) {
-              this.loggingService.log(`⏰ Starting miner for scheduled period: ${period.start} - ${period.end} on ${currentDay}`, 'INFO', 'miner-manager');
+              this.loggingService.log(`⏰ Starting miner for scheduled period: ${period.startTime} - ${period.endTime} on ${currentDay}`, 'INFO', 'miner-manager');
               this.startMiner();
             }
             return;
@@ -275,9 +277,10 @@ export class MinerManagerService implements OnModuleInit, OnApplicationShutdown 
 
     // Check scheduled restarts
     const restarts = config.schedules.scheduledRestarts;
-    for (const restart of restarts) {
-      if (restart.days.includes(currentDay) && currentTime === restart.time) {
-        this.loggingService.log(`⏰ Restarting miner for scheduled restart at ${restart.time} on ${currentDay}`, 'INFO', 'miner-manager');
+    for (const restartTime of restarts) {
+      // Since scheduledRestarts is now a string array, compare directly with currentTime
+      if (currentTime === restartTime) {
+        this.loggingService.log(`⏰ Restarting miner for scheduled restart at ${restartTime} on ${currentDay}`, 'INFO', 'miner-manager');
         this.restartMiner();
       }
     }
