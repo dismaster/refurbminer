@@ -2,17 +2,54 @@ import { execSync } from 'child_process';
 import * as https from 'https';
 
 export class NetworkInfoUtil {
+  // Cache ping values to avoid too frequent pings
+  private static lastPingCheck: number = 0;
+  private static cachedPingValue: number = -1;
+  private static readonly PING_CACHE_TTL = 60000; // 60 seconds
+  
+  // Cache traffic stats
+  private static lastTrafficCheck: number = 0;
+  private static cachedTrafficStats: any = null;
+  private static readonly TRAFFIC_CACHE_TTL = 30000; // 30 seconds
+  private static prevRxBytes: number = 0;
+  private static prevTxBytes: number = 0;
+  private static prevTimestamp: number = 0;
+
   /** ✅ Get network details based on system type */
   static getNetworkInfo(systemType: string): any {
-    switch (systemType) {
-      case 'termux':
-        return this.getTermuxNetworkInfo();
-      case 'raspberry-pi':
-      case 'linux':
-        return this.getLinuxNetworkInfo();
-      default:
-        return this.getDefaultNetworkInfo();
+    // Get base network info
+    const baseInfo = (() => {
+      switch (systemType) {
+        case 'termux':
+          return this.getTermuxNetworkInfo();
+        case 'raspberry-pi':
+        case 'linux':
+          return this.getLinuxNetworkInfo();
+        default:
+          return this.getDefaultNetworkInfo();
+      }
+    })();
+    
+    // Add ping metrics
+    baseInfo.ping = {
+      refurbminer: this.getPingLatency('refurbminer.de')
+    };
+    
+    // Add traffic metrics for the primary interface
+    const primaryInterface = baseInfo.interfaces[0] !== 'Unknown' ? baseInfo.interfaces[0] : null;
+    if (primaryInterface) {
+      baseInfo.traffic = this.getNetworkTraffic(primaryInterface);
+    } else {
+      baseInfo.traffic = {
+        rxBytes: 0,
+        txBytes: 0,
+        rxSpeed: 0,
+        txSpeed: 0,
+        timestamp: Date.now()
+      };
     }
+    
+    return baseInfo;
   }
 
   /** ✅ Get network info on Linux / Raspberry Pi */
@@ -209,6 +246,118 @@ private static getGatewayFromTraceroute(): string {
     }
   }
   return 'Unknown';
+}
+
+/** ✅ Get ping latency to a target host */
+private static getPingLatency(host: string): number {
+  // Check if we can use cached value
+  const now = Date.now();
+  if (now - this.lastPingCheck < this.PING_CACHE_TTL && this.cachedPingValue !== -1) {
+    return this.cachedPingValue;
+  }
+  
+  try {
+    // On Android/Termux, the -c flag is needed; on Linux -c is standard too
+    const pingOutput = execSync(
+      `ping -c 3 -W 2 ${host} 2>/dev/null | grep "avg"`,
+      { encoding: 'utf8', timeout: 5000 }
+    ).trim();
+    
+    // Extract the avg ping time
+    // Format will be like: rtt min/avg/max/mdev = 8.473/10.018/11.187/1.126 ms
+    const match = pingOutput.match(/[0-9.]+\/([0-9.]+)\//);
+    
+    if (match && match[1]) {
+      const pingValue = parseFloat(match[1]);
+      
+      // Update cache
+      this.lastPingCheck = now;
+      this.cachedPingValue = pingValue;
+      
+      return pingValue;
+    }
+    
+    return -1;
+  } catch (error) {
+    console.debug('Ping measurement failed:', error.message);
+    return -1; // Indicates failure to measure
+  }
+}
+
+/** ✅ Get network traffic stats for an interface */
+private static getNetworkTraffic(interfaceName: string): any {
+  // Return cached value if recent enough
+  const now = Date.now();
+  if (now - this.lastTrafficCheck < this.TRAFFIC_CACHE_TTL && this.cachedTrafficStats) {
+    return this.cachedTrafficStats;
+  }
+  
+  // Default result with all zeros
+  const result = {
+    rxBytes: 0,
+    txBytes: 0,
+    rxSpeed: 0,
+    txSpeed: 0,
+    timestamp: now
+  };
+  
+  try {
+    let rxBytes = 0;
+    let txBytes = 0;
+    
+    // Check if we're on a Linux-based system with /proc/net/dev
+    if (interfaceName !== 'Unknown') {
+      try {
+        // Read network stats from /proc/net/dev
+        const netDevContent = execSync('cat /proc/net/dev', { encoding: 'utf8' });
+        const lines = netDevContent.split('\n');
+        
+        for (const line of lines) {
+          if (line.includes(interfaceName)) {
+            // Format: Interface: rx_bytes rx_packets ... tx_bytes tx_packets ...
+            const parts = line.trim().split(/\s+/);
+            if (parts.length >= 10) {
+              rxBytes = parseInt(parts[1], 10);
+              txBytes = parseInt(parts[9], 10);
+              break;
+            }
+          }
+        }
+      } catch (error) {
+        console.debug(`Failed to read /proc/net/dev: ${error.message}`);
+      }
+    }
+    
+    // Calculate speeds if we have previous values
+    let rxSpeed = 0;
+    let txSpeed = 0;
+    
+    if (this.prevTimestamp > 0 && (now - this.prevTimestamp) > 0) {
+      const timeDiffSecs = (now - this.prevTimestamp) / 1000;
+      rxSpeed = Math.max(0, rxBytes - this.prevRxBytes) / timeDiffSecs;
+      txSpeed = Math.max(0, txBytes - this.prevTxBytes) / timeDiffSecs;
+    }
+    
+    // Update previous values for next calculation
+    this.prevRxBytes = rxBytes;
+    this.prevTxBytes = txBytes;
+    this.prevTimestamp = now;
+    
+    // Update result
+    result.rxBytes = rxBytes;
+    result.txBytes = txBytes;
+    result.rxSpeed = Math.round(rxSpeed);
+    result.txSpeed = Math.round(txSpeed);
+    
+    // Cache the result
+    this.lastTrafficCheck = now;
+    this.cachedTrafficStats = result;
+    
+    return result;
+  } catch (error) {
+    console.debug(`Failed to get network traffic: ${error.message}`);
+    return result;
+  }
 }
 
 }
