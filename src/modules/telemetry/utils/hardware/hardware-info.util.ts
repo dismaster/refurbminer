@@ -23,6 +23,8 @@ export class HardwareInfoUtil {
       cpuCount: this.getCpuCount(),
       cpuModel: this.getCpuThreads(),
       cpuTemperature: this.getCpuTemperature(systemType),
+      // Add system uptime
+      systemUptime: this.getSystemUptime(systemType),
       // Add raw values
       totalMemory: totalMemory,
       freeMemory: freeMemory, 
@@ -33,7 +35,55 @@ export class HardwareInfoUtil {
     };
   }
 
+  /** ✅ Get system uptime in seconds */
+  static getSystemUptime(systemType: string): number {
+    try {
+      // Method 1: Use Node.js os.uptime() (works on most systems)
+      const nodeUptime = os.uptime();
+      
+      // For most systems, Node's os.uptime() is reliable
+      if (nodeUptime > 0) {
+        return Math.floor(nodeUptime);
+      }
 
+      // Method 2: For Termux/Linux, try using the 'uptime' command
+      if (systemType === 'termux' || systemType === 'linux' || systemType === 'raspberry-pi') {
+        // Get uptime in seconds from 'uptime -s' which returns the boot time
+        const uptimeOutput = execSync('uptime -p', { encoding: 'utf8' }).trim();
+        
+        // Parse "up X days, Y hours, Z minutes" format
+        const days = uptimeOutput.match(/(\d+) day/);
+        const hours = uptimeOutput.match(/(\d+) hour/);
+        const minutes = uptimeOutput.match(/(\d+) minute/);
+        
+        let totalSeconds = 0;
+        if (days) totalSeconds += parseInt(days[1]) * 86400;
+        if (hours) totalSeconds += parseInt(hours[1]) * 3600;
+        if (minutes) totalSeconds += parseInt(minutes[1]) * 60;
+        
+        if (totalSeconds > 0) {
+          return totalSeconds;
+        }
+      }
+      
+      // Method 3: For Linux/RPi, try reading /proc/uptime
+      if (fs.existsSync('/proc/uptime')) {
+        const uptimeContent = fs.readFileSync('/proc/uptime', 'utf8').split(' ')[0];
+        const uptime = parseFloat(uptimeContent);
+        if (!isNaN(uptime)) {
+          return Math.floor(uptime);
+        }
+      }
+      
+      // If all methods fail, return Node's uptime or 0
+      return Math.floor(nodeUptime) || 0;
+    } catch (error) {
+      console.error(`❌ Failed to get system uptime: ${error.message}`);
+      // Fallback to Node.js uptime
+      return Math.floor(os.uptime()) || 0;
+    }
+  }
+  
   /** ✅ Get hardware brand */
   static getBrand(systemType: string): string {
     try {

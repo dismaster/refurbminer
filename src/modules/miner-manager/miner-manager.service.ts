@@ -16,6 +16,10 @@ export class MinerManagerService implements OnModuleInit, OnApplicationShutdown 
   private crashCount = 0;
   private readonly MAX_CRASHES = 3;
   private lastCrashTime?: Date;
+  // Add new properties to track manual stop status
+  public isManuallyStoppedByUser = false;
+  private manualStopTime?: Date;
+  private readonly MANUAL_STOP_TIMEOUT = 10 * 60 * 1000; // 10 minutes
 
   constructor(
     private readonly loggingService: LoggingService,
@@ -114,6 +118,22 @@ export class MinerManagerService implements OnModuleInit, OnApplicationShutdown 
 
   private async checkMinerHealth(): Promise<void> {
     try {
+      // Don't treat as crash if miner was manually stopped
+      if (this.isManuallyStoppedByUser) {
+        // After certain period (e.g., 10 minutes), reset the manual stop status
+        const now = new Date();
+        if (this.manualStopTime && 
+            now.getTime() - this.manualStopTime.getTime() > this.MANUAL_STOP_TIMEOUT) {
+          this.loggingService.log('ℹ️ Manual stop timeout expired, resuming normal monitoring', 'INFO', 'miner-manager');
+          this.isManuallyStoppedByUser = false;
+          this.manualStopTime = undefined;
+        } else {
+          // Skip health check during manual stop period
+          this.loggingService.log('ℹ️ Miner is manually stopped, skipping health check', 'DEBUG', 'miner-manager');
+          return;
+        }
+      }
+
       if (this.shouldBeMining() && !this.isMinerRunning()) {
         this.crashCount++;
         const error = `Miner crash detected (Attempt ${this.crashCount}/${this.MAX_CRASHES})`;
@@ -243,7 +263,7 @@ export class MinerManagerService implements OnModuleInit, OnApplicationShutdown 
     }
   }
 
-  public stopMiner(): boolean {
+  public stopMiner(isManualStop: boolean = false): boolean {
     try {
       if (!this.isMinerRunning()) {
         this.loggingService.log('ℹ️ No miner session found to stop', 'INFO', 'miner-manager');
@@ -251,7 +271,16 @@ export class MinerManagerService implements OnModuleInit, OnApplicationShutdown 
       }
 
       execSync(`screen -X -S ${this.minerScreen} quit`);
-      this.loggingService.log('✅ Miner stopped successfully', 'INFO', 'miner-manager');
+      
+      // Set the manual stop flag if applicable
+      if (isManualStop) {
+        this.isManuallyStoppedByUser = true;
+        this.manualStopTime = new Date();
+        this.loggingService.log('✋ Miner manually stopped by user', 'INFO', 'miner-manager');
+      } else {
+        this.loggingService.log('✅ Miner stopped successfully', 'INFO', 'miner-manager');
+      }
+      
       return true;
     } catch (error) {
       this.logMinerError(`Failed to stop miner: ${error.message}`, error.stack);

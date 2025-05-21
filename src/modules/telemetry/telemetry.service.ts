@@ -72,7 +72,7 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
       const minerSummary = await MinerSummaryUtil.getMinerSummary();
       const poolStats = await MinerPoolUtil.getPoolStatistics();
       
-      // Get CPU info with per-thread hashrates
+      // Get device info with systemUptime included
       const deviceInfo = HardwareInfoUtil.getDeviceInfo(systemType);
       const threadPerformance = await MinerThreadsUtil.getThreadPerformance();
       
@@ -93,7 +93,7 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
     
       // Create API telemetry object without threads
       const apiTelemetry = {
-        status: minerRunning ? 'active' : 'stopped',
+        status: 'active', // App is running, so always 'active'
         minerSoftware: {
           name: minerSummary.name,
           version: minerSummary.version,
@@ -102,10 +102,14 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
           acceptedShares: minerSummary.acceptedShares,
           rejectedShares: minerSummary.rejectedShares,
           uptime: minerSummary.uptime,
-          solvedBlocks: minerSummary.solvedBlocks
+          solvedBlocks: minerSummary.solvedBlocks,
+          // Use more detailed status for mining
+          miningStatus: this.minerManagerService.isManuallyStoppedByUser 
+            ? 'manually_stopped' 
+            : (minerRunning ? 'active' : 'stopped'),
         },
         pool: poolStats,
-        deviceInfo: deviceInfo, // Using updated deviceInfo with thread hashrates
+        deviceInfo: deviceInfo, // This now includes systemUptime
         network: NetworkInfoUtil.getNetworkInfo(systemType),
         battery: BatteryInfoUtil.getBatteryInfo(systemType)
       };
@@ -116,7 +120,7 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
       // Create full telemetry object
       const fullTelemetry = {
         ...apiTelemetry,
-        schedules: scheduleInfo, // This will have mining and restarts in the format the UI expects
+        schedules: scheduleInfo, 
         historicalHashrate: this.updateHistoricalHashrate(
           previousData?.historicalHashrate || [],
           minerSummary?.hashrate

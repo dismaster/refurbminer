@@ -1,6 +1,7 @@
 import { Injectable, HttpException, HttpStatus } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
+import * as fs from 'fs';
 import { LoggingService } from '../logging/logging.service';
 import * as dotenv from 'dotenv';
 
@@ -116,27 +117,83 @@ export class ApiCommunicationService {
   /** 📝 Fetch pending miner actions */
   async getPendingMinerActions(minerId: string): Promise<any> {
     try {
+      const rigToken = this.getRigToken();
+      if (!rigToken) {
+        this.loggingService.log('❌ Cannot fetch actions: No rig token found', 'ERROR', 'api');
+        return [];
+      }
+
+      const url = `${this.apiUrl}/miners-actions/miner/${minerId}/pending`;
+      this.loggingService.log(`📡 Fetching pending actions from: ${url}`, 'DEBUG', 'api');
+
       const response = await firstValueFrom(
-        this.httpService.get(`${this.apiUrl}/api/miners-actions/miner/${minerId}/pending`),
+        this.httpService.get(url, {
+          headers: {
+            'rig-token': rigToken
+          }
+        })
       );
+
+      if (!response.data) {
+        return [];
+      }
+
       return response.data;
     } catch (error) {
-      throw new HttpException('Failed to fetch pending miner actions', HttpStatus.BAD_REQUEST);
+      this.loggingService.log(`❌ Failed to fetch pending actions: ${error.message}`, 'ERROR', 'api');
+      return [];
     }
   }
 
   /** 📝 Update action status (IN_PROGRESS, COMPLETED, FAILED) */
   async updateMinerActionStatus(actionId: string, status: string, error?: string): Promise<any> {
     try {
-      const requestBody: any = { status };
-      if (error) requestBody.error = error;
+      const rigToken = this.getRigToken();
+      if (!rigToken) {
+        this.loggingService.log('❌ Cannot update action status: No rig token found', 'ERROR', 'api');
+        return null;
+      }
+
+      const url = `${this.apiUrl}/miners-actions/${actionId}/complete`;
+      this.loggingService.log(`📡 Updating action status at: ${url}`, 'DEBUG', 'api');
 
       const response = await firstValueFrom(
-        this.httpService.put(`${this.apiUrl}/api/miners-actions/${actionId}/complete`, requestBody),
+        this.httpService.put(
+          url,
+          { status, error },
+          {
+            headers: {
+              'rig-token': rigToken
+            }
+          }
+        )
       );
+
       return response.data;
     } catch (error) {
-      throw new HttpException('Failed to update miner action status', HttpStatus.BAD_REQUEST);
+      this.loggingService.log(`❌ Failed to update action status: ${error.message}`, 'ERROR', 'api');
+      return null;
+    }
+  }
+
+  /** 📝 Get rig token for authentication */
+  private getRigToken(): string | null {
+    try {
+      // First try from environment variable
+      if (process.env.RIG_TOKEN) {
+        return process.env.RIG_TOKEN;
+      }
+
+      // Try reading from a config file as fallback
+      if (fs.existsSync('config/rig-token.txt')) {
+        return fs.readFileSync('config/rig-token.txt', 'utf8').trim();
+      }
+
+      this.loggingService.log('⚠️ No rig token found in env or config file', 'WARN', 'api');
+      return null;
+    } catch (error) {
+      this.loggingService.log(`❌ Error reading rig token: ${error.message}`, 'ERROR', 'api');
+      return null;
     }
   }
 }
