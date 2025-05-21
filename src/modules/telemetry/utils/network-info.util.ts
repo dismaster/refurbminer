@@ -1,6 +1,24 @@
 import { execSync } from 'child_process';
 import * as https from 'https';
 
+// Define NetworkInfo interface outside of class
+interface NetworkInfo {
+  primaryIp: string;
+  externalIp: string;
+  gateway: string;
+  interfaces: string[];
+  ping?: {
+    refurbminer: number;
+  };
+  traffic?: {
+    rxBytes: number;
+    txBytes: number;
+    rxSpeed: number;
+    txSpeed: number;
+    timestamp: number;
+  };
+}
+
 export class NetworkInfoUtil {
   // Cache ping values to avoid too frequent pings
   private static lastPingCheck: number = 0;
@@ -16,7 +34,7 @@ export class NetworkInfoUtil {
   private static prevTimestamp: number = 0;
 
   /** ✅ Get network details based on system type */
-  static getNetworkInfo(systemType: string): any {
+  static getNetworkInfo(systemType: string): NetworkInfo {
     // Get base network info
     const baseInfo = (() => {
       switch (systemType) {
@@ -28,7 +46,7 @@ export class NetworkInfoUtil {
         default:
           return this.getDefaultNetworkInfo();
       }
-    })();
+    })() as NetworkInfo;
     
     // Add ping metrics
     baseInfo.ping = {
@@ -285,7 +303,7 @@ private static getPingLatency(host: string): number {
 }
 
 /** ✅ Get network traffic stats for an interface */
-private static getNetworkTraffic(interfaceName: string): any {
+private static getNetworkTraffic(interfaceName: string): NetworkInfo['traffic'] {
   // Return cached value if recent enough
   const now = Date.now();
   if (now - this.lastTrafficCheck < this.TRAFFIC_CACHE_TTL && this.cachedTrafficStats) {
