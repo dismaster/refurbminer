@@ -275,29 +275,58 @@ private static getPingLatency(host: string): number {
   }
   
   try {
-    // On Android/Termux, the -c flag is needed; on Linux -c is standard too
-    const pingOutput = execSync(
-      `ping -c 3 -W 2 ${host} 2>/dev/null | grep "avg"`,
-      { encoding: 'utf8', timeout: 5000 }
-    ).trim();
-    
-    // Extract the avg ping time
-    // Format will be like: rtt min/avg/max/mdev = 8.473/10.018/11.187/1.126 ms
-    const match = pingOutput.match(/[0-9.]+\/([0-9.]+)\//);
-    
-    if (match && match[1]) {
-      const pingValue = parseFloat(match[1]);
+    // First try the standard ping command
+    try {
+      const pingOutput = execSync(
+        `ping -c 3 -W 2 ${host} 2>/dev/null | grep "avg"`,
+        { encoding: 'utf8', timeout: 5000 }
+      ).trim();
       
-      // Update cache
-      this.lastPingCheck = now;
-      this.cachedPingValue = pingValue;
+      // Extract the avg ping time
+      const match = pingOutput.match(/[0-9.]+\/([0-9.]+)\//);
       
-      return pingValue;
+      if (match && match[1]) {
+        const pingValue = parseFloat(match[1]);
+        
+        // Update cache
+        this.lastPingCheck = now;
+        this.cachedPingValue = pingValue;
+        
+        return pingValue;
+      }
+    } catch (standardPingError) {
+      // Standard ping failed, continue to fallback
     }
     
-    return -1;
+    // Fallback: Try to resolve hostname to IP first, then ping the IP
+    try {
+      // Try to resolve hostname first
+      const nslookupCommand = `nslookup ${host} | grep -i address | tail -n 1 | awk '{print $2}'`;
+      const ip = execSync(nslookupCommand, { encoding: 'utf8', timeout: 3000 }).trim();
+      
+      if (ip && ip.match(/^\d+\.\d+\.\d+\.\d+$/)) {
+        const altPingOutput = execSync(
+          `ping -c 3 -W 2 ${ip} 2>/dev/null | grep "avg"`,
+          { encoding: 'utf8', timeout: 5000 }
+        ).trim();
+        
+        // Extract ping time from alternative output
+        const altMatch = altPingOutput.match(/[0-9.]+\/([0-9.]+)\//);
+        if (altMatch && altMatch[1]) {
+          const altPingValue = parseFloat(altMatch[1]);
+          
+          // Update cache
+          this.lastPingCheck = now;
+          this.cachedPingValue = altPingValue;
+          return altPingValue;
+        }
+      }
+    } catch (fallbackError) {
+      // Fallback also failed, return -1
+    }
+    
+    return -1; // Indicates failure to measure
   } catch (error) {
-    console.debug('Ping measurement failed:', error.message);
     return -1; // Indicates failure to measure
   }
 }
@@ -322,12 +351,21 @@ private static getNetworkTraffic(interfaceName: string): NetworkInfo['traffic'] 
   try {
     let rxBytes = 0;
     let txBytes = 0;
+    let success = false;
     
-    // Check if we're on a Linux-based system with /proc/net/dev
+    // Try multiple methods to get network stats
     if (interfaceName !== 'Unknown') {
+      // Check if we can use su (root)
+      const hasSu = this.isSuAvailable();
+      
+      // Method 1: Try reading from /proc/net/dev with su if available
       try {
-        // Read network stats from /proc/net/dev
-        const netDevContent = execSync('cat /proc/net/dev', { encoding: 'utf8' });
+        // Use su -c if available, otherwise try direct access
+        const command = hasSu ? 
+          'su -c "cat /proc/net/dev" 2>/dev/null' : 
+          'cat /proc/net/dev 2>/dev/null';
+          
+        const netDevContent = execSync(command, { encoding: 'utf8' });
         const lines = netDevContent.split('\n');
         
         for (const line of lines) {
@@ -337,12 +375,59 @@ private static getNetworkTraffic(interfaceName: string): NetworkInfo['traffic'] 
             if (parts.length >= 10) {
               rxBytes = parseInt(parts[1], 10);
               txBytes = parseInt(parts[9], 10);
+              success = true;
               break;
             }
           }
         }
-      } catch (error) {
-        console.debug(`Failed to read /proc/net/dev: ${error.message}`);
+      } catch {
+        // Silently fail and try next method
+      }
+      
+      // Method 2: Try ifconfig for systems that support it (with su if available)
+      if (!success) {
+        try {
+          const command = hasSu ? 
+            `su -c "ifconfig ${interfaceName}" 2>/dev/null` : 
+            `ifconfig ${interfaceName} 2>/dev/null`;
+            
+          const ifconfigOutput = execSync(command, { encoding: 'utf8' });
+          
+          // Different formats for different ifconfig implementations
+          let rxMatch = ifconfigOutput.match(/RX packets \d+\s+bytes (\d+)/);
+          let txMatch = ifconfigOutput.match(/TX packets \d+\s+bytes (\d+)/);
+          
+          // Alternative format used on some systems
+          if (!rxMatch) rxMatch = ifconfigOutput.match(/RX bytes:(\d+)/);
+          if (!txMatch) txMatch = ifconfigOutput.match(/TX bytes:(\d+)/);
+          
+          if (rxMatch && rxMatch[1]) rxBytes = parseInt(rxMatch[1], 10);
+          if (txMatch && txMatch[1]) txBytes = parseInt(txMatch[1], 10);
+          
+          if (rxBytes > 0 || txBytes > 0) success = true;
+        } catch {
+          // Silently fail
+        }
+      }
+      
+      // Method 3: For Android/Termux with root, try dumpsys
+      if (!success && hasSu && interfaceName === 'wlan0') {
+        try {
+          const rxBytesStr = execSync(
+            'su -c "dumpsys netstats | grep -E \\"iface=wlan.*NetworkStatsHistory\\" | head -1"', 
+            { encoding: 'utf8' }
+          ).trim();
+          
+          const rxBytesMatch = rxBytesStr.match(/rxBytes=(\d+)/);
+          const txBytesMatch = rxBytesStr.match(/txBytes=(\d+)/);
+          
+          if (rxBytesMatch && rxBytesMatch[1]) rxBytes = parseInt(rxBytesMatch[1], 10);
+          if (txBytesMatch && txBytesMatch[1]) txBytes = parseInt(txBytesMatch[1], 10);
+          
+          if (rxBytes > 0 || txBytes > 0) success = true;
+        } catch {
+          // Silently fail
+        }
       }
     }
     
@@ -372,10 +457,19 @@ private static getNetworkTraffic(interfaceName: string): NetworkInfo['traffic'] 
     this.cachedTrafficStats = result;
     
     return result;
-  } catch (error) {
-    console.debug(`Failed to get network traffic: ${error.message}`);
+  } catch {
+    // Return default values on any error
     return result;
   }
 }
 
+/** ✅ Check if we can use su (root) */
+private static isSuAvailable(): boolean {
+  try {
+    const result = execSync('su -c "echo test" 2>/dev/null', { encoding: 'utf8', timeout: 1000 });
+    return result.includes('test');
+  } catch {
+    return false;
+  }
+}
 }
