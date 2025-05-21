@@ -206,12 +206,45 @@ export class ActionsService implements OnModuleInit {
     }
   }
 
-  async updateSoftware(): Promise<void> {
+    async updateSoftware(): Promise<void> {
     this.loggingService.log('⬆️ Executing update_software action', 'INFO', 'actions');
-    // Implementation depends on your update mechanism
-    // For example, pull from git and rebuild
-    await execAsync('~/update_refurbminer.sh');
-  }
+    
+    try {
+        // Get the home directory properly
+        const homeDir = process.env.HOME || process.env.USERPROFILE || '/data/data/com.termux/files/home';
+        const updateScriptPath = `${homeDir}/update_refurbminer.sh`;
+        
+        // Check if the script exists
+        try {
+        await promisify(fs.access)(updateScriptPath, fs.constants.F_OK | fs.constants.X_OK);
+        this.loggingService.log(`✅ Update script found at: ${updateScriptPath}`, 'INFO', 'actions');
+        } catch (error) {
+        this.loggingService.log(`❌ Update script not found or not executable at: ${updateScriptPath}`, 'ERROR', 'actions');
+        throw new Error(`Update script not found or not executable: ${error.message}`);
+        }
+        
+        // Make the script executable (just to be sure)
+        try {
+        await execAsync(`chmod +x ${updateScriptPath}`);
+        } catch (chmodError) {
+        this.loggingService.log(`⚠️ Could not make update script executable: ${chmodError.message}`, 'WARN', 'actions');
+        // Continue anyway, as the script might already be executable
+        }
+        
+        // Execute the update script
+        this.loggingService.log(`🚀 Running update script: ${updateScriptPath}`, 'INFO', 'actions');
+        const { stdout, stderr } = await execAsync(updateScriptPath);
+        
+        // Log the output
+        if (stdout) this.loggingService.log(`📝 Update script output: ${stdout}`, 'INFO', 'actions');
+        if (stderr) this.loggingService.log(`⚠️ Update script errors: ${stderr}`, 'WARN', 'actions');
+        
+        this.loggingService.log('✅ Software update completed successfully', 'INFO', 'actions');
+    } catch (error) {
+        this.loggingService.log(`❌ Software update failed: ${error.message}`, 'ERROR', 'actions');
+        throw error; // Re-throw to mark action as failed
+    }
+    }
 
   async reloadConfig(): Promise<void> {
     this.loggingService.log('🔄 Executing reload_config action', 'INFO', 'actions');
