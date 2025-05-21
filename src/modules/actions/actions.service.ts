@@ -213,18 +213,46 @@ export class ActionsService implements OnModuleInit {
     try {
         // Get the home directory properly
         const homeDir = process.env.HOME || process.env.USERPROFILE || '/data/data/com.termux/files/home';
-        const updateScriptPath = `${homeDir}/update_refurbminer.sh`;
         
-        // Check if the script exists
+        // Create an array of possible script paths to check
+        const possibleScriptPaths = [
+        `${homeDir}/update_refurbminer.sh`,          // In home directory
+        `${homeDir}/refurbminer/update_refurbminer.sh`, // In refurbminer sub-directory
+        `${process.cwd()}/update_refurbminer.sh`,    // In current working directory
+        '/data/data/com.termux/files/home/update_refurbminer.sh'  // Hardcoded Termux path
+        ];
+        
+        // Find the first script path that exists
+        let updateScriptPath: string | null = null;
+        for (const path of possibleScriptPaths) {
         try {
-        await promisify(fs.access)(updateScriptPath, fs.constants.F_OK | fs.constants.X_OK);
-        this.loggingService.log(`✅ Update script found at: ${updateScriptPath}`, 'INFO', 'actions');
-        } catch (error) {
-        this.loggingService.log(`❌ Update script not found or not executable at: ${updateScriptPath}`, 'ERROR', 'actions');
-        throw new Error(`Update script not found or not executable: ${error.message}`);
+            await promisify(fs.access)(path, fs.constants.F_OK);
+            updateScriptPath = path;
+            this.loggingService.log(`✅ Found update script at: ${updateScriptPath}`, 'INFO', 'actions');
+            break;
+        } catch (err) {
+            // Continue checking other paths
+        }
         }
         
-        // Make the script executable (just to be sure)
+        // If no script found, try to create one
+        if (!updateScriptPath) {
+        this.loggingService.log('⚠️ No update script found, attempting to download...', 'WARN', 'actions');
+        
+        // Create default path
+        updateScriptPath = `${homeDir}/update_refurbminer.sh`;
+        
+        // Try to download the script from the repository
+        try {
+            await execAsync(`wget -q -O ${updateScriptPath} https://raw.githubusercontent.com/dismaster/refurbminer/refs/heads/master/update_refurbminer.sh`);
+            this.loggingService.log('✅ Downloaded update script successfully', 'INFO', 'actions');
+        } catch (downloadError) {
+            this.loggingService.log(`❌ Failed to download update script: ${downloadError.message}`, 'ERROR', 'actions');
+            throw new Error('Could not find or download update script');
+        }
+        }
+        
+        // Make the script executable
         try {
         await execAsync(`chmod +x ${updateScriptPath}`);
         } catch (chmodError) {
@@ -232,18 +260,68 @@ export class ActionsService implements OnModuleInit {
         // Continue anyway, as the script might already be executable
         }
         
-        // Execute the update script
+        // Execute the update script - use bash explicitly to ensure proper execution
         this.loggingService.log(`🚀 Running update script: ${updateScriptPath}`, 'INFO', 'actions');
-        const { stdout, stderr } = await execAsync(updateScriptPath);
+        
+        // For Termux, sometimes the regular execution doesn't work well with screen sessions
+        const isTermux = await this.checkIfTermux();
+        
+        if (isTermux) {
+        // On Termux, use a different approach that's more reliable
+        this.loggingService.log('📱 Detected Termux environment, using special execution method', 'INFO', 'actions');
+        
+        // Create a temporary wrapper script that will execute after this process exits
+        const wrapperPath = `${homeDir}/update_wrapper.sh`;
+        const wrapperContent = `#!/bin/bash
+    # Wait a bit for the current process to exit
+    sleep 5
+    # Execute the update script with full bash environment
+    bash ${updateScriptPath} > ${homeDir}/update_log.txt 2>&1
+    `;
+        
+        // Write wrapper script
+        fs.writeFileSync(wrapperPath, wrapperContent);
+        await execAsync(`chmod +x ${wrapperPath}`);
+        
+        // Launch wrapper in background - this will continue even after our process exits
+        await execAsync(`nohup ${wrapperPath} >/dev/null 2>&1 &`);
+        
+        this.loggingService.log('🚀 Update will continue in background after service restarts', 'INFO', 'actions');
+        } else {
+        // Standard execution for non-Termux environments
+        const { stdout, stderr } = await execAsync(`bash ${updateScriptPath}`);
         
         // Log the output
         if (stdout) this.loggingService.log(`📝 Update script output: ${stdout}`, 'INFO', 'actions');
         if (stderr) this.loggingService.log(`⚠️ Update script errors: ${stderr}`, 'WARN', 'actions');
+        }
         
-        this.loggingService.log('✅ Software update completed successfully', 'INFO', 'actions');
+        this.loggingService.log('✅ Software update process initiated successfully', 'INFO', 'actions');
     } catch (error) {
         this.loggingService.log(`❌ Software update failed: ${error.message}`, 'ERROR', 'actions');
         throw error; // Re-throw to mark action as failed
+    }
+    }
+
+    // Helper method to check if running in Termux
+    private async checkIfTermux(): Promise<boolean> {
+    try {
+        // Check for Termux-specific paths
+        if (fs.existsSync('/data/data/com.termux')) {
+        return true;
+        }
+        
+        // Or try running a Termux-specific command
+        try {
+        await execAsync('termux-info >/dev/null 2>&1');
+        return true;
+        } catch {
+        // Command not found, not Termux
+        }
+        
+        return false;
+    } catch (error) {
+        return false;
     }
     }
 
