@@ -5,6 +5,7 @@ import { ConfigService } from '../config/config.service';
 import { MinerManagerService } from '../miner-manager/miner-manager.service';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import * as fs from 'fs';
 import { MinerAction, MinerActionCommand, MinerActionStatus } from './interfaces/action.interface';
 
 const execAsync = promisify(exec);
