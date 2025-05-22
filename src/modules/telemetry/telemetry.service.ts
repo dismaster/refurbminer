@@ -224,8 +224,17 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
         JSON.stringify(data, null, 2),
         'utf8'
       );
+      
+      // Create backup with cleanup of old backups
+      const timestamp = Date.now();
+      const backupPath = `${this.telemetryFilePath}.${timestamp}.bak`;
+      fs.copyFileSync(this.telemetryFilePath, backupPath);
+      
+      // Clean up old backups - keep only 5 most recent backups
+      this.cleanupOldBackups(this.telemetryFilePath, 5);
+      
       this.loggingService.log('✅ Telemetry data updated', 'DEBUG', 'telemetry');
-    } catch (error) {
+    } catch (error: any) {
       this.loggingService.log(
         `❌ Failed to save telemetry: ${error.message}`,
         'ERROR',
@@ -233,6 +242,8 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
       );
     }
   }
+
+  // Removed redundant backupTelemetryFile method - functionality is now in cleanupOldBackups
 
   private async saveHistoricalData(data: Array<{ timestamp: number; khs: number }>) {
     try {
@@ -289,6 +300,58 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
         'telemetry'
       );
       return [];
+    }
+  }
+
+  /**
+   * Cleans up old backup files, keeping only the most recent ones
+   * @param filePath Path to the original file (not the backup)
+   * @param maxBackups Maximum number of backup files to keep
+   */
+  private cleanupOldBackups(filePath: string, maxBackups: number = 5): void {
+    try {
+      const dirPath = path.dirname(filePath);
+      const fileName = path.basename(filePath);
+      
+      // Get all files in the directory
+      const files = fs.readdirSync(dirPath);
+      
+      // Filter for backup files matching our pattern
+      const backupFiles = files
+        .filter(file => file.startsWith(`${fileName}.`) && file.endsWith('.bak'))
+        .map(file => ({
+          name: file,
+          path: path.join(dirPath, file),
+          // Extract timestamp from filename
+          timestamp: parseInt(file.replace(`${fileName}.`, '').replace('.bak', ''), 10) || 0
+        }))
+        .sort((a, b) => b.timestamp - a.timestamp); // Sort newest first
+      
+      // Remove older backups if we have more than maxBackups
+      if (backupFiles.length > maxBackups) {
+        backupFiles.slice(maxBackups).forEach(file => {
+          try {
+            fs.unlinkSync(file.path);
+            this.loggingService.log(
+              `🗑️ Removed old telemetry backup: ${file.name}`,
+              'DEBUG',
+              'telemetry'
+            );
+          } catch (error: any) {
+            this.loggingService.log(
+              `Failed to delete backup ${file.name}: ${error.message}`,
+              'WARN',
+              'telemetry'
+            );
+          }
+        });
+      }
+    } catch (error: any) {
+      this.loggingService.log(
+        `❌ Failed to clean up backups: ${error.message}`,
+        'ERROR',
+        'telemetry'
+      );
     }
   }
 
