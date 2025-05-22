@@ -24,6 +24,13 @@ export class BootstrapService implements OnModuleInit {
     await this.checkCPUCompatibility();
     await this.verifyDependencies();
     await this.ensureExecutables();
+    
+    // Check if we're on Termux to run ADB optimizations
+    const osType = this.deviceMonitoringService.getOS();
+    if (osType === 'termux') {
+      await this.setupAdbOptimizations();
+    }
+    
     await this.registerMiner();
     this.loggingService.log('Bootstrap process completed!', 'INFO', 'bootstrap');
   }
@@ -239,6 +246,120 @@ export class BootstrapService implements OnModuleInit {
       fs.writeFileSync(this.configPath, JSON.stringify(config, null, 2));
 
       this.loggingService.log(`Miner registered successfully! minerId: ${config.minerId}`, 'INFO', 'bootstrap');
+    }
+  }
+
+  /** ✅ Setup ADB optimizations for Termux */
+  private async setupAdbOptimizations() {
+    try {
+      this.loggingService.log('Checking ADB availability on Termux...', 'INFO', 'bootstrap');
+      
+      // Check if ADB is installed
+      try {
+        execSync('command -v adb', { stdio: 'ignore' });
+      } catch {
+        this.loggingService.log('ADB not found, skipping power optimizations', 'INFO', 'bootstrap');
+        return;
+      }
+      
+      // Reset ADB server to ensure fresh connection
+      try {
+        execSync('adb kill-server', { stdio: 'ignore' });
+        this.loggingService.log('ADB server killed', 'DEBUG', 'bootstrap');
+      } catch (error) {
+        this.loggingService.log(`Failed to kill ADB server: ${error.message}`, 'DEBUG', 'bootstrap');
+      }
+      
+      // Start ADB and check if it can connect to the device
+      let adbWorks = false;
+      
+      // First attempt: Try ADB directly
+      try {
+        // Try to get device state - this will start the server if needed
+        const deviceOutput = execSync('adb get-state', { 
+          encoding: 'utf8',
+          timeout: 5000, // 5 second timeout
+          stdio: ['ignore', 'pipe', 'pipe'] 
+        }).trim();
+        
+        if (deviceOutput === 'device') {
+          adbWorks = true;
+          this.loggingService.log('ADB connection established successfully', 'INFO', 'bootstrap');
+        }
+      } catch (error: any) {
+        this.loggingService.log(`ADB not connected: ${error.message}`, 'DEBUG', 'bootstrap');
+        
+        // Second attempt: Try to restart the server and establish connection
+        try {
+          // Explicitly kill and restart ADB server
+          execSync('adb kill-server', { stdio: 'ignore' });
+          this.loggingService.log('Restarting ADB server...', 'DEBUG', 'bootstrap');
+          
+          // Start server and check for devices
+          // This specifically handles the "daemon not running; starting now" case
+          const result = execSync('adb shell echo success', { 
+            encoding: 'utf8',
+            timeout: 8000 // Give it more time to initialize
+          }).trim();
+          
+          if (result.includes('success')) {
+            adbWorks = true;
+            this.loggingService.log('ADB connection established after restart', 'INFO', 'bootstrap');
+          }
+        } catch (restartError: any) {
+          this.loggingService.log(`ADB restart failed: ${restartError.message}`, 'DEBUG', 'bootstrap');
+          
+          // Third attempt: Check device list (sometimes works when the above fails)
+          try {
+            const devices = execSync('adb devices', { 
+              encoding: 'utf8',
+              timeout: 5000
+            });
+            
+            // Check if any device is connected (not just "List of devices attached")
+            if (devices.split('\n').length > 2 || devices.includes('device')) {
+              adbWorks = true;
+              this.loggingService.log('ADB devices detected', 'INFO', 'bootstrap');
+            }
+          } catch (devicesError: any) {
+            this.loggingService.log(`ADB devices check failed: ${devicesError.message}`, 'DEBUG', 'bootstrap');
+          }
+        }
+      }
+      
+      if (!adbWorks) {
+        this.loggingService.log('ADB is installed but no devices are connected, skipping optimizations', 'WARN', 'bootstrap');
+        return;
+      }
+      
+      // ADB is working - run optimization commands
+      this.loggingService.log('Applying power and performance optimizations via ADB...', 'INFO', 'bootstrap');
+      
+      const adbCommands = [
+        'adb shell dumpsys battery set level 100',
+        'adb shell svc power stayon true',
+        'adb shell dumpsys deviceidle whitelist +com.termux.boot',
+        'adb shell dumpsys deviceidle whitelist +com.termux',
+        'adb shell dumpsys deviceidle whitelist +com.termux.api',
+        'adb shell settings put global system_capabilities 100',
+        'adb shell settings put global sem_enhanced_cpu_responsiveness 1',
+        'adb shell settings put global wifi_sleep_policy 2'
+      ];
+      
+      let successCount = 0;
+      for (const cmd of adbCommands) {
+        try {
+          execSync(cmd, { timeout: 3000 });
+          successCount++;
+        } catch (cmdError) {
+          this.loggingService.log(`Failed to run "${cmd}": ${cmdError.message}`, 'DEBUG', 'bootstrap');
+        }
+      }
+      
+      this.loggingService.log(`Power optimizations applied: ${successCount}/${adbCommands.length} succeeded`, 'INFO', 'bootstrap');
+    } catch (error) {
+      this.loggingService.log(`ADB optimization failed: ${error.message}`, 'WARN', 'bootstrap');
+      // Continue execution despite failures
     }
   }
 }
