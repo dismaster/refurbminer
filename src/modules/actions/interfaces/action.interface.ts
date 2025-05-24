@@ -22,6 +22,8 @@ export enum MinerActionCommand {
   RESTART_DEVICE = 'restart_device',
   UPDATE_SOFTWARE = 'update_software',
   RELOAD_CONFIG = 'reload_config',
+  TORCH_ON = 'torch_on',
+  TORCH_OFF = 'torch_off',
   STOP_MINING = 'stop_mining',
   START_MINING = 'start_mining'
 }

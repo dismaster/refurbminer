@@ -122,6 +122,12 @@ export class ActionsService implements OnModuleInit {
         case MinerActionCommand.START_MINING:
           await this.startMining();
           break;
+        case MinerActionCommand.TORCH_ON:
+          await this.toggleTorch(true);
+          break;
+        case MinerActionCommand.TORCH_OFF:
+          await this.toggleTorch(false);
+          break;
         default:
           throw new Error(`Unknown command: ${action.command}`);
       }
@@ -355,6 +361,47 @@ export class ActionsService implements OnModuleInit {
     this.loggingService.log('▶️ Executing start_mining action', 'INFO', 'actions');
     const result = this.minerManagerService.startMiner();
     return Promise.resolve(); // Return resolved promise to satisfy async
+  }
+
+  async toggleTorch(turnOn: boolean): Promise<void> {
+    const action = turnOn ? 'on' : 'off';
+    this.loggingService.log(`🔦 Executing torch_${action} action`, 'INFO', 'actions');
+    
+    try {
+      // Check if we're on Termux
+      const isTermux = await this.checkIfTermux();
+      
+      if (isTermux) {
+        // Use termux-api command to control the torch
+        await execAsync(`termux-torch ${action}`);
+        this.loggingService.log(`✅ Torch turned ${action} successfully`, 'INFO', 'actions');
+      } else {
+        // Not on Termux, log a warning
+        this.loggingService.log('⚠️ Torch control is only available on Termux', 'WARN', 'actions');
+      }
+    } catch (error: any) {
+      this.loggingService.log(`❌ Failed to toggle torch: ${error.message}`, 'ERROR', 'actions');
+      
+      // Check if termux-api might be missing
+      if (error.message.includes('not found') || error.message.includes('No such file')) {
+        this.loggingService.log('⚠️ Termux-api package might not be installed', 'WARN', 'actions');
+        
+        try {
+          // Try to install termux-api package
+          this.loggingService.log('🔄 Attempting to install termux-api package...', 'INFO', 'actions');
+          await execAsync('pkg install -y termux-api');
+          
+          // Try again after installation
+          await execAsync(`termux-torch ${action}`);
+          this.loggingService.log(`✅ Installed termux-api and turned torch ${action}`, 'INFO', 'actions');
+        } catch (installError: any) {
+          this.loggingService.log(`❌ Could not install termux-api: ${installError.message}`, 'ERROR', 'actions');
+          throw new Error(`Torch control requires termux-api package: ${installError.message}`);
+        }
+      } else {
+        throw error; // Re-throw the original error
+      }
+    }
   }
 
   /**
