@@ -269,30 +269,54 @@ export class ActionsService implements OnModuleInit {
         // Execute the update script - use bash explicitly to ensure proper execution
         this.loggingService.log(`🚀 Running update script: ${updateScriptPath}`, 'INFO', 'actions');
         
-        // For Termux, sometimes the regular execution doesn't work well with screen sessions
+        // For Termux, we need a more reliable approach
         const isTermux = await this.checkIfTermux();
         
         if (isTermux) {
         // On Termux, use a different approach that's more reliable
-        this.loggingService.log('📱 Detected Termux environment, using special execution method', 'INFO', 'actions');
+        this.loggingService.log('📱 Detected Termux environment, using simplified execution method', 'INFO', 'actions');
         
-        // Create a temporary wrapper script that will execute after this process exits
+        // Create a simpler wrapper script that just runs the update script
         const wrapperPath = `${homeDir}/update_wrapper.sh`;
         const wrapperContent = `#!/bin/bash
-    # Wait a bit for the current process to exit
-    sleep 5
-    # Execute the update script with full bash environment
-    bash ${updateScriptPath} > ${homeDir}/update_log.txt 2>&1
-    `;
+# Wait a bit for the current process to exit
+sleep 5
+# Execute the update script with full bash environment and save output
+bash "${updateScriptPath}" > ${homeDir}/update_log.txt 2>&1
+UPDATE_EXIT_CODE=$?
+
+# Send notification when complete
+if [ $UPDATE_EXIT_CODE -eq 0 ]; then
+  # Try to restart the service
+  if pgrep -f "node.*refurbminer" > /dev/null; then
+    pkill -f "node.*refurbminer"
+    sleep 2
+    cd ${homeDir}/refurbminer && npm start &
+  fi
+  termux-notification --title "RefurbMiner Update" --content "Update completed successfully" || true
+else
+  termux-notification --title "RefurbMiner Update" --content "Update failed with exit code $UPDATE_EXIT_CODE" || true
+fi`;
         
         // Write wrapper script
         fs.writeFileSync(wrapperPath, wrapperContent);
         await execAsync(`chmod +x ${wrapperPath}`);
         
-        // Launch wrapper in background - this will continue even after our process exits
+        // Launch wrapper with nohup to keep it running after our process exits
+        this.loggingService.log('📋 Creating update log at ~/update_log.txt', 'INFO', 'actions');
+        
+        // Create a visual indicator for the user that update is happening
+        try {
+          await execAsync('termux-toast "Update in progress, please wait..."');
+        } catch {
+          // Toast might not be available, continue anyway
+        }
+        
+        // Execute the wrapper using nohup to ensure it continues after we exit
         await execAsync(`nohup ${wrapperPath} >/dev/null 2>&1 &`);
         
-        this.loggingService.log('🚀 Update will continue in background after service restarts', 'INFO', 'actions');
+        this.loggingService.log('🚀 Update will continue in background with output logged to update_log.txt', 'INFO', 'actions');
+        this.loggingService.log('⚠️ Service may restart shortly as part of the update process', 'WARN', 'actions');
         } else {
         // Standard execution for non-Termux environments
         const { stdout, stderr } = await execAsync(`bash ${updateScriptPath}`);
