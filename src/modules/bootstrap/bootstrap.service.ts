@@ -233,19 +233,73 @@ export class BootstrapService implements OnModuleInit {
 
   /** ✅ Register Miner with API if needed */
   private async registerMiner() {
-    const config = JSON.parse(fs.readFileSync(this.configPath, 'utf8'));
-
-    if (!config.minerId || !config.rigId) {
-      this.loggingService.log('No minerId found, registering miner...', 'INFO', 'bootstrap');
-      const metadata = this.deviceMonitoringService.getSystemInfo();
-      const ipAddress = this.deviceMonitoringService.getIPAddress();
-      const response = await this.apiService.registerMiner(metadata, ipAddress);
-
-      config.minerId = response.minerId;
-      config.rigId = response.rigId;
-      fs.writeFileSync(this.configPath, JSON.stringify(config, null, 2));
-
-      this.loggingService.log(`Miner registered successfully! minerId: ${config.minerId}`, 'INFO', 'bootstrap');
+    try {
+      let config = {};
+      
+      // Safely read the config file
+      try {
+        if (fs.existsSync(this.configPath)) {
+          const configContent = fs.readFileSync(this.configPath, 'utf8');
+          if (configContent && configContent.trim()) {
+            config = JSON.parse(configContent);
+          } else {
+            this.loggingService.log('Config file is empty, will create new configuration', 'INFO', 'bootstrap');
+          }
+        } else {
+          this.loggingService.log('Config file not found, will create new configuration', 'INFO', 'bootstrap');
+          // Ensure directory exists
+          const configDir = path.dirname(this.configPath);
+          if (!fs.existsSync(configDir)) {
+            fs.mkdirSync(configDir, { recursive: true });
+          }
+        }
+      } catch (readError) {
+        this.loggingService.log(`Error reading config: ${readError.message}, will create new configuration`, 'WARN', 'bootstrap');
+      }
+      
+      // Check if we need to register
+      if (!config.minerId || !config.rigId) {
+        this.loggingService.log('No valid minerId found, registering miner...', 'INFO', 'bootstrap');
+        
+        try {
+          const metadata = this.deviceMonitoringService.getSystemInfo();
+          const ipAddress = this.deviceMonitoringService.getIPAddress();
+          const response = await this.apiService.registerMiner(metadata, ipAddress);
+          
+          if (response && response.minerId && response.rigId) {
+            config.minerId = response.minerId;
+            config.rigId = response.rigId;
+            fs.writeFileSync(this.configPath, JSON.stringify(config, null, 2));
+            this.loggingService.log(`Miner registered successfully! minerId: ${config.minerId}`, 'INFO', 'bootstrap');
+          } else {
+            this.loggingService.log('API returned incomplete registration data, using default values', 'WARN', 'bootstrap');
+            // Set temporary values to prevent continuous registration attempts
+            config.minerId = 'temp-' + Date.now();
+            config.rigId = 'temp-' + Date.now();
+            fs.writeFileSync(this.configPath, JSON.stringify(config, null, 2));
+          }
+        } catch (apiError) {
+          this.loggingService.log(`Miner registration failed: ${apiError.message}`, 'ERROR', 'bootstrap');
+          
+          // Create temporary ID to prevent repeated registration attempts
+          config.minerId = 'offline-' + Date.now();
+          config.rigId = 'offline-' + Date.now();
+          fs.writeFileSync(this.configPath, JSON.stringify(config, null, 2));
+        }
+      }
+    } catch (error) {
+      this.loggingService.log(`Register miner error: ${error.message}`, 'ERROR', 'bootstrap');
+      // Make sure we still have a config file to prevent future errors
+      try {
+        if (!fs.existsSync(this.configPath)) {
+          fs.writeFileSync(this.configPath, JSON.stringify({
+            minerId: 'fallback-' + Date.now(),
+            rigId: 'fallback-' + Date.now()
+          }, null, 2));
+        }
+      } catch (writeError) {
+        this.loggingService.log(`Failed to write fallback config: ${writeError.message}`, 'ERROR', 'bootstrap');
+      }
     }
   }
 
