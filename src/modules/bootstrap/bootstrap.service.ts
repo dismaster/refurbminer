@@ -4,7 +4,15 @@ import { ApiCommunicationService } from '../api-communication/api-communication.
 import { DeviceMonitoringService } from '../device-monitoring/device-monitoring.service';
 import { MinerManagerService } from '../miner-manager/miner-manager.service';
 import * as fs from 'fs';
+import * as path from 'path'; // Add path module import
 import { execSync } from 'child_process';
+
+// Define config interface to fix TypeScript errors
+interface MinerConfig {
+  minerId?: string;
+  rigId?: string;
+  [key: string]: any; // Allow any other properties
+}
 
 @Injectable()
 export class BootstrapService implements OnModuleInit {
@@ -234,14 +242,14 @@ export class BootstrapService implements OnModuleInit {
   /** ✅ Register Miner with API if needed */
   private async registerMiner() {
     try {
-      let config = {};
+      let config: MinerConfig = {};
       
       // Safely read the config file
       try {
         if (fs.existsSync(this.configPath)) {
           const configContent = fs.readFileSync(this.configPath, 'utf8');
           if (configContent && configContent.trim()) {
-            config = JSON.parse(configContent);
+            config = JSON.parse(configContent) as MinerConfig;
           } else {
             this.loggingService.log('Config file is empty, will create new configuration', 'INFO', 'bootstrap');
           }
@@ -253,7 +261,7 @@ export class BootstrapService implements OnModuleInit {
             fs.mkdirSync(configDir, { recursive: true });
           }
         }
-      } catch (readError) {
+      } catch (readError: any) {
         this.loggingService.log(`Error reading config: ${readError.message}, will create new configuration`, 'WARN', 'bootstrap');
       }
       
@@ -264,7 +272,7 @@ export class BootstrapService implements OnModuleInit {
         try {
           const metadata = this.deviceMonitoringService.getSystemInfo();
           const ipAddress = this.deviceMonitoringService.getIPAddress();
-          const response = await this.apiService.registerMiner(metadata, ipAddress);
+          const response: any = await this.apiService.registerMiner(metadata, ipAddress);
           
           if (response && response.minerId && response.rigId) {
             config.minerId = response.minerId;
@@ -278,7 +286,7 @@ export class BootstrapService implements OnModuleInit {
             config.rigId = 'temp-' + Date.now();
             fs.writeFileSync(this.configPath, JSON.stringify(config, null, 2));
           }
-        } catch (apiError) {
+        } catch (apiError: any) {
           this.loggingService.log(`Miner registration failed: ${apiError.message}`, 'ERROR', 'bootstrap');
           
           // Create temporary ID to prevent repeated registration attempts
@@ -287,7 +295,7 @@ export class BootstrapService implements OnModuleInit {
           fs.writeFileSync(this.configPath, JSON.stringify(config, null, 2));
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       this.loggingService.log(`Register miner error: ${error.message}`, 'ERROR', 'bootstrap');
       // Make sure we still have a config file to prevent future errors
       try {
@@ -295,9 +303,9 @@ export class BootstrapService implements OnModuleInit {
           fs.writeFileSync(this.configPath, JSON.stringify({
             minerId: 'fallback-' + Date.now(),
             rigId: 'fallback-' + Date.now()
-          }, null, 2));
+          } as MinerConfig, null, 2));
         }
-      } catch (writeError) {
+      } catch (writeError: any) {
         this.loggingService.log(`Failed to write fallback config: ${writeError.message}`, 'ERROR', 'bootstrap');
       }
     }
