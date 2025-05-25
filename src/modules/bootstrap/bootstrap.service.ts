@@ -4,7 +4,7 @@ import { ApiCommunicationService } from '../api-communication/api-communication.
 import { DeviceMonitoringService } from '../device-monitoring/device-monitoring.service';
 import { MinerManagerService } from '../miner-manager/miner-manager.service';
 import * as fs from 'fs';
-import * as path from 'path'; // Add path module import
+import * as path from 'path';
 import { execSync } from 'child_process';
 
 // Define config interface to fix TypeScript errors
@@ -242,14 +242,22 @@ export class BootstrapService implements OnModuleInit {
   /** ✅ Register Miner with API if needed */
   private async registerMiner() {
     try {
-      let config: MinerConfig = {};
+      // Initialize config with TypeScript interface to avoid type errors
+      const defaultConfig: MinerConfig = {
+        minerId: undefined,
+        rigId: undefined
+      };
+      
+      let config: MinerConfig = {...defaultConfig};
       
       // Safely read the config file
       try {
         if (fs.existsSync(this.configPath)) {
           const configContent = fs.readFileSync(this.configPath, 'utf8');
           if (configContent && configContent.trim()) {
-            config = JSON.parse(configContent) as MinerConfig;
+            const parsedConfig = JSON.parse(configContent);
+            // Ensure we have the correct type with our properties
+            config = {...defaultConfig, ...parsedConfig};
           } else {
             this.loggingService.log('Config file is empty, will create new configuration', 'INFO', 'bootstrap');
           }
@@ -300,10 +308,11 @@ export class BootstrapService implements OnModuleInit {
       // Make sure we still have a config file to prevent future errors
       try {
         if (!fs.existsSync(this.configPath)) {
-          fs.writeFileSync(this.configPath, JSON.stringify({
+          const fallbackConfig: MinerConfig = {
             minerId: 'fallback-' + Date.now(),
             rigId: 'fallback-' + Date.now()
-          } as MinerConfig, null, 2));
+          };
+          fs.writeFileSync(this.configPath, JSON.stringify(fallbackConfig, null, 2));
         }
       } catch (writeError: any) {
         this.loggingService.log(`Failed to write fallback config: ${writeError.message}`, 'ERROR', 'bootstrap');
