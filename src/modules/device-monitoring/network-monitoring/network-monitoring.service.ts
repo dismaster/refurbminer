@@ -577,11 +577,12 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
           this.loggingService.log('⚠️ Increasing disconnection duration detected, triggering recovery actions...', 'WARN', 'network-monitoring');
           this.performRecoveryActions(this.osDetectionService.detectOS());
         }
+      }    } else {
+      // Connectivity is good, only reset disconnection history if we were previously tracking disconnections
+      if (this.disconnectionHistory.length > 0) {
+        this.loggingService.log('✅ Connectivity restored, resetting disconnection history', 'INFO', 'network-monitoring');
+        this.disconnectionHistory = [];
       }
-    } else {
-      // Connectivity is restored, reset the history
-      this.loggingService.log('✅ Connectivity restored, resetting disconnection history', 'INFO', 'network-monitoring');
-      this.disconnectionHistory = [];
     }
   }
 

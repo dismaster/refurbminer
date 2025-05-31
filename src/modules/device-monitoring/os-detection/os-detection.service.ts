@@ -6,10 +6,22 @@ import { execSync } from 'child_process';
 
 @Injectable()
 export class OsDetectionService {
-  constructor(private readonly loggingService: LoggingService) {}
+  // Cache detection results to avoid repeated calls
+  private cachedOS: string | null = null;
+  private cachedIs64Bit: boolean | null = null;
+  private cachedHardwareBrand: string | null = null;
+  private cachedHardwareModel: string | null = null;
+  private cachedCPUInfo: object | null = null;
+  private cachedSystemInfo: object | null = null;
+  private cachedIPAddress: string | null = null;
 
+  constructor(private readonly loggingService: LoggingService) {}
   /** ✅ Detects OS type (Raspberry Pi, Termux, Linux) */
   detectOS(): string {
+    if (this.cachedOS !== null) {
+      return this.cachedOS;
+    }
+
     let detectedOS = 'unknown';
 
     if (fs.existsSync('/data/data/com.termux/files/usr/bin/termux-info')) {
@@ -20,168 +32,305 @@ export class OsDetectionService {
       detectedOS = 'linux';
     }
 
-    this.loggingService.log(`Detected OS: ${detectedOS}`, 'INFO', 'os-detection');
+    this.cachedOS = detectedOS;
+    this.loggingService.log(
+      `Detected OS: ${detectedOS}`,
+      'INFO',
+      'os-detection',
+    );
     return detectedOS;
   }
-
   /** ✅ Check if OS is 64-bit */
   is64Bit(): boolean {
+    if (this.cachedIs64Bit !== null) {
+      return this.cachedIs64Bit;
+    }
+
     try {
       const arch = execSync('uname -m', { encoding: 'utf8' }).trim();
       const is64 = arch === 'aarch64' || arch === 'x86_64';
 
       if (!is64) {
         try {
-          const bitCheck = execSync('getconf LONG_BIT', { encoding: 'utf8' }).trim();
-          return bitCheck === '64';
+          const bitCheck = execSync('getconf LONG_BIT', {
+            encoding: 'utf8',
+          }).trim();
+          this.cachedIs64Bit = bitCheck === '64';
+          return this.cachedIs64Bit;
         } catch {
+          this.cachedIs64Bit = false;
           return false;
         }
       }
 
-      this.loggingService.log(`System is ${is64 ? '64-bit' : '32-bit'}`, 'INFO', 'os-detection');
+      this.cachedIs64Bit = is64;
+      this.loggingService.log(
+        `System is ${is64 ? '64-bit' : '32-bit'}`,
+        'INFO',
+        'os-detection',
+      );
       return is64;
     } catch (error) {
-      this.loggingService.log(`Error detecting system bitness: ${error.message}`, 'ERROR', 'os-detection');
+      this.loggingService.log(
+        `Error detecting system bitness: ${error.message}`,
+        'ERROR',
+        'os-detection',
+      );
+      this.cachedIs64Bit = false;
       return false;
     }
   }
-
   /** ✅ Detects hardware brand (e.g., Raspberry, Termux, Debian) */
   getHardwareBrand(): string {
+    if (this.cachedHardwareBrand !== null) {
+      return this.cachedHardwareBrand;
+    }
+
     try {
       if (fs.existsSync('/sys/firmware/devicetree/base/model')) {
-        return execSync("cat /sys/firmware/devicetree/base/model | awk '{print $1}'", { encoding: 'utf8' })
-          .trim()
-          .toUpperCase();
+        try {
+          // Try with sudo first for permission issues
+          this.cachedHardwareBrand = execSync(
+            "sudo cat /sys/firmware/devicetree/base/model | awk '{print $1}'",
+            { encoding: 'utf8' },
+          )
+            .trim()
+            .toUpperCase();
+          return this.cachedHardwareBrand;
+        } catch (sudoError) {
+          // Fallback to normal access
+          try {
+            this.cachedHardwareBrand = execSync(
+              "cat /sys/firmware/devicetree/base/model | awk '{print $1}'",
+              { encoding: 'utf8' },
+            )
+              .trim()
+              .toUpperCase();
+            return this.cachedHardwareBrand;
+          } catch (normalError) {
+            this.loggingService.log(
+              `Permission denied accessing devicetree: ${normalError.message}`,
+              'WARN',
+              'os-detection',
+            );
+          }
+        }
       }
 
       if (this.detectOS() === 'termux') {
         try {
           // First try getprop without su (standard Android access)
-          const brand = execSync('getprop ro.product.brand', { encoding: 'utf8' }).trim();
+          const brand = execSync('getprop ro.product.brand', {
+            encoding: 'utf8',
+          }).trim();
           if (brand) {
-            return brand.toLowerCase(); // Keep consistent casing with hardware-info util
+            this.cachedHardwareBrand = brand.toLowerCase(); // Keep consistent casing with hardware-info util
+            return this.cachedHardwareBrand;
           }
         } catch (e) {
           // Try with su if available
           try {
             if (this.isSuAvailable()) {
-              const brand = execSync('su -c "getprop ro.product.brand"', { encoding: 'utf8' }).trim();
+              const brand = execSync('su -c "getprop ro.product.brand"', {
+                encoding: 'utf8',
+              }).trim();
               if (brand) {
-                return brand.toLowerCase();
+                this.cachedHardwareBrand = brand.toLowerCase();
+                return this.cachedHardwareBrand;
               }
             }
           } catch (suError) {
-            this.loggingService.log(`Su brand lookup failed: ${suError.message}`, 'DEBUG', 'os-detection');
+            this.loggingService.log(
+              `Su brand lookup failed: ${suError.message}`,
+              'DEBUG',
+              'os-detection',
+            );
           }
         }
 
         // Fallbacks as in hardware-info.util.ts
-        return "android";
+        this.cachedHardwareBrand = 'android';
+        return this.cachedHardwareBrand;
       }
 
-      return execSync('lsb_release -si', { encoding: 'utf8' }).trim();
+      this.cachedHardwareBrand = execSync('lsb_release -si', {
+        encoding: 'utf8',
+      }).trim();
+      return this.cachedHardwareBrand;
     } catch (error) {
-      this.loggingService.log(`Failed to detect hardware brand: ${error.message}`, 'WARN', 'os-detection');
-      return 'Unknown';
+      this.loggingService.log(
+        `Failed to detect hardware brand: ${error.message}`,
+        'WARN',
+        'os-detection',
+      );
+      this.cachedHardwareBrand = 'Unknown';
+      return this.cachedHardwareBrand;
     }
   }
 
   /** ✅ Detects hardware model (e.g., Pi 5, ARM64) */
   getHardwareModel(): string {
+    if (this.cachedHardwareModel !== null) {
+      return this.cachedHardwareModel;
+    }
+
     try {
       if (fs.existsSync('/sys/firmware/devicetree/base/model')) {
-        return execSync("cat /sys/firmware/devicetree/base/model | awk '{print $2, $3}'", { encoding: 'utf8' })
-          .trim()
-          .toUpperCase();
+        try {
+          // Try with sudo first for permission issues
+          this.cachedHardwareModel = execSync(
+            "sudo cat /sys/firmware/devicetree/base/model | awk '{print $2, $3}'",
+            { encoding: 'utf8' },
+          )
+            .trim()
+            .toUpperCase();
+          return this.cachedHardwareModel;
+        } catch (sudoError) {
+          // Fallback to normal access
+          try {
+            this.cachedHardwareModel = execSync(
+              "cat /sys/firmware/devicetree/base/model | awk '{print $2, $3}'",
+              { encoding: 'utf8' },
+            )
+              .trim()
+              .toUpperCase();
+            return this.cachedHardwareModel;
+          } catch (normalError) {
+            this.loggingService.log(
+              `Permission denied accessing devicetree for model: ${normalError.message}`,
+              'WARN',
+              'os-detection',
+            );
+          }
+        }
       }
 
       if (this.detectOS() === 'termux') {
         try {
           // First try standard Android property
-          const model = execSync('getprop ro.product.model', { encoding: 'utf8' }).trim();
+          const model = execSync('getprop ro.product.model', {
+            encoding: 'utf8',
+          }).trim();
           if (model) {
-            return model; // Keep original casing
+            this.cachedHardwareModel = model; // Keep original casing
+            return this.cachedHardwareModel;
           }
-        } catch (e) {
+        } catch {
           // Try with su if available
           try {
             if (this.isSuAvailable()) {
-              const model = execSync('su -c "getprop ro.product.model"', { encoding: 'utf8' }).trim();
+              const model = execSync('su -c "getprop ro.product.model"', {
+                encoding: 'utf8',
+              }).trim();
               if (model) {
-                return model;
+                this.cachedHardwareModel = model;
+                return this.cachedHardwareModel;
               }
             }
           } catch (suError) {
-            this.loggingService.log(`Su model lookup failed: ${suError.message}`, 'DEBUG', 'os-detection');
+            this.loggingService.log(
+              `Su model lookup failed: ${suError.message}`,
+              'DEBUG',
+              'os-detection',
+            );
           }
         }
-        
+
         // If all else fails, return the CPU architecture
         try {
           const arch = execSync('uname -m', { encoding: 'utf8' }).trim();
-          return arch || os.arch();
+          this.cachedHardwareModel = arch || os.arch();
+          return this.cachedHardwareModel;
         } catch {
-          return os.arch();
+          this.cachedHardwareModel = os.arch();
+          return this.cachedHardwareModel;
         }
       }
 
-      return os.arch().toUpperCase();
+      this.cachedHardwareModel = os.arch().toUpperCase();
+      return this.cachedHardwareModel;
     } catch (error) {
-      this.loggingService.log(`Failed to detect hardware model: ${error.message}`, 'WARN', 'os-detection');
-      return 'Unknown';
+      this.loggingService.log(
+        `Failed to detect hardware model: ${error.message}`,
+        'WARN',
+        'os-detection',
+      );
+      this.cachedHardwareModel = 'Unknown';
+      return this.cachedHardwareModel;
     }
   }
 
   /** ✅ Retrieves CPU information with better fallbacks */
   getCPUInfo(): any {
+    if (this.cachedCPUInfo !== null) {
+      return this.cachedCPUInfo;
+    }
+
     try {
       let aesSupport = false;
       let pmullSupport = false;
-      let architecture = this.is64Bit() ? '64-bit' : '32-bit';
+      const architecture = this.is64Bit() ? '64-bit' : '32-bit';
       let cpuModel = 'Unknown';
       let cores = 0;
-      
+
       // Termux and some environments don't work well with os.cpus()
       // So we'll primarily use lscpu and only fall back to os.cpus()
       try {
         // Primary method: lscpu
-        const lscpuOutput = execSync('lscpu', { encoding: 'utf8' }).toLowerCase();
+        const lscpuOutput = execSync('lscpu', {
+          encoding: 'utf8',
+        }).toLowerCase();
         aesSupport = lscpuOutput.includes('aes');
         pmullSupport = lscpuOutput.includes('pmull');
-        
+
         // Parse CPU count from lscpu
         const coreMatch = lscpuOutput.match(/cpu\(s\):\s+(\d+)/i);
         if (coreMatch && coreMatch[1]) {
           cores = parseInt(coreMatch[1], 10);
         }
-        
+
         // Parse CPU model from lscpu
         const modelMatch = lscpuOutput.match(/model name:\s+(.+)$/im);
         if (modelMatch && modelMatch[1]) {
           cpuModel = modelMatch[1].trim();
         }
       } catch (lscpuError) {
-        this.loggingService.log(`lscpu failed: ${lscpuError.message}`, 'DEBUG', 'os-detection');
-        
+        this.loggingService.log(
+          `lscpu failed: ${lscpuError.message}`,
+          'DEBUG',
+          'os-detection',
+        );
+
         try {
           // First fallback: /proc/cpuinfo
-          const cpuinfoOutput = execSync('cat /proc/cpuinfo', { encoding: 'utf8' }).toLowerCase();
+          const cpuinfoOutput = execSync('cat /proc/cpuinfo', {
+            encoding: 'utf8',
+          }).toLowerCase();
           aesSupport = cpuinfoOutput.includes('aes');
           pmullSupport = cpuinfoOutput.includes('pmull');
         } catch (cpuinfoError) {
-          this.loggingService.log(`Failed to read /proc/cpuinfo: ${cpuinfoError.message}`, 'DEBUG', 'os-detection');
-          
+          this.loggingService.log(
+            `Failed to read /proc/cpuinfo: ${cpuinfoError.message}`,
+            'DEBUG',
+            'os-detection',
+          );
+
           // For Intel/AMD CPUs, we can assume AES support for newer models
           if (cpuModel.includes('Intel') || cpuModel.includes('AMD')) {
             // Rough heuristic based on CPU generation
-            const cpuGenMatch = cpuModel.match(/i[357]-\d{4,}/i) || cpuModel.match(/i[357] \d{4,}/i);
+            const cpuGenMatch =
+              cpuModel.match(/i[357]-\d{4,}/i) ||
+              cpuModel.match(/i[357] \d{4,}/i);
             if (cpuGenMatch) {
               const genNumber = parseInt(cpuGenMatch[0].replace(/\D/g, ''));
-              if (genNumber >= 2000) { // Most Intel CPUs since 2nd gen have AES
+              if (genNumber >= 2000) {
+                // Most Intel CPUs since 2nd gen have AES
                 aesSupport = true;
-                this.loggingService.log(`Assuming AES support based on CPU model: ${cpuModel}`, 'INFO', 'os-detection');
+                this.loggingService.log(
+                  `Assuming AES support based on CPU model: ${cpuModel}`,
+                  'INFO',
+                  'os-detection',
+                );
               }
             } else if (cpuModel.includes('Xeon')) {
               aesSupport = true; // Most Xeons support AES
@@ -204,22 +353,32 @@ export class OsDetectionService {
         'os-detection',
       );
 
+      this.cachedCPUInfo = cpuInfo;
       return cpuInfo;
     } catch (error) {
-      this.loggingService.log(`Failed to fetch CPU details: ${error.message}`, 'WARN', 'os-detection');
+      this.loggingService.log(
+        `Failed to fetch CPU details: ${error.message}`,
+        'WARN',
+        'os-detection',
+      );
       // Return default values that will allow the app to continue
-      return {
+      this.cachedCPUInfo = {
         architecture: this.is64Bit() ? '64-bit' : '32-bit',
         model: os.cpus()[0]?.model || 'Unknown',
         cores: os.cpus().length,
         aesSupport: true, // Assume AES support to prevent blocking the app
         pmullSupport: false,
       };
+      return this.cachedCPUInfo;
     }
   }
 
   /** ✅ Retrieves system metadata */
   getSystemInfo(): any {
+    if (this.cachedSystemInfo !== null) {
+      return this.cachedSystemInfo;
+    }
+
     const systemInfo = {
       osType: this.detectOS(),
       hwBrand: this.getHardwareBrand(),
@@ -228,26 +387,49 @@ export class OsDetectionService {
       cpuInfo: this.getCPUInfo(),
     };
 
-    this.loggingService.log(`System Info: ${JSON.stringify(systemInfo, null, 2)}`, 'INFO', 'os-detection');
+    this.loggingService.log(
+      `System Info: ${JSON.stringify(systemInfo, null, 2)}`,
+      'INFO',
+      'os-detection',
+    );
+    this.cachedSystemInfo = systemInfo;
     return systemInfo;
   }
 
   /** ✅ Gets device IP Address */
   getIPAddress(): string {
+    if (this.cachedIPAddress !== null) {
+      return this.cachedIPAddress;
+    }
+
     try {
-      const ip = execSync("hostname -I | awk '{print $1}'", { encoding: 'utf8' }).trim();
-      this.loggingService.log(`Detected IP Address: ${ip}`, 'INFO', 'os-detection');
-      return ip || '127.0.0.1';
+      const ip = execSync("hostname -I | awk '{print $1}'", {
+        encoding: 'utf8',
+      }).trim();
+      this.loggingService.log(
+        `Detected IP Address: ${ip}`,
+        'INFO',
+        'os-detection',
+      );
+      this.cachedIPAddress = ip || '127.0.0.1';
+      return this.cachedIPAddress;
     } catch (error) {
-      this.loggingService.log(`Failed to fetch IP Address: ${error.message}`, 'ERROR', 'os-detection');
-      return '127.0.0.1';
+      this.loggingService.log(
+        `Failed to fetch IP Address: ${error.message}`,
+        'ERROR',
+        'os-detection',
+      );
+      this.cachedIPAddress = '127.0.0.1';
+      return this.cachedIPAddress;
     }
   }
 
   /** ✅ Check if SU (root) is available */
   isSuAvailable(): boolean {
     try {
-      const result = execSync('su -c "echo rooted" 2>/dev/null', { encoding: 'utf8' });
+      const result = execSync('su -c "echo rooted" 2>/dev/null', {
+        encoding: 'utf8',
+      });
       return result.includes('rooted');
     } catch {
       return false;
@@ -260,8 +442,12 @@ export class OsDetectionService {
       if (this.detectOS() === 'termux') {
         // Try to get Android version
         try {
-          const releaseVer = execSync('getprop ro.build.version.release', { encoding: 'utf8' }).trim();
-          const sdkVer = execSync('getprop ro.build.version.sdk', { encoding: 'utf8' }).trim();
+          const releaseVer = execSync('getprop ro.build.version.release', {
+            encoding: 'utf8',
+          }).trim();
+          const sdkVer = execSync('getprop ro.build.version.sdk', {
+            encoding: 'utf8',
+          }).trim();
           if (releaseVer && sdkVer) {
             return `Android ${releaseVer} (API ${sdkVer})`;
           }
@@ -269,8 +455,13 @@ export class OsDetectionService {
           // Try with su
           try {
             if (this.isSuAvailable()) {
-              const releaseVer = execSync('su -c "getprop ro.build.version.release"', { encoding: 'utf8' }).trim();
-              const sdkVer = execSync('su -c "getprop ro.build.version.sdk"', { encoding: 'utf8' }).trim();
+              const releaseVer = execSync(
+                'su -c "getprop ro.build.version.release"',
+                { encoding: 'utf8' },
+              ).trim();
+              const sdkVer = execSync('su -c "getprop ro.build.version.sdk"', {
+                encoding: 'utf8',
+              }).trim();
               if (releaseVer && sdkVer) {
                 return `Android ${releaseVer} (API ${sdkVer})`;
               }
@@ -287,10 +478,10 @@ export class OsDetectionService {
         const osRelease = fs.readFileSync('/etc/os-release', 'utf8');
         const prettyName = osRelease
           .split('\n')
-          .find(line => line.startsWith('PRETTY_NAME='))
+          .find((line) => line.startsWith('PRETTY_NAME='))
           ?.split('=')[1]
           ?.replace(/"/g, '');
-        
+
         if (prettyName) {
           return prettyName;
         }
@@ -298,7 +489,11 @@ export class OsDetectionService {
 
       return os.version();
     } catch (error) {
-      this.loggingService.log(`Failed to get OS version: ${error.message}`, 'WARN', 'os-detection');
+      this.loggingService.log(
+        `Failed to get OS version: ${error.message}`,
+        'WARN',
+        'os-detection',
+      );
       return 'Unknown';
     }
   }

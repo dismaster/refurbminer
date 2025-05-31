@@ -5,7 +5,6 @@ import { DeviceMonitoringService } from '../device-monitoring/device-monitoring.
 import { MinerManagerService } from '../miner-manager/miner-manager.service';
 import { ConfigService } from '../config/config.service';
 import * as fs from 'fs';
-import * as path from 'path';
 import { execSync } from 'child_process';
 
 // Define config interface to fix TypeScript errors
@@ -29,37 +28,75 @@ export class BootstrapService implements OnModuleInit {
 
   async onModuleInit() {
     console.log('⚡ [DEBUG] BootstrapService is running...');
-    this.loggingService.log('Initializing Bootstrap Service...', 'INFO', 'bootstrap');
+    this.loggingService.log(
+      'Initializing Bootstrap Service...',
+      'INFO',
+      'bootstrap',
+    );
     await this.ensureConfigExists();
 
     // --- ENFORCE: Do not proceed until minerId is assigned by backend ---
     let validMinerID = false;
-    while (!validMinerID) {
-      validMinerID = await this.registerMiner();
-      if (!validMinerID) {
-        this.loggingService.log(
-          'Waiting for backend-assigned minerId. Retrying registration in 10 seconds...',
-          'ERROR',
-          'bootstrap',
-        );
-        await new Promise((res) => setTimeout(res, 10000));
-      }
-    }
-    // --- END ENFORCE ---
 
-    // Now that registration is complete, trigger config sync and periodic sync
-    await this.configService.triggerConfigSyncAfterRegistration();
+    // First check if we already have a valid miner ID
+    const existingConfig = this.configService.getConfig();
+    if (
+      existingConfig &&
+      existingConfig.minerId &&
+      existingConfig.minerId.length > 0
+    ) {
+      this.loggingService.log(
+        `Found existing miner ID: ${existingConfig.minerId}. Skipping registration.`,
+        'INFO',
+        'bootstrap',
+      );
+      validMinerID = true;
+    } else {
+      this.loggingService.log(
+        'No valid miner ID found. Starting registration process...',
+        'INFO',
+        'bootstrap',
+      );
+
+      while (!validMinerID) {
+        validMinerID = await this.registerMiner();
+        if (!validMinerID) {
+          this.loggingService.log(
+            'Waiting for backend-assigned minerId. Retrying registration in 10 seconds...',
+            'ERROR',
+            'bootstrap',
+          );
+          await new Promise((res) => setTimeout(res, 10000));
+        }
+      }
+    } // --- END ENFORCE ---
+
+    // Skip immediate config sync to prevent overwriting newly assigned miner ID
+    // The periodic sync (every 5 minutes) will handle config updates later
+    this.loggingService.log(
+      'Registration complete. Skipping immediate config sync to prevent race conditions.',
+      'INFO',
+      'bootstrap',
+    );
+
+    // Trigger initial flightsheet fetch now that registration is complete
+    this.loggingService.log(
+      'Triggering initial flightsheet fetch after successful registration...',
+      'INFO',
+      'bootstrap',
+    );
+    await this.minerManagerService.triggerInitialFlightsheetFetchAndStart();
 
     await this.checkCPUCompatibility();
     await this.verifyDependencies();
     await this.ensureExecutables();
-    
+
     // Check if we're on Termux to run ADB optimizations
     const osType = this.deviceMonitoringService.getOS();
     if (osType === 'termux') {
       await this.setupAdbOptimizations();
     }
-    
+
     this.loggingService.log(
       'Bootstrap process completed!',
       'INFO',
@@ -144,7 +181,10 @@ export class BootstrapService implements OnModuleInit {
         'bootstrap',
       );
     } catch (error) {
-      const errMsg = (typeof error === 'object' && error && 'message' in error) ? (error as { message: string }).message : String(error);
+      const errMsg =
+        typeof error === 'object' && error && 'message' in error
+          ? (error as { message: string }).message
+          : String(error);
       this.loggingService.log(
         `CPU check warning: ${errMsg}`,
         'WARN',
@@ -166,7 +206,11 @@ export class BootstrapService implements OnModuleInit {
         execSync('command -v sudo', { stdio: 'ignore' });
         hasSudo = true;
       } catch (e) {
-        this.loggingService.log('sudo not available, will attempt direct installation', 'INFO', 'bootstrap');
+        this.loggingService.log(
+          'sudo not available, will attempt direct installation',
+          'INFO',
+          'bootstrap',
+        );
       }
 
       // Determine installation command based on OS type and sudo availability
@@ -192,7 +236,11 @@ export class BootstrapService implements OnModuleInit {
                 execSync('command -v pacman', { stdio: 'ignore' });
                 packageManager = 'pacman -S --noconfirm';
               } catch {
-                this.loggingService.log('No supported package manager found', 'WARN', 'bootstrap');
+                this.loggingService.log(
+                  'No supported package manager found',
+                  'WARN',
+                  'bootstrap',
+                );
               }
             }
           }
@@ -200,7 +248,7 @@ export class BootstrapService implements OnModuleInit {
 
         if (packageManager) {
           const sudoPrefix = hasSudo ? 'sudo ' : '';
-          
+
           // Different package names for different distributions
           if (packageManager === 'apt-get') {
             // 'which' is part of debianutils
@@ -212,16 +260,29 @@ export class BootstrapService implements OnModuleInit {
           }
         }
       } else if (osType === 'termux') {
-        installCommand = 'pkg install -y screen git gnupg curl termux-tools nmap-ncat getconf dnsutils traceroute';
+        installCommand =
+          'pkg install -y screen git gnupg curl termux-tools nmap-ncat getconf dnsutils traceroute';
       }
 
       if (!installCommand) {
-        this.loggingService.log(`No install command found for OS: ${osType}`, 'WARN', 'bootstrap');
+        this.loggingService.log(
+          `No install command found for OS: ${osType}`,
+          'WARN',
+          'bootstrap',
+        );
         return;
       }
 
-      this.loggingService.log(`Installing dependencies for ${osType}...`, 'INFO', 'bootstrap');
-      this.loggingService.log(`Running: ${installCommand}`, 'DEBUG', 'bootstrap');
+      this.loggingService.log(
+        `Installing dependencies for ${osType}...`,
+        'INFO',
+        'bootstrap',
+      );
+      this.loggingService.log(
+        `Running: ${installCommand}`,
+        'DEBUG',
+        'bootstrap',
+      );
 
       // Execute command & suppress stdout unless DEBUG mode is enabled
       const logLevel = process.env.LOG_LEVEL || 'INFO';
@@ -234,40 +295,85 @@ export class BootstrapService implements OnModuleInit {
       } catch (error) {
         // If we're running as root without sudo and fail, try setting up package sources
         if (!hasSudo && process.getuid && process.getuid() === 0) {
-          this.loggingService.log('Initial installation failed, checking package sources...', 'WARN', 'bootstrap');
-          
+          this.loggingService.log(
+            'Initial installation failed, checking package sources...',
+            'WARN',
+            'bootstrap',
+          );
+
           try {
             // Check /etc/apt/sources.list for Debian/Ubuntu
             if (packageManager === 'apt-get') {
-              this.loggingService.log('Setting up minimal apt repository', 'INFO', 'bootstrap');
+              this.loggingService.log(
+                'Setting up minimal apt repository',
+                'INFO',
+                'bootstrap',
+              );
               const sourcesList = '/etc/apt/sources.list';
-              
+
               // Check if sources.list exists and has content
-              if (!fs.existsSync(sourcesList) || fs.readFileSync(sourcesList, 'utf8').trim() === '') {
-                const distro = execSync('lsb_release -sc 2>/dev/null || echo bookworm', { encoding: 'utf8' }).trim();
-                fs.writeFileSync(sourcesList, `deb http://deb.debian.org/debian ${distro} main\n`);
+              if (
+                !fs.existsSync(sourcesList) ||
+                fs.readFileSync(sourcesList, 'utf8').trim() === ''
+              ) {
+                const distro = execSync(
+                  'lsb_release -sc 2>/dev/null || echo bookworm',
+                  { encoding: 'utf8' },
+                ).trim();
+                fs.writeFileSync(
+                  sourcesList,
+                  `deb http://deb.debian.org/debian ${distro} main\n`,
+                );
                 execSync('apt-get update');
               }
-              
+
               // Try installation again
               execSync(installCommand);
             }
           } catch (sourceError) {
-            this.loggingService.log(`Repository setup failed: ${sourceError.message}`, 'ERROR', 'bootstrap');
-            this.loggingService.log('Continuing without all dependencies...', 'WARN', 'bootstrap');
+            this.loggingService.log(
+              `Repository setup failed: ${sourceError.message}`,
+              'ERROR',
+              'bootstrap',
+            );
+            this.loggingService.log(
+              'Continuing without all dependencies...',
+              'WARN',
+              'bootstrap',
+            );
             return; // Continue without failing
           }
         } else {
-          this.loggingService.log(`Dependency installation warning: ${error.message}`, 'WARN', 'bootstrap');
-          this.loggingService.log('Continuing without all dependencies...', 'WARN', 'bootstrap');
+          this.loggingService.log(
+            `Dependency installation warning: ${error.message}`,
+            'WARN',
+            'bootstrap',
+          );
+          this.loggingService.log(
+            'Continuing without all dependencies...',
+            'WARN',
+            'bootstrap',
+          );
           return; // Continue without failing
         }
       }
 
-      this.loggingService.log('All dependencies installed successfully!', 'INFO', 'bootstrap');
+      this.loggingService.log(
+        'All dependencies installed successfully!',
+        'INFO',
+        'bootstrap',
+      );
     } catch (error) {
-      this.loggingService.log(`Dependency verification failed: ${error.message}`, 'WARN', 'bootstrap');
-      this.loggingService.log('Continuing without dependency verification...', 'WARN', 'bootstrap');
+      this.loggingService.log(
+        `Dependency verification failed: ${error.message}`,
+        'WARN',
+        'bootstrap',
+      );
+      this.loggingService.log(
+        'Continuing without dependency verification...',
+        'WARN',
+        'bootstrap',
+      );
       // Don't exit, continue with warnings
     }
   }
@@ -284,12 +390,24 @@ export class BootstrapService implements OnModuleInit {
       if (fs.existsSync(path)) {
         try {
           execSync(`chmod +x ${path}`);
-          this.loggingService.log(`Executable permissions fixed for ${name}!`, 'INFO', 'bootstrap');
+          this.loggingService.log(
+            `Executable permissions fixed for ${name}!`,
+            'INFO',
+            'bootstrap',
+          );
         } catch (error) {
-          this.loggingService.log(`Failed to set executable permissions for ${name}: ${error.message}`, 'ERROR', 'bootstrap');
+          this.loggingService.log(
+            `Failed to set executable permissions for ${name}: ${error.message}`,
+            'ERROR',
+            'bootstrap',
+          );
         }
       } else {
-        this.loggingService.log(`Warning: ${name} not found. Skipping permission fix.`, 'WARN', 'bootstrap');
+        this.loggingService.log(
+          `Warning: ${name} not found. Skipping permission fix.`,
+          'WARN',
+          'bootstrap',
+        );
       }
     });
   }
@@ -319,12 +437,79 @@ export class BootstrapService implements OnModuleInit {
           'bootstrap',
         );
       }
-      // Always attempt to register with API, even if we have a local ID
-      const metadata = this.deviceMonitoringService.getSystemInfo();
+
+      // Check if we already have a valid miner ID - if so, don't re-register
+      if (
+        config.minerId &&
+        typeof config.minerId === 'string' &&
+        config.minerId.length > 0
+      ) {
+        this.loggingService.log(
+          `Using existing miner ID: ${config.minerId}`,
+          'INFO',
+          'bootstrap',
+        );
+        return true;
+      }
+
+      // Only register if we don't have a valid miner ID
+      const metadata = this.deviceMonitoringService.getSystemInfo() as {
+        osType: string;
+        hwBrand: string;
+        hwModel: string;
+        os: string;
+        cpuInfo: {
+          architecture: string;
+          model: string;
+          cores: number;
+          aesSupport: boolean;
+          pmullSupport: boolean;
+        };
+      };
       const ipAddress = this.deviceMonitoringService.getIPAddress();
-      const response = await this.apiService.registerMiner(metadata, ipAddress) as RegisterResponse | undefined;
-      if (response && typeof response.minerId === 'string' && response.minerId.length > 0) {
-        // ALWAYS use the API's minerId and rigId
+      
+      // Add miningCpus to metadata for backend registration
+      const cpuInfo = metadata.cpuInfo || {
+        architecture: '64-bit',
+        model: 'Unknown',
+        cores: 1,
+        aesSupport: false,
+        pmullSupport: false,
+      };
+      const miningCpus = Array.from(
+        { length: cpuInfo.cores || 1 },
+        (_, index) => ({
+          coreId: index,
+          model: cpuInfo.model || 'Unknown',
+          cores: cpuInfo.cores || 1,
+          architecture: cpuInfo.architecture || '64-bit',
+          aesSupport: cpuInfo.aesSupport || false,
+          pmullSupport: cpuInfo.pmullSupport || false,
+        }),
+      );
+      
+      const registrationMetadata = {
+        ...metadata,
+        miningCpus: miningCpus,
+        lastSeenIp: ipAddress,
+      };
+      
+      this.loggingService.log(
+        `Registering with metadata: ${JSON.stringify(registrationMetadata, null, 2)}`,
+        'DEBUG',
+        'bootstrap',
+      );
+      
+      const response = (await this.apiService.registerMiner(
+        registrationMetadata,
+        ipAddress,
+      )) as RegisterResponse | undefined;
+      if (
+        response &&
+        typeof response.minerId === 'string' &&
+        response.minerId.length > 0
+      ) {
+        // Use the API's minerId and rigId
         config.minerId = response.minerId;
         config.rigId = response.rigId || '';
         // Save the updated config
@@ -358,89 +543,137 @@ export class BootstrapService implements OnModuleInit {
   /** ✅ Setup ADB optimizations for Termux */
   private async setupAdbOptimizations() {
     try {
-      this.loggingService.log('Checking ADB availability on Termux...', 'INFO', 'bootstrap');
-      
+      this.loggingService.log(
+        'Checking ADB availability on Termux...',
+        'INFO',
+        'bootstrap',
+      );
+
       // Check if ADB is installed
       try {
         execSync('command -v adb', { stdio: 'ignore' });
       } catch {
-        this.loggingService.log('ADB not found, skipping power optimizations', 'INFO', 'bootstrap');
+        this.loggingService.log(
+          'ADB not found, skipping power optimizations',
+          'INFO',
+          'bootstrap',
+        );
         return;
       }
-      
+
       // Reset ADB server to ensure fresh connection
       try {
         execSync('adb kill-server', { stdio: 'ignore' });
         this.loggingService.log('ADB server killed', 'DEBUG', 'bootstrap');
       } catch (error) {
-        this.loggingService.log(`Failed to kill ADB server: ${error.message}`, 'DEBUG', 'bootstrap');
+        this.loggingService.log(
+          `Failed to kill ADB server: ${error.message}`,
+          'DEBUG',
+          'bootstrap',
+        );
       }
-      
+
       // Start ADB and check if it can connect to the device
       let adbWorks = false;
-      
+
       // First attempt: Try ADB directly
       try {
         // Try to get device state - this will start the server if needed
-        const deviceOutput = execSync('adb get-state', { 
+        const deviceOutput = execSync('adb get-state', {
           encoding: 'utf8',
           timeout: 5000, // 5 second timeout
-          stdio: ['ignore', 'pipe', 'pipe'] 
+          stdio: ['ignore', 'pipe', 'pipe'],
         }).trim();
-        
+
         if (deviceOutput === 'device') {
           adbWorks = true;
-          this.loggingService.log('ADB connection established successfully', 'INFO', 'bootstrap');
+          this.loggingService.log(
+            'ADB connection established successfully',
+            'INFO',
+            'bootstrap',
+          );
         }
       } catch (error: any) {
-        this.loggingService.log(`ADB not connected: ${error.message}`, 'DEBUG', 'bootstrap');
-        
+        this.loggingService.log(
+          `ADB not connected: ${error.message}`,
+          'DEBUG',
+          'bootstrap',
+        );
+
         // Second attempt: Try to restart the server and establish connection
         try {
           // Explicitly kill and restart ADB server
           execSync('adb kill-server', { stdio: 'ignore' });
-          this.loggingService.log('Restarting ADB server...', 'DEBUG', 'bootstrap');
-          
+          this.loggingService.log(
+            'Restarting ADB server...',
+            'DEBUG',
+            'bootstrap',
+          );
+
           // Start server and check for devices
           // This specifically handles the "daemon not running; starting now" case
-          const result = execSync('adb shell echo success', { 
+          const result = execSync('adb shell echo success', {
             encoding: 'utf8',
-            timeout: 8000 // Give it more time to initialize
+            timeout: 8000, // Give it more time to initialize
           }).trim();
-          
+
           if (result.includes('success')) {
             adbWorks = true;
-            this.loggingService.log('ADB connection established after restart', 'INFO', 'bootstrap');
+            this.loggingService.log(
+              'ADB connection established after restart',
+              'INFO',
+              'bootstrap',
+            );
           }
         } catch (restartError: any) {
-          this.loggingService.log(`ADB restart failed: ${restartError.message}`, 'DEBUG', 'bootstrap');
-          
+          this.loggingService.log(
+            `ADB restart failed: ${restartError.message}`,
+            'DEBUG',
+            'bootstrap',
+          );
+
           // Third attempt: Check device list (sometimes works when the above fails)
           try {
-            const devices = execSync('adb devices', { 
+            const devices = execSync('adb devices', {
               encoding: 'utf8',
-              timeout: 5000
+              timeout: 5000,
             });
-            
+
             // Check if any device is connected (not just "List of devices attached")
             if (devices.split('\n').length > 2 || devices.includes('device')) {
               adbWorks = true;
-              this.loggingService.log('ADB devices detected', 'INFO', 'bootstrap');
+              this.loggingService.log(
+                'ADB devices detected',
+                'INFO',
+                'bootstrap',
+              );
             }
           } catch (devicesError: any) {
-            this.loggingService.log(`ADB devices check failed: ${devicesError.message}`, 'DEBUG', 'bootstrap');
+            this.loggingService.log(
+              `ADB devices check failed: ${devicesError.message}`,
+              'DEBUG',
+              'bootstrap',
+            );
           }
         }
       }
-      
+
       if (!adbWorks) {
-        this.loggingService.log('ADB is installed but no devices are connected, skipping optimizations', 'WARN', 'bootstrap');
+        this.loggingService.log(
+          'ADB is installed but no devices are connected, skipping optimizations',
+          'WARN',
+          'bootstrap',
+        );
         return;
       }
-      
+
       // ADB is working - run optimization commands
-      this.loggingService.log('Applying power and performance optimizations via ADB...', 'INFO', 'bootstrap');
-      
+      this.loggingService.log(
+        'Applying power and performance optimizations via ADB...',
+        'INFO',
+        'bootstrap',
+      );
+
       const adbCommands = [
         'adb shell dumpsys battery set level 100',
         'adb shell svc power stayon true',
@@ -449,22 +682,34 @@ export class BootstrapService implements OnModuleInit {
         'adb shell dumpsys deviceidle whitelist +com.termux.api',
         'adb shell settings put global system_capabilities 100',
         'adb shell settings put global sem_enhanced_cpu_responsiveness 1',
-        'adb shell settings put global wifi_sleep_policy 2'
+        'adb shell settings put global wifi_sleep_policy 2',
       ];
-      
+
       let successCount = 0;
       for (const cmd of adbCommands) {
         try {
           execSync(cmd, { timeout: 3000 });
           successCount++;
         } catch (cmdError) {
-          this.loggingService.log(`Failed to run "${cmd}": ${cmdError.message}`, 'DEBUG', 'bootstrap');
+          this.loggingService.log(
+            `Failed to run "${cmd}": ${cmdError.message}`,
+            'DEBUG',
+            'bootstrap',
+          );
         }
       }
-      
-      this.loggingService.log(`Power optimizations applied: ${successCount}/${adbCommands.length} succeeded`, 'INFO', 'bootstrap');
+
+      this.loggingService.log(
+        `Power optimizations applied: ${successCount}/${adbCommands.length} succeeded`,
+        'INFO',
+        'bootstrap',
+      );
     } catch (error) {
-      this.loggingService.log(`ADB optimization failed: ${error.message}`, 'WARN', 'bootstrap');
+      this.loggingService.log(
+        `ADB optimization failed: ${error.message}`,
+        'WARN',
+        'bootstrap',
+      );
       // Continue execution despite failures
     }
   }

@@ -1,6 +1,14 @@
 {
   "minerId": "",
   "rigId": "",
+  "name": "",
+  "thresholds": {
+    "maxCpuTemp": 85,
+    "maxBatteryTemp": 45,
+    "maxStorageUsage": 90,
+    "minHashrate": 0,
+    "shareRatio": 0.5
+  },
   "schedules": {
     "scheduledMining": {
       "enabled": false,

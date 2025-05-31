@@ -22,7 +22,6 @@ import { OsDetectionModule } from './modules/device-monitoring/os-detection/os-d
   imports: [
     // Core modules
     LoggingModule,
-    ConfigModule,
     ApiCommunicationModule,
 
     // Feature modules
@@ -35,6 +34,7 @@ import { OsDetectionModule } from './modules/device-monitoring/os-detection/os-d
     ActionsModule,
     MinerDataModule,
     OsDetectionModule,
+    ConfigModule,
 
     // Web interface
     WebModule,

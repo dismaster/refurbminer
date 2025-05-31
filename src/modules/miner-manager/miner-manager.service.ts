@@ -1,4 +1,8 @@
-import { Injectable, OnModuleInit, OnApplicationShutdown } from '@nestjs/common';
+import {
+  Injectable,
+  OnModuleInit,
+  OnApplicationShutdown,
+} from '@nestjs/common';
 import { LoggingService } from '../logging/logging.service';
 import { FlightsheetService } from '../flightsheet/flightsheet.service';
 import { ConfigService } from '../config/config.service';
@@ -7,7 +11,9 @@ import { execSync, exec } from 'child_process';
 import * as fs from 'fs';
 
 @Injectable()
-export class MinerManagerService implements OnModuleInit, OnApplicationShutdown {
+export class MinerManagerService
+  implements OnModuleInit, OnApplicationShutdown
+{
   private static isInitialized = false;
   private minerScreen = 'miner-session';
   private pollingInterval?: NodeJS.Timeout;
@@ -25,21 +31,29 @@ export class MinerManagerService implements OnModuleInit, OnApplicationShutdown 
     private readonly loggingService: LoggingService,
     private readonly flightsheetService: FlightsheetService,
     private readonly configService: ConfigService,
-    private readonly apiService: ApiCommunicationService
+    private readonly apiService: ApiCommunicationService,
   ) {}
 
   async onModuleInit() {
     if (MinerManagerService.isInitialized) {
-      this.loggingService.log('⚠️ MinerManager already initialized, skipping...', 'WARN', 'miner-manager');
+      this.loggingService.log(
+        '⚠️ MinerManager already initialized, skipping...',
+        'WARN',
+        'miner-manager',
+      );
       return;
     }
 
     MinerManagerService.isInitialized = true;
-    this.loggingService.log('🚀 MinerManager initializing...', 'INFO', 'miner-manager');
+    this.loggingService.log(
+      '🚀 MinerManager initializing...',
+      'INFO',
+      'miner-manager',
+    );
 
     this.clearIntervals();
     await this.initializeMiner();
-    await this.initializeMonitoring();
+    this.initializeMonitoring();
   }
 
   private clearIntervals(): void {
@@ -63,36 +77,46 @@ export class MinerManagerService implements OnModuleInit, OnApplicationShutdown 
 
       const miner = this.getMinerFromFlightsheet();
       if (!miner) {
-        const error = 'No miner found from flightsheet.';
-        this.loggingService.log(`❌ ${error}`, 'ERROR', 'miner-manager');
-        await this.logMinerError(error);
+        const error =
+          'No miner found from flightsheet. Will try again after flightsheet is fetched.';
+        this.loggingService.log(`⚠️ ${error}`, 'WARN', 'miner-manager');
+        // Don't log as error since this is expected before flightsheet is fetched
         return;
       }
 
-      this.loggingService.log(`✅ Detected miner: ${miner}`, 'INFO', 'miner-manager');
-      await this.fetchAndUpdateFlightsheet();
+      this.loggingService.log(
+        `✅ Detected miner: ${miner}`,
+        'INFO',
+        'miner-manager',
+      );
+      // No longer fetch flightsheet here - it will be triggered after registration
       this.startMiner();
     } catch (error) {
-      await this.logMinerError(`Initialization failed: ${error.message}`, error.stack);
+      await this.logMinerError(
+        `Initialization failed: ${error.message}`,
+        error.stack,
+      );
     }
   }
-
-  private async initializeMonitoring(): Promise<void> {
-    // Set up polling interval
+  private initializeMonitoring(): void {
+    // Set up polling interval for flightsheet updates - check every minute for faster response to user changes
     this.pollingInterval = setInterval(async () => {
-      this.loggingService.log('🔄 Checking for API updates...', 'DEBUG', 'miner-manager');
-      
-      // Sync with API every 5 minutes
-      await this.configService.forceSyncWithApi();
-      
+      this.loggingService.log(
+        '🔄 Checking for flightsheet updates...',
+        'DEBUG',
+        'miner-manager',
+      );
+
       // Check flightsheet for changes
+      // NOTE: We don't sync config here to avoid race conditions with BootstrapService
+      // ConfigService will handle API sync after successful registration
       const updated = await this.fetchAndUpdateFlightsheet();
       if (updated) {
         await this.logMinerError('Flightsheet changed, restarting miner');
-        this.restartMiner();
+        void this.restartMiner();
       }
-    }, 300000); // Every 5 minutes
-  
+    }, 60000); // Every minute for faster response to user changes
+
     // Set up schedule interval - check more frequently (every minute)
     // Also sync config before checking to ensure latest schedule data
     this.scheduleInterval = setInterval(() => {
@@ -100,20 +124,24 @@ export class MinerManagerService implements OnModuleInit, OnApplicationShutdown 
       // API sync happens in pollingInterval above
       this.checkSchedules();
     }, 60000);
-  
+
     // Set up crash monitoring
     this.crashMonitorInterval = setInterval(() => {
       this.checkMinerHealth();
     }, 30000);
-    
+
     // Run an initial schedule check and dump status
-    // First sync with API to ensure we have the latest schedule
-    await this.configService.forceSyncWithApi();
+    // DO NOT sync with API here - this causes race condition before registration is complete
+    // The BootstrapService will trigger the initial sync after successful registration
     this.checkSchedules();
     this.dumpScheduleStatus();
-    
+
     // Log configuration for monitoring intervals
-    this.loggingService.log('📋 Schedule monitoring configured: API sync every 5 minutes, local check every minute', 'INFO', 'miner-manager');
+    this.loggingService.log(
+      '📋 Schedule monitoring configured: Flightsheet check every minute, local schedule check every minute',
+      'INFO',
+      'miner-manager',
+    );
   }
 
   private async checkMinerHealth(): Promise<void> {
@@ -122,14 +150,25 @@ export class MinerManagerService implements OnModuleInit, OnApplicationShutdown 
       if (this.isManuallyStoppedByUser) {
         // After certain period (e.g., 10 minutes), reset the manual stop status
         const now = new Date();
-        if (this.manualStopTime && 
-            now.getTime() - this.manualStopTime.getTime() > this.MANUAL_STOP_TIMEOUT) {
-          this.loggingService.log('ℹ️ Manual stop timeout expired, resuming normal monitoring', 'INFO', 'miner-manager');
+        if (
+          this.manualStopTime &&
+          now.getTime() - this.manualStopTime.getTime() >
+            this.MANUAL_STOP_TIMEOUT
+        ) {
+          this.loggingService.log(
+            'ℹ️ Manual stop timeout expired, resuming normal monitoring',
+            'INFO',
+            'miner-manager',
+          );
           this.isManuallyStoppedByUser = false;
           this.manualStopTime = undefined;
         } else {
           // Skip health check during manual stop period
-          this.loggingService.log('ℹ️ Miner is manually stopped, skipping health check', 'DEBUG', 'miner-manager');
+          this.loggingService.log(
+            'ℹ️ Miner is manually stopped, skipping health check',
+            'DEBUG',
+            'miner-manager',
+          );
           return;
         }
       }
@@ -141,8 +180,13 @@ export class MinerManagerService implements OnModuleInit, OnApplicationShutdown 
         await this.logMinerError(error);
 
         if (this.crashCount >= this.MAX_CRASHES) {
-          const criticalError = 'Maximum crash count reached. Stopping miner...';
-          this.loggingService.log(`❌ ${criticalError}`, 'ERROR', 'miner-manager');
+          const criticalError =
+            'Maximum crash count reached. Stopping miner...';
+          this.loggingService.log(
+            `❌ ${criticalError}`,
+            'ERROR',
+            'miner-manager',
+          );
           await this.logMinerError(criticalError);
           return;
         }
@@ -152,63 +196,110 @@ export class MinerManagerService implements OnModuleInit, OnApplicationShutdown 
         this.crashCount = 0;
       }
     } catch (error) {
-      await this.logMinerError(`Health check failed: ${error.message}`, error.stack);
+      await this.logMinerError(
+        `Health check failed: ${error.message}`,
+        error.stack,
+      );
     }
   }
 
   public shouldBeMining(): boolean {
-      const config = this.configService.getConfig();
-      if (!config) {
-        this.loggingService.log('ℹ️ No config available, defaulting to always mining', 'DEBUG', 'miner-manager');
-        return true;
-      }
-      
-      if (!config.schedules.scheduledMining.enabled) {
-        this.loggingService.log('ℹ️ Scheduled mining disabled, mining allowed at any time', 'DEBUG', 'miner-manager');
-        return true;
-      }
+    const config = this.configService.getConfig();
+    if (!config) {
+      this.loggingService.log(
+        'ℹ️ No config available, defaulting to always mining',
+        'DEBUG',
+        'miner-manager',
+      );
+      return true;
+    }
 
-      const now = new Date();
-      const currentDay = now.toLocaleString('en-US', { weekday: 'long' }).toLowerCase();
-      const currentTime = now.toTimeString().split(' ')[0].substring(0, 5);
-      
-      this.loggingService.log(`🕒 Checking if mining should run at ${currentTime} on ${currentDay}`, 'DEBUG', 'miner-manager');
-      
-      // No periods configured means no mining allowed
-      if (!config.schedules.scheduledMining.periods || config.schedules.scheduledMining.periods.length === 0) {
-        this.loggingService.log('⚠️ No mining periods configured, mining not allowed', 'DEBUG', 'miner-manager');
-        return false;
-      }
+    if (!config.schedules.scheduledMining.enabled) {
+      this.loggingService.log(
+        'ℹ️ Scheduled mining disabled, mining allowed at any time',
+        'DEBUG',
+        'miner-manager',
+      );
+      return true;
+    }
 
-      const shouldMine = config.schedules.scheduledMining.periods.some(period => {
+    const now = new Date();
+    const currentDay = now
+      .toLocaleString('en-US', { weekday: 'long' })
+      .toLowerCase();
+    const currentTime = now.toTimeString().split(' ')[0].substring(0, 5);
+
+    this.loggingService.log(
+      `🕒 Checking if mining should run at ${currentTime} on ${currentDay}`,
+      'DEBUG',
+      'miner-manager',
+    );
+
+    // No periods configured means no mining allowed
+    if (
+      !config.schedules.scheduledMining.periods ||
+      config.schedules.scheduledMining.periods.length === 0
+    ) {
+      this.loggingService.log(
+        '⚠️ No mining periods configured, mining not allowed',
+        'DEBUG',
+        'miner-manager',
+      );
+      return false;
+    }
+
+    const shouldMine = config.schedules.scheduledMining.periods.some(
+      (period) => {
         // Skip if period doesn't have required properties
-        if (!period.days || !Array.isArray(period.days) || !period.startTime || !period.endTime) {
-          this.loggingService.log(`⚠️ Invalid period configuration: ${JSON.stringify(period)}`, 'WARN', 'miner-manager');
+        if (
+          !period.days ||
+          !Array.isArray(period.days) ||
+          !period.startTime ||
+          !period.endTime
+        ) {
+          this.loggingService.log(
+            `⚠️ Invalid period configuration: ${JSON.stringify(period)}`,
+            'WARN',
+            'miner-manager',
+          );
           return false;
         }
-        
+
         const inDay = period.days.includes(currentDay);
-        const inTimeRange = this.isTimeInRange(currentTime, period.startTime, period.endTime);
-        
+        const inTimeRange = this.isTimeInRange(
+          currentTime,
+          period.startTime,
+          period.endTime,
+        );
+
         if (inDay && inTimeRange) {
-          this.loggingService.log(`✅ Current time ${currentTime} is within schedule ${period.startTime}-${period.endTime} on ${currentDay}`, 'DEBUG', 'miner-manager');
+          this.loggingService.log(
+            `✅ Current time ${currentTime} is within schedule ${period.startTime}-${period.endTime} on ${currentDay}`,
+            'DEBUG',
+            'miner-manager',
+          );
           return true;
         }
         return false;
-      });
-      
-      if (!shouldMine) {
-        this.loggingService.log(`❌ Current time ${currentTime} is outside of all scheduled mining periods`, 'DEBUG', 'miner-manager');
-      }
-      
-      return shouldMine;
+      },
+    );
+
+    if (!shouldMine) {
+      this.loggingService.log(
+        `❌ Current time ${currentTime} is outside of all scheduled mining periods`,
+        'DEBUG',
+        'miner-manager',
+      );
+    }
+
+    return shouldMine;
   }
 
   public getMinerFromFlightsheet(): string | undefined {
     try {
-      const minerFolders = fs.readdirSync('apps').filter(folder =>
-        fs.existsSync(`apps/${folder}/config.json`)
-      );
+      const minerFolders = fs
+        .readdirSync('apps')
+        .filter((folder) => fs.existsSync(`apps/${folder}/config.json`));
 
       if (minerFolders.length === 0) {
         return undefined;
@@ -225,7 +316,9 @@ export class MinerManagerService implements OnModuleInit, OnApplicationShutdown 
 
   public isMinerRunning(): boolean {
     try {
-      const output = execSync(`screen -ls | grep ${this.minerScreen}`, { encoding: 'utf8' });
+      const output = execSync(`screen -ls | grep ${this.minerScreen}`, {
+        encoding: 'utf8',
+      });
       return output.includes(this.minerScreen);
     } catch {
       return false;
@@ -253,12 +346,21 @@ export class MinerManagerService implements OnModuleInit, OnApplicationShutdown 
       }
 
       execSync(`chmod +x ${minerExecutable}`);
-      exec(`screen -dmS ${this.minerScreen} ${minerExecutable} -c ${configPath}`);
+      exec(
+        `screen -dmS ${this.minerScreen} ${minerExecutable} -c ${configPath}`,
+      );
 
-      this.loggingService.log(`✅ Started miner: ${miner} with config ${configPath}`, 'INFO', 'miner-manager');
+      this.loggingService.log(
+        `✅ Started miner: ${miner} with config ${configPath}`,
+        'INFO',
+        'miner-manager',
+      );
       return true;
     } catch (error) {
-      this.logMinerError(`Failed to start miner: ${error.message}`, error.stack);
+      this.logMinerError(
+        `Failed to start miner: ${error.message}`,
+        error.stack,
+      );
       return false;
     }
   }
@@ -266,21 +368,33 @@ export class MinerManagerService implements OnModuleInit, OnApplicationShutdown 
   public stopMiner(isManualStop: boolean = false): boolean {
     try {
       if (!this.isMinerRunning()) {
-        this.loggingService.log('ℹ️ No miner session found to stop', 'INFO', 'miner-manager');
+        this.loggingService.log(
+          'ℹ️ No miner session found to stop',
+          'INFO',
+          'miner-manager',
+        );
         return true;
       }
 
       execSync(`screen -X -S ${this.minerScreen} quit`);
-      
+
       // Set the manual stop flag if applicable
       if (isManualStop) {
         this.isManuallyStoppedByUser = true;
         this.manualStopTime = new Date();
-        this.loggingService.log('✋ Miner manually stopped by user', 'INFO', 'miner-manager');
+        this.loggingService.log(
+          '✋ Miner manually stopped by user',
+          'INFO',
+          'miner-manager',
+        );
       } else {
-        this.loggingService.log('✅ Miner stopped successfully', 'INFO', 'miner-manager');
+        this.loggingService.log(
+          '✅ Miner stopped successfully',
+          'INFO',
+          'miner-manager',
+        );
       }
-      
+
       return true;
     } catch (error) {
       this.logMinerError(`Failed to stop miner: ${error.message}`, error.stack);
@@ -306,7 +420,11 @@ export class MinerManagerService implements OnModuleInit, OnApplicationShutdown 
       return false;
     }
 
-    this.loggingService.log('✅ Miner restarted successfully', 'INFO', 'miner-manager');
+    this.loggingService.log(
+      '✅ Miner restarted successfully',
+      'INFO',
+      'miner-manager',
+    );
     return true;
   }
 
@@ -322,61 +440,145 @@ export class MinerManagerService implements OnModuleInit, OnApplicationShutdown 
 
       return updated;
     } catch (error) {
-      await this.logMinerError(`Failed to update flightsheet: ${error.message}`, error.stack);
+      await this.logMinerError(
+        `Failed to update flightsheet: ${error.message}`,
+        error.stack,
+      );
       return false;
+    }
+  }
+
+  /**
+   * Call this after successful registration to trigger initial flightsheet fetch and start miner
+   */
+  public async triggerInitialFlightsheetFetchAndStart(): Promise<void> {
+    try {
+      this.loggingService.log(
+        '📡 Triggering initial flightsheet fetch after registration...',
+        'INFO',
+        'miner-manager',
+      );
+
+      const updated = await this.fetchAndUpdateFlightsheet();
+      if (updated) {
+        this.loggingService.log(
+          '✅ Flightsheet fetched successfully, attempting to start miner...',
+          'INFO',
+          'miner-manager',
+        );
+
+        const miner = this.getMinerFromFlightsheet();
+        if (miner) {
+          this.startMiner();
+        } else {
+          this.loggingService.log(
+            '❌ No miner found in flightsheet after fetch',
+            'ERROR',
+            'miner-manager',
+          );
+        }
+      } else {
+        this.loggingService.log(
+          '⚠️ Flightsheet fetch did not result in updates',
+          'WARN',
+          'miner-manager',
+        );
+      }
+    } catch (error) {
+      await this.logMinerError(
+        `Failed to trigger initial flightsheet fetch: ${error instanceof Error ? error.message : String(error)}`,
+        error instanceof Error ? error.stack || '' : '',
+      );
     }
   }
 
   private checkSchedules() {
     const config = this.configService.getConfig();
     if (!config) {
-      this.loggingService.log('⚠️ Cannot check schedules: No config found', 'WARN', 'miner-manager');
+      this.loggingService.log(
+        '⚠️ Cannot check schedules: No config found',
+        'WARN',
+        'miner-manager',
+      );
       return;
     }
-    
+
     const now = new Date();
-    const currentDay = now.toLocaleString('en-US', { weekday: 'long' }).toLowerCase();
+    const currentDay = now
+      .toLocaleString('en-US', { weekday: 'long' })
+      .toLowerCase();
     const currentTime = now.toTimeString().split(' ')[0].substring(0, 5);
-    
-    this.loggingService.log(`🕒 Checking schedules at ${currentTime} on ${currentDay}`, 'DEBUG', 'miner-manager');
+
+    this.loggingService.log(
+      `🕒 Checking schedules at ${currentTime} on ${currentDay}`,
+      'DEBUG',
+      'miner-manager',
+    );
 
     // Check scheduled mining periods
     if (config.schedules?.scheduledMining?.enabled) {
       const periods = config.schedules.scheduledMining.periods || [];
-      
+
       let shouldMine = false;
-      
+
       // First check if we're in any mining period
       for (const period of periods) {
         // Safety check for period properties
-        if (!period.days || !Array.isArray(period.days) || !period.startTime || !period.endTime) {
-          this.loggingService.log(`⚠️ Invalid period configuration: ${JSON.stringify(period)}`, 'WARN', 'miner-manager');
+        if (
+          !period.days ||
+          !Array.isArray(period.days) ||
+          !period.startTime ||
+          !period.endTime
+        ) {
+          this.loggingService.log(
+            `⚠️ Invalid period configuration: ${JSON.stringify(period)}`,
+            'WARN',
+            'miner-manager',
+          );
           continue;
         }
-        
+
         if (period.days.includes(currentDay)) {
-          if (this.isTimeInRange(currentTime, period.startTime, period.endTime)) {
+          if (
+            this.isTimeInRange(currentTime, period.startTime, period.endTime)
+          ) {
             shouldMine = true;
             if (!this.isMinerRunning()) {
-              this.loggingService.log(`⏰ Starting miner for scheduled period: ${period.startTime} - ${period.endTime} on ${currentDay}`, 'INFO', 'miner-manager');
+              this.loggingService.log(
+                `⏰ Starting miner for scheduled period: ${period.startTime} - ${period.endTime} on ${currentDay}`,
+                'INFO',
+                'miner-manager',
+              );
               this.startMiner();
             } else {
-              this.loggingService.log(`✅ Miner already running as scheduled: ${period.startTime} - ${period.endTime} on ${currentDay}`, 'DEBUG', 'miner-manager');
+              this.loggingService.log(
+                `✅ Miner already running as scheduled: ${period.startTime} - ${period.endTime} on ${currentDay}`,
+                'DEBUG',
+                'miner-manager',
+              );
             }
             break;
           }
         }
       }
-      
+
       // If we shouldn't be mining but miner is running, stop it
       if (!shouldMine && this.isMinerRunning()) {
-        this.loggingService.log(`⏰ Stopping miner outside scheduled periods on ${currentDay} at ${currentTime}`, 'INFO', 'miner-manager');
+        this.loggingService.log(
+          `⏰ Stopping miner outside scheduled periods on ${currentDay} at ${currentTime}`,
+          'INFO',
+          'miner-manager',
+        );
         this.stopMiner();
       }
     } else {
       // If scheduling is disabled, make sure miner is running
       if (!this.isMinerRunning()) {
-        this.loggingService.log('ℹ️ Schedule disabled, ensuring miner is running', 'DEBUG', 'miner-manager');
+        this.loggingService.log(
+          'ℹ️ Schedule disabled, ensuring miner is running',
+          'DEBUG',
+          'miner-manager',
+        );
         this.startMiner();
       }
     }
@@ -386,47 +588,59 @@ export class MinerManagerService implements OnModuleInit, OnApplicationShutdown 
     for (const restartTime of restarts) {
       // Since scheduledRestarts is now a string array, compare directly with currentTime
       if (currentTime === restartTime) {
-        this.loggingService.log(`⏰ Restarting miner for scheduled restart at ${restartTime} on ${currentDay}`, 'INFO', 'miner-manager');
+        this.loggingService.log(
+          `⏰ Restarting miner for scheduled restart at ${restartTime} on ${currentDay}`,
+          'INFO',
+          'miner-manager',
+        );
         // Use void to silence the unhandled promise warning
         void this.restartMiner();
       }
     }
   }
 
-  private isTimeInRange(currentTime: string, startTime: string, endTime: string): boolean {
+  private isTimeInRange(
+    currentTime: string,
+    startTime: string,
+    endTime: string,
+  ): boolean {
     // Convert all times to minutes for easier comparison
     const current = this.timeToMinutes(currentTime);
     const start = this.timeToMinutes(startTime);
     const end = this.timeToMinutes(endTime);
-    
+
     // Log the comparison for debugging
     this.loggingService.log(
       `⏱️ Time comparison - Current: ${currentTime}(${current}), Start: ${startTime}(${start}), End: ${endTime}(${end})`,
       'DEBUG',
-      'miner-manager'
+      'miner-manager',
     );
-    
+
     // Normal time range (e.g., 08:00-17:00)
     if (start <= end) {
       return current >= start && current <= end;
-    } 
+    }
     // Overnight time range (e.g., 22:00-06:00)
     else {
       return current >= start || current <= end;
     }
   }
-  
+
   // Helper to convert HH:MM to minutes
   private timeToMinutes(time: string): number {
     const [hours, minutes] = time.split(':').map(Number);
-    return (hours * 60) + minutes;
+    return hours * 60 + minutes;
   }
 
   private async logMinerError(message: string, stack?: string): Promise<void> {
     try {
       const config = this.configService.getConfig();
       if (!config?.minerId) {
-        this.loggingService.log('❌ Cannot log error: No minerId found', 'ERROR', 'miner-manager');
+        this.loggingService.log(
+          '❌ Cannot log error: No minerId found',
+          'ERROR',
+          'miner-manager',
+        );
         return;
       }
 
@@ -435,23 +649,27 @@ export class MinerManagerService implements OnModuleInit, OnApplicationShutdown 
         wasRunning: this.isMinerRunning(),
         crashCount: this.crashCount,
         lastCrashTime: this.lastCrashTime?.toISOString(),
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
       };
 
       await this.apiService.logMinerError(
         config.minerId,
         message,
         stack || '',
-        additionalInfo
+        additionalInfo,
       );
 
       this.lastCrashTime = new Date();
-      this.loggingService.log('✅ Miner error logged to API', 'INFO', 'miner-manager');
+      this.loggingService.log(
+        '✅ Miner error logged to API',
+        'INFO',
+        'miner-manager',
+      );
     } catch (error) {
       this.loggingService.log(
         `❌ Failed to log miner error to API: ${error.message}`,
         'ERROR',
-        'miner-manager'
+        'miner-manager',
       );
     }
   }
@@ -463,41 +681,57 @@ export class MinerManagerService implements OnModuleInit, OnApplicationShutdown 
     try {
       const config = this.configService.getConfig();
       if (!config) {
-        this.loggingService.log('No config available for schedule status', 'DEBUG', 'miner-manager');
+        this.loggingService.log(
+          'No config available for schedule status',
+          'DEBUG',
+          'miner-manager',
+        );
         return;
       }
 
       const now = new Date();
-      const currentDay = now.toLocaleString('en-US', { weekday: 'long' }).toLowerCase();
+      const currentDay = now
+        .toLocaleString('en-US', { weekday: 'long' })
+        .toLowerCase();
       const currentTime = now.toTimeString().split(' ')[0].substring(0, 5);
-      
-      const schedulingEnabled = config.schedules?.scheduledMining?.enabled || false;
+
+      const schedulingEnabled =
+        config.schedules?.scheduledMining?.enabled || false;
       const periods = config.schedules?.scheduledMining?.periods || [];
       const restarts = config.schedules?.scheduledRestarts || [];
-      
+
       this.loggingService.log(
         `📊 SCHEDULE STATUS - Day: ${currentDay}, Time: ${currentTime}, Enabled: ${schedulingEnabled}, Periods: ${periods.length}, Restarts: ${restarts.length}`,
         'INFO',
-        'miner-manager'
+        'miner-manager',
       );
-      
+
       if (periods.length > 0) {
         periods.forEach((period, index) => {
           const inDay = period.days?.includes(currentDay);
-          const inTimeRange = period.startTime && period.endTime ? 
-            this.isTimeInRange(currentTime, period.startTime, period.endTime) : 
-            false;
-            
+          const inTimeRange =
+            period.startTime && period.endTime
+              ? this.isTimeInRange(
+                  currentTime,
+                  period.startTime,
+                  period.endTime,
+                )
+              : false;
+
           this.loggingService.log(
             `📆 Period #${index + 1}: ${period.startTime}-${period.endTime}, Days: ${period.days?.join(',')}, ` +
-            `Active: ${inDay && inTimeRange}`,
+              `Active: ${inDay && inTimeRange}`,
             'INFO',
-            'miner-manager'
+            'miner-manager',
           );
         });
       }
     } catch (error) {
-      this.loggingService.log(`Error dumping schedule status: ${error.message}`, 'ERROR', 'miner-manager');
+      this.loggingService.log(
+        `Error dumping schedule status: ${error.message}`,
+        'ERROR',
+        'miner-manager',
+      );
     }
   }
 
@@ -511,16 +745,19 @@ export class MinerManagerService implements OnModuleInit, OnApplicationShutdown 
       if (!config) {
         return {
           status: 'error',
-          message: 'No config available'
+          message: 'No config available',
         };
       }
 
       const now = new Date();
-      const currentDay = now.toLocaleString('en-US', { weekday: 'long' }).toLowerCase();
+      const currentDay = now
+        .toLocaleString('en-US', { weekday: 'long' })
+        .toLowerCase();
       const currentTime = now.toTimeString().split(' ')[0].substring(0, 5);
       const currentMinutes = this.timeToMinutes(currentTime);
-      
-      const schedulingEnabled = config.schedules?.scheduledMining?.enabled || false;
+
+      const schedulingEnabled =
+        config.schedules?.scheduledMining?.enabled || false;
       const periods = config.schedules?.scheduledMining?.periods || [];
       const restarts = config.schedules?.scheduledRestarts || [];
 
@@ -529,7 +766,7 @@ export class MinerManagerService implements OnModuleInit, OnApplicationShutdown 
         const inDay = period.days?.includes(currentDay) || false;
         const start = this.timeToMinutes(period.startTime);
         const end = this.timeToMinutes(period.endTime);
-        
+
         let inTimeRange = false;
         if (start <= end) {
           // Normal time range
@@ -538,9 +775,9 @@ export class MinerManagerService implements OnModuleInit, OnApplicationShutdown 
           // Overnight time range
           inTimeRange = currentMinutes >= start || currentMinutes <= end;
         }
-        
+
         const isActive = inDay && inTimeRange;
-        
+
         return {
           id: index + 1,
           startTime: period.startTime,
@@ -548,44 +785,47 @@ export class MinerManagerService implements OnModuleInit, OnApplicationShutdown 
           days: period.days,
           inDay,
           inTimeRange,
-          isActive
+          isActive,
         };
       });
-      
+
       // Next restart time
       let nextRestart = null;
       if (restarts.length > 0) {
         // Find the next restart time
         const futureRestarts = restarts
-          .map(time => {
+          .map((time) => {
             const timeMinutes = this.timeToMinutes(time);
-            return { 
-              time, 
-              minutes: timeMinutes, 
+            return {
+              time,
+              minutes: timeMinutes,
               isToday: timeMinutes > currentMinutes,
-              timeUntil: timeMinutes > currentMinutes ? timeMinutes - currentMinutes : (24 * 60) - currentMinutes + timeMinutes
+              timeUntil:
+                timeMinutes > currentMinutes
+                  ? timeMinutes - currentMinutes
+                  : 24 * 60 - currentMinutes + timeMinutes,
             };
           })
           .sort((a, b) => a.timeUntil - b.timeUntil);
-          
+
         nextRestart = futureRestarts.length > 0 ? futureRestarts[0] : null;
       }
-      
+
       return {
         currentDay,
         currentTime,
         schedulingEnabled,
-        activePeriod: periodStatuses.find(p => p.isActive) || null,
+        activePeriod: periodStatuses.find((p) => p.isActive) || null,
         allPeriods: periodStatuses,
         nextRestart,
         restartTimes: restarts,
         shouldMine: this.shouldBeMining(),
-        isRunning: this.isMinerRunning()
+        isRunning: this.isMinerRunning(),
       };
     } catch (error) {
       return {
         status: 'error',
-        message: `Failed to get schedule status: ${error.message}`
+        message: `Failed to get schedule status: ${error.message}`,
       };
     }
   }
@@ -594,6 +834,10 @@ export class MinerManagerService implements OnModuleInit, OnApplicationShutdown 
     this.clearIntervals();
     MinerManagerService.isInitialized = false;
     this.stopMiner();
-    this.loggingService.log('🛑 MinerManager shutdown complete', 'INFO', 'miner-manager');
+    this.loggingService.log(
+      '🛑 MinerManager shutdown complete',
+      'INFO',
+      'miner-manager',
+    );
   }
 }
