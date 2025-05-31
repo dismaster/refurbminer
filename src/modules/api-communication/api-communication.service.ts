@@ -29,15 +29,27 @@ export class ApiCommunicationService {
   /** 📝 Registers the miner if not already registered */
   async registerMiner(metadata: any, minerIp: string): Promise<any> {
     try {
+      this.loggingService.log(`Registering miner with IP: ${minerIp}`, 'INFO', 'api');
+      const url = `${this.apiUrl}/api/miners/register`;
+      this.loggingService.log(`📡 Sending registration to: ${url}`, 'DEBUG', 'api');
+      
       const response = await firstValueFrom(
-        this.httpService.post(`${this.apiUrl}/api/miners/register`, {
+        this.httpService.post(url, {
           rigToken: this.rigToken,
           metadata,
           minerIp,
         }),
       );
+      
+      if (!response.data || !response.data.minerId) {
+        this.loggingService.log('⚠️ API registration response missing minerId', 'WARN', 'api');
+      } else {
+        this.loggingService.log(`✅ Miner registered successfully with ID: ${response.data.minerId}`, 'INFO', 'api');
+      }
+      
       return response.data;
     } catch (error) {
+      this.loggingService.log(`❌ Registration failed: ${error.message}`, 'ERROR', 'api');
       throw new HttpException('Failed to register miner', HttpStatus.BAD_REQUEST);
     }
   }

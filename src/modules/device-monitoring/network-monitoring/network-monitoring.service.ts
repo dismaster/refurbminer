@@ -18,7 +18,28 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
   private wasDisconnected = false;
   private networkMonitoringInterval?: NodeJS.Timeout;
   private retryCount = 0;
-  private readonly MAX_RETRIES = 3;
+  private consecutiveSuccesses = 0;
+  private readonly MAX_RETRIES = 10; // Increased from 5
+  private readonly MIN_CONSECUTIVE_SUCCESSES = 3;
+  private readonly BASE_RETRY_DELAY = 5000; // 5 seconds
+  private recoveryInProgress = false;
+  private lastRecoveryTime = 0;
+  private readonly MIN_RECOVERY_INTERVAL = 120000; // 2 minutes
+  private connectionStabilityTimeout?: NodeJS.Timeout; // New property for delayed reset
+
+  // New properties for better retry management
+  private dynamicRetryDelay = 5000; // Starting with 5 seconds
+  private readonly MAX_RETRY_DELAY = 300000; // 5 minutes max delay
+  private readonly RETRY_BACKOFF_FACTOR = 1.5; // Exponential backoff factor
+
+  // New properties for tracking retry patterns
+  private disconnectionHistory: { timestamp: number; duration?: number }[] = [];
+  private readonly MAX_HISTORY_SIZE = 10;
+  private lastConnectedTime = Date.now();
+  
+  // New property to track network stability
+  private stableConnectionCounter = 0;
+  private readonly STABILITY_THRESHOLD = 5;
 
   constructor(
     private readonly osDetectionService: OsDetectionService,
@@ -56,7 +77,8 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
       try {
         const result = execSync(`${pingCommand} ${target}`, { encoding: 'utf8' });
         if (result.includes('1 received')) {
-          this.retryCount = 0;
+          // Do not reset retry counter here, 
+          // let checkAndHandleConnectivity handle the reset logic
           return true;
         }
       } catch {
@@ -103,22 +125,47 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
       this.reconnectToConfiguredNetworks();
       
       // Wait a bit for reconnection to complete before continuing with other checks
-      await new Promise(resolve => setTimeout(resolve, 8000));
+      await new Promise((resolve) => setTimeout(resolve, 8000));
     }
     
     // Continue with existing connectivity checks
     if (!this.checkNetworkConnectivity()) {
       connectivityLost = true;
+      
+      // Increment retry counter and apply exponential backoff
       this.retryCount++;
+      const backoffDelay = Math.min(
+        this.BASE_RETRY_DELAY * Math.pow(this.RETRY_BACKOFF_FACTOR, this.retryCount - 1),
+        this.MAX_RETRY_DELAY
+      );
       
       this.loggingService.log(
-        `⚠️ Network connectivity lost (Attempt ${this.retryCount}/${this.MAX_RETRIES})`, 
+        `⚠️ Network connectivity lost (Attempt ${this.retryCount}/${this.MAX_RETRIES}, next retry in ${Math.round(backoffDelay/1000)}s)`, 
         'WARN', 
         'network-monitoring'
       );
 
+      // Reset consecutive successes counter
+      this.consecutiveSuccesses = 0;
+
+      // If we've reached max retries, perform recovery actions
       if (this.retryCount >= this.MAX_RETRIES) {
+        // Reset retry counter to avoid continuous recovery attempts
+        this.retryCount = Math.floor(this.MAX_RETRIES / 2);
         await this.performRecoveryActions(osType);
+      }
+    } else {
+      // Connection successful, increment consecutive successes
+      this.consecutiveSuccesses++;
+      
+      // If we had retry issues but now have consecutive successes, gradually reset retry counter
+      if (this.retryCount > 0 && this.consecutiveSuccesses >= this.MIN_CONSECUTIVE_SUCCESSES) {
+        this.retryCount = Math.max(0, this.retryCount - 1);
+        this.loggingService.log(
+          `✅ Network stable, reducing retry counter to ${this.retryCount}`,
+          'INFO', 
+          'network-monitoring'
+        );
       }
     }
 
@@ -140,6 +187,8 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
       this.retryCount = 0;
       await this.logNetworkRestored();
     }
+
+    this.manageRetryPatterns(connectivityLost);
   }
 
   /** 📝 Start network monitoring */
@@ -154,15 +203,48 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
 
   /** 📝 Perform recovery actions */
   private async performRecoveryActions(osType: string): Promise<void> {
+    // Check if recovery was recently attempted to avoid too frequent recoveries
+    const now = Date.now();
+    if (this.recoveryInProgress || (now - this.lastRecoveryTime < this.MIN_RECOVERY_INTERVAL)) {
+      this.loggingService.log('⏳ Recovery already in progress or too soon after last attempt, skipping...', 'INFO', 'network-monitoring');
+      return;
+    }
+
+    this.recoveryInProgress = true;
+    this.lastRecoveryTime = now;
+    
     try {
+      this.loggingService.log('🔄 Starting network recovery process...', 'INFO', 'network-monitoring');
+      
       this.enableDisplay();
+      
+      // First try simple interface restart
       this.restartNetworkInterface();
-
-      if (osType === 'termux') {
-        await new Promise(resolve => setTimeout(resolve, 5000));
-        execSync('termux-wifi-scaninfo', { encoding: 'utf8' });
+      
+      // Wait and check if that worked
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+      
+      // If we still can't connect, try more advanced recovery
+      if (!this.checkNetworkConnectivity()) {
+        this.loggingService.log('🔍 Basic recovery didn\'t work, trying advanced methods...', 'INFO', 'network-monitoring');
+        
+        if (osType === 'termux') {
+          // Try to scan for available networks
+          try {
+            execSync('termux-wifi-scaninfo', { encoding: 'utf8', timeout: 10000 });
+            await new Promise((resolve) => setTimeout(resolve, 3000));
+            
+            // If still not connected, try reconnection
+            if (!this.checkNetworkConnectivity()) {
+              this.reconnectToConfiguredNetworks();
+            }
+          } catch (scanError) {
+            this.loggingService.log(`⚠️ WiFi scan failed, trying alternative methods: ${scanError}`, 'WARN', 'network-monitoring');
+            this.reconnectToConfiguredNetworks();
+          }
+        }
       }
-
+      
       this.loggingService.log('✅ Recovery actions completed', 'INFO', 'network-monitoring');
     } catch (error) {
       this.loggingService.log(
@@ -170,6 +252,8 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
         'ERROR', 
         'network-monitoring'
       );
+    } finally {
+      this.recoveryInProgress = false;
     }
   }
 
@@ -467,5 +551,53 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
     } catch {
       return false;
     }
+  }
+
+  /** 📝 Manage retry patterns and disconnection history */
+  private manageRetryPatterns(connectivityLost: boolean): void {
+    const now = Date.now();
+
+    // Clean up old history entries
+    this.disconnectionHistory = this.disconnectionHistory.filter(entry => now - entry.timestamp <= this.MIN_RECOVERY_INTERVAL);
+
+    if (connectivityLost) {
+      // Log the disconnection event
+      this.disconnectionHistory.push({ timestamp: now });
+      this.loggingService.log('📉 Connectivity lost, logging event...', 'INFO', 'network-monitoring');
+      
+      // If we have enough consecutive failures, consider a recovery attempt
+      if (this.disconnectionHistory.length >= this.MIN_CONSECUTIVE_SUCCESSES) {
+        const firstEntry = this.disconnectionHistory[0];
+        const duration = now - firstEntry.timestamp;
+
+        this.loggingService.log(`⏱️ Disconnection duration: ${duration}ms`, 'DEBUG', 'network-monitoring');
+
+        // If the duration of disconnections is increasing, it's a sign of unstable connectivity
+        if (this.isIncreasingDisconnectionDuration()) {
+          this.loggingService.log('⚠️ Increasing disconnection duration detected, triggering recovery actions...', 'WARN', 'network-monitoring');
+          this.performRecoveryActions(this.osDetectionService.detectOS());
+        }
+      }
+    } else {
+      // Connectivity is restored, reset the history
+      this.loggingService.log('✅ Connectivity restored, resetting disconnection history', 'INFO', 'network-monitoring');
+      this.disconnectionHistory = [];
+    }
+  }
+
+  /** 📈 Check if the disconnection duration is increasing */
+  private isIncreasingDisconnectionDuration(): boolean {
+    if (this.disconnectionHistory.length < 2) {
+      return false;
+    }
+
+    const durations = this.disconnectionHistory.map((entry, index) => {
+      if (index === 0) return 0;
+      return entry.timestamp - this.disconnectionHistory[index - 1].timestamp;
+    }).slice(1); // Exclude the first entry (no duration)
+
+    // Check if the last few durations are increasing
+    const recentDurations = durations.slice(-3);
+    return recentDurations.every((val, i, arr) => i === 0 || val > arr[i - 1]);
   }
 }

@@ -39,7 +39,14 @@ export class BootstrapService implements OnModuleInit {
       await this.setupAdbOptimizations();
     }
     
-    await this.registerMiner();
+    // Register miner and verify we have a valid miner ID
+    const validMinerID = await this.registerMiner();
+    if (!validMinerID) {
+      const errorMsg = 'Critical error: Invalid or missing miner ID. Please check your configuration or reinstall the application.';
+      this.loggingService.log(errorMsg, 'ERROR', 'bootstrap');
+      throw new Error(errorMsg); // This will prevent the application from starting
+    }
+    
     this.loggingService.log('Bootstrap process completed!', 'INFO', 'bootstrap');
   }
 
@@ -240,7 +247,7 @@ export class BootstrapService implements OnModuleInit {
   }
 
   /** ✅ Register Miner with API if needed */
-  private async registerMiner() {
+  private async registerMiner(): Promise<boolean> {
     try {
       // Initialize config with TypeScript interface to avoid type errors
       const defaultConfig: MinerConfig = {
@@ -287,12 +294,14 @@ export class BootstrapService implements OnModuleInit {
             config.rigId = response.rigId;
             fs.writeFileSync(this.configPath, JSON.stringify(config, null, 2));
             this.loggingService.log(`Miner registered successfully! minerId: ${config.minerId}`, 'INFO', 'bootstrap');
+            return true;
           } else {
             this.loggingService.log('API returned incomplete registration data, using default values', 'WARN', 'bootstrap');
             // Set temporary values to prevent continuous registration attempts
             config.minerId = 'temp-' + Date.now();
             config.rigId = 'temp-' + Date.now();
             fs.writeFileSync(this.configPath, JSON.stringify(config, null, 2));
+            return false; // Invalid miner ID
           }
         } catch (apiError: any) {
           this.loggingService.log(`Miner registration failed: ${apiError.message}`, 'ERROR', 'bootstrap');
@@ -301,8 +310,18 @@ export class BootstrapService implements OnModuleInit {
           config.minerId = 'offline-' + Date.now();
           config.rigId = 'offline-' + Date.now();
           fs.writeFileSync(this.configPath, JSON.stringify(config, null, 2));
+          return false; // API error occurred
         }
       }
+      
+      // Check if we have a proper miner ID (not a temporary one)
+      const isTemporary = config.minerId && 
+        (config.minerId.startsWith('temp-') || 
+         config.minerId.startsWith('offline-') || 
+         config.minerId.startsWith('fallback-'));
+         
+      return !isTemporary;
+      
     } catch (error: any) {
       this.loggingService.log(`Register miner error: ${error.message}`, 'ERROR', 'bootstrap');
       // Make sure we still have a config file to prevent future errors
@@ -317,6 +336,7 @@ export class BootstrapService implements OnModuleInit {
       } catch (writeError: any) {
         this.loggingService.log(`Failed to write fallback config: ${writeError.message}`, 'ERROR', 'bootstrap');
       }
+      return false; // Error occurred
     }
   }
 
