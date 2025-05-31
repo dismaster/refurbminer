@@ -246,97 +246,64 @@ export class BootstrapService implements OnModuleInit {
     });
   }
 
-  /** ✅ Register Miner with API if needed */
+  /** ✅ Register Miner with API */
   private async registerMiner(): Promise<boolean> {
+    interface RegisterResponse {
+      minerId: string;
+      rigId?: string;
+    }
     try {
-      // Initialize config with TypeScript interface to avoid type errors
-      const defaultConfig: MinerConfig = {
+      // Initialize config
+      let config: MinerConfig = {
         minerId: undefined,
-        rigId: undefined
+        rigId: undefined,
       };
-      
-      let config: MinerConfig = {...defaultConfig};
-      
-      // Safely read the config file
+      // Safely read existing config if available
       try {
         if (fs.existsSync(this.configPath)) {
-          const configContent = fs.readFileSync(this.configPath, 'utf8');
-          if (configContent && configContent.trim()) {
-            const parsedConfig = JSON.parse(configContent);
-            // Ensure we have the correct type with our properties
-            config = {...defaultConfig, ...parsedConfig};
-          } else {
-            this.loggingService.log('Config file is empty, will create new configuration', 'INFO', 'bootstrap');
-          }
-        } else {
-          this.loggingService.log('Config file not found, will create new configuration', 'INFO', 'bootstrap');
-          // Ensure directory exists
-          const configDir = path.dirname(this.configPath);
-          if (!fs.existsSync(configDir)) {
-            fs.mkdirSync(configDir, { recursive: true });
-          }
+          const rawConfig = fs.readFileSync(this.configPath, 'utf8');
+          config = JSON.parse(rawConfig);
         }
-      } catch (readError: any) {
-        this.loggingService.log(`Error reading config: ${readError.message}, will create new configuration`, 'WARN', 'bootstrap');
+      } catch (readError) {
+        this.loggingService.log(
+          `Config read error: ${String(readError)}`,
+          'ERROR',
+          'bootstrap',
+        );
       }
-      
-      // Check if we need to register
-      if (!config.minerId || !config.rigId) {
-        this.loggingService.log('No valid minerId found, registering miner...', 'INFO', 'bootstrap');
-        
-        try {
-          const metadata = this.deviceMonitoringService.getSystemInfo();
-          const ipAddress = this.deviceMonitoringService.getIPAddress();
-          const response: any = await this.apiService.registerMiner(metadata, ipAddress);
-          
-          if (response && response.minerId && response.rigId) {
-            config.minerId = response.minerId;
-            config.rigId = response.rigId;
-            fs.writeFileSync(this.configPath, JSON.stringify(config, null, 2));
-            this.loggingService.log(`Miner registered successfully! minerId: ${config.minerId}`, 'INFO', 'bootstrap');
-            return true;
-          } else {
-            this.loggingService.log('API returned incomplete registration data, using default values', 'WARN', 'bootstrap');
-            // Set temporary values to prevent continuous registration attempts
-            config.minerId = 'temp-' + Date.now();
-            config.rigId = 'temp-' + Date.now();
-            fs.writeFileSync(this.configPath, JSON.stringify(config, null, 2));
-            return false; // Invalid miner ID
-          }
-        } catch (apiError: any) {
-          this.loggingService.log(`Miner registration failed: ${apiError.message}`, 'ERROR', 'bootstrap');
-          
-          // Create temporary ID to prevent repeated registration attempts
-          config.minerId = 'offline-' + Date.now();
-          config.rigId = 'offline-' + Date.now();
-          fs.writeFileSync(this.configPath, JSON.stringify(config, null, 2));
-          return false; // API error occurred
-        }
+      // Always attempt to register with API, even if we have a local ID
+      const metadata = this.deviceMonitoringService.getSystemInfo();
+      const ipAddress = this.deviceMonitoringService.getIPAddress();
+      const response = await this.apiService.registerMiner(metadata, ipAddress) as RegisterResponse | undefined;
+      if (response && typeof response.minerId === 'string' && response.minerId.length > 0) {
+        // ALWAYS use the API's minerId and rigId
+        config.minerId = response.minerId;
+        config.rigId = response.rigId || '';
+        // Save the updated config
+        fs.writeFileSync(this.configPath, JSON.stringify(config, null, 2));
+        this.loggingService.log(
+          `Miner registered with ID: ${response.minerId}`,
+          'INFO',
+          'bootstrap',
+        );
+        return true;
+      } else {
+        this.loggingService.log(
+          'Registration failed: Invalid response from API',
+          'ERROR',
+          'bootstrap',
+        );
+        // Do NOT create any local/fallback minerId, just return false to keep the registration loop running
+        return false;
       }
-      
-      // Check if we have a proper miner ID (not a temporary one)
-      const isTemporary = config.minerId && 
-        (config.minerId.startsWith('temp-') || 
-         config.minerId.startsWith('offline-') || 
-         config.minerId.startsWith('fallback-'));
-         
-      return !isTemporary;
-      
-    } catch (error: any) {
-      this.loggingService.log(`Register miner error: ${error.message}`, 'ERROR', 'bootstrap');
-      // Make sure we still have a config file to prevent future errors
-      try {
-        if (!fs.existsSync(this.configPath)) {
-          const fallbackConfig: MinerConfig = {
-            minerId: 'fallback-' + Date.now(),
-            rigId: 'fallback-' + Date.now()
-          };
-          fs.writeFileSync(this.configPath, JSON.stringify(fallbackConfig, null, 2));
-        }
-      } catch (writeError: any) {
-        this.loggingService.log(`Failed to write fallback config: ${writeError.message}`, 'ERROR', 'bootstrap');
-      }
-      return false; // Error occurred
+    } catch (error) {
+      this.loggingService.log(
+        `Registration failed: ${String(error)}`,
+        'ERROR',
+        'bootstrap',
+      );
+      // Do NOT create any local/fallback minerId, just return false to keep the registration loop running
+      return false;
     }
   }
 
