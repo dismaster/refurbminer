@@ -3,6 +3,7 @@ import { LoggingService } from '../logging/logging.service';
 import { ApiCommunicationService } from '../api-communication/api-communication.service';
 import { DeviceMonitoringService } from '../device-monitoring/device-monitoring.service';
 import { MinerManagerService } from '../miner-manager/miner-manager.service';
+import { ConfigService } from '../config/config.service';
 import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
@@ -23,12 +24,32 @@ export class BootstrapService implements OnModuleInit {
     private readonly apiService: ApiCommunicationService,
     private readonly deviceMonitoringService: DeviceMonitoringService,
     private readonly minerManagerService: MinerManagerService,
+    private readonly configService: ConfigService, // <-- inject ConfigService
   ) {}
 
   async onModuleInit() {
     console.log('⚡ [DEBUG] BootstrapService is running...');
     this.loggingService.log('Initializing Bootstrap Service...', 'INFO', 'bootstrap');
     await this.ensureConfigExists();
+
+    // --- ENFORCE: Do not proceed until minerId is assigned by backend ---
+    let validMinerID = false;
+    while (!validMinerID) {
+      validMinerID = await this.registerMiner();
+      if (!validMinerID) {
+        this.loggingService.log(
+          'Waiting for backend-assigned minerId. Retrying registration in 10 seconds...',
+          'ERROR',
+          'bootstrap',
+        );
+        await new Promise((res) => setTimeout(res, 10000));
+      }
+    }
+    // --- END ENFORCE ---
+
+    // Now that registration is complete, trigger config sync and periodic sync
+    await this.configService.triggerConfigSyncAfterRegistration();
+
     await this.checkCPUCompatibility();
     await this.verifyDependencies();
     await this.ensureExecutables();
@@ -39,15 +60,11 @@ export class BootstrapService implements OnModuleInit {
       await this.setupAdbOptimizations();
     }
     
-    // Register miner and verify we have a valid miner ID
-    const validMinerID = await this.registerMiner();
-    if (!validMinerID) {
-      const errorMsg = 'Critical error: Invalid or missing miner ID. Please check your configuration or reinstall the application.';
-      this.loggingService.log(errorMsg, 'ERROR', 'bootstrap');
-      throw new Error(errorMsg); // This will prevent the application from starting
-    }
-    
-    this.loggingService.log('Bootstrap process completed!', 'INFO', 'bootstrap');
+    this.loggingService.log(
+      'Bootstrap process completed!',
+      'INFO',
+      'bootstrap',
+    );
   }
 
   /** ✅ Ensure local configuration file exists */
@@ -59,49 +76,80 @@ export class BootstrapService implements OnModuleInit {
     }
 
     if (!fs.existsSync(this.configPath)) {
-      this.loggingService.log('Config file missing, creating new one...', 'WARN', 'bootstrap');
-      fs.writeFileSync(this.configPath, JSON.stringify({}, null, 2)); // Create empty JSON file
+      this.loggingService.log(
+        'Config file missing, creating new one...',
+        'WARN',
+        'bootstrap',
+      );
+      // Create empty config with NO minerId, so nothing can proceed until registration
+      fs.writeFileSync(
+        this.configPath,
+        JSON.stringify({ minerId: '', rigId: '' }, null, 2),
+      );
     }
   }
 
   /** ✅ Check CPU Compatibility */
   private async checkCPUCompatibility() {
     try {
-      const systemInfo = this.deviceMonitoringService.getSystemInfo();
-      const { architecture, aesSupport, pmullSupport } = systemInfo.cpuInfo;
-      const cpuModel = systemInfo.cpuInfo.model || '';
-      
-      // Check if CPU is 64-bit
-      if (architecture !== '64-bit') {
-        this.loggingService.log('Warning: CPU or OS is not 64-bit, mining may be less efficient', 'WARN', 'bootstrap');
+      const systemInfo = this.deviceMonitoringService.getSystemInfo() as {
+        cpuInfo?: {
+          architecture?: string;
+          aesSupport?: boolean;
+          pmullSupport?: boolean;
+          model?: string;
+        };
+      };
+      const cpuInfo = systemInfo.cpuInfo || {};
+      const architecture = cpuInfo.architecture || '';
+      const aesSupport = !!cpuInfo.aesSupport;
+      const pmullSupport = !!cpuInfo.pmullSupport;
+      const cpuModel = cpuInfo.model || '';
+
+      if (!architecture.includes('64')) {
+        this.loggingService.log(
+          'Warning: CPU or OS is not 64-bit, mining may be less efficient',
+          'WARN',
+          'bootstrap',
+        );
       }
-      
-      // For Intel/AMD CPUs, we only need AES support
+
       const isIntelAmd = cpuModel.includes('Intel') || cpuModel.includes('AMD');
-      
-      // For ARM CPUs, we ideally want both AES and PMULL
       const isArm = architecture.includes('arm') || cpuModel.includes('Cortex');
-      
-      // Performance warning for ARM without PMULL
-      if (isArm && !pmullSupport && aesSupport) {
-        this.loggingService.log('Warning: ARM CPU missing PMULL support, mining will continue but may be less efficient', 'WARN', 'bootstrap');
+
+      if (isArm && !pmullSupport) {
+        this.loggingService.log(
+          'Warning: ARM CPU missing PMULL support, mining will continue but may be less efficient',
+          'WARN',
+          'bootstrap',
+        );
       }
-      
-      // Intel/AMD without AES (very rare)
       if (isIntelAmd && !aesSupport) {
-        this.loggingService.log('Warning: Intel/AMD CPU missing AES support, mining will continue but may be less efficient', 'WARN', 'bootstrap');
+        this.loggingService.log(
+          'Warning: Intel/AMD CPU missing AES support, mining will continue but may be less efficient',
+          'WARN',
+          'bootstrap',
+        );
       }
-      
-      // Only fail if we have neither AES nor PMULL on any architecture
-      if (!aesSupport && !pmullSupport) {
-        this.loggingService.log('CPU lacks essential cryptographic instructions (AES), mining may not work properly', 'WARN', 'bootstrap');
-        // Don't exit, just warn
+      if (!aesSupport) {
+        this.loggingService.log(
+          'CPU lacks essential cryptographic instructions (AES), mining may not work properly',
+          'WARN',
+          'bootstrap',
+        );
       }
-      
-      this.loggingService.log('CPU compatibility check completed - mining should work', 'INFO', 'bootstrap');
+      this.loggingService.log(
+        'CPU compatibility check completed - mining should work',
+        'INFO',
+        'bootstrap',
+      );
     } catch (error) {
-      this.loggingService.log(`CPU check warning: ${error.message}`, 'WARN', 'bootstrap');
-      // Continue execution despite warnings
+      const errMsg = (typeof error === 'object' && error && 'message' in error) ? (error as { message: string }).message : String(error);
+      this.loggingService.log(
+        `CPU check warning: ${errMsg}`,
+        'WARN',
+        'bootstrap',
+      );
     }
   }
 

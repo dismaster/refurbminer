@@ -55,7 +55,7 @@ export class ConfigService implements OnModuleInit {
     // Create default config if it doesn't exist
     if (!fs.existsSync(this.configPath)) {
       this.saveConfig({
-        minerId: this.generateMinerId(),
+        minerId: '',
         rigId: '',
         name: 'Unnamed Rig',
         thresholds: {
@@ -63,28 +63,44 @@ export class ConfigService implements OnModuleInit {
           maxBatteryTemp: 45,
           maxStorageUsage: 90,
           minHashrate: 0,
-          shareRatio: 0.5
+          shareRatio: 0.5,
         },
         schedules: {
-          scheduledMining: {
-            enabled: false,
-            periods: [],
-          },
-          scheduledRestarts: [], // Array of times
+          scheduledMining: { enabled: false, periods: [] },
+          scheduledRestarts: [],
         },
       });
     } else {
-      // Clean up existing config to ensure consistent structure
       await this.cleanupConfig();
     }
 
-    // Sync with API on startup
-    await this.syncConfigWithApi();
-
-    // Set up periodic sync (every 15 minutes)
-    this.syncInterval = setInterval(async () => {
+    // Only sync if minerId is present
+    const config = this.getConfig();
+    if (config && config.minerId && config.minerId.length > 0) {
       await this.syncConfigWithApi();
-    }, 15 * 60 * 1000);
+      // Set up periodic sync (every 15 minutes)
+      this.syncInterval = setInterval(() => {
+        this.syncConfigWithApi();
+      }, 15 * 60 * 1000);
+    } else {
+      this.loggingService.log(
+        'ConfigService: Skipping config sync, minerId not set yet. Will sync after registration.',
+        'WARN',
+        'config',
+      );
+    }
+  }
+
+  /**
+   * Call this after successful registration to trigger config sync and periodic sync
+   */
+  public async triggerConfigSyncAfterRegistration() {
+    await this.syncConfigWithApi();
+    if (!this.syncInterval) {
+      this.syncInterval = setInterval(() => {
+        this.syncConfigWithApi();
+      }, 15 * 60 * 1000);
+    }
   }
 
   getConfig(): Config | null {
@@ -125,7 +141,8 @@ export class ConfigService implements OnModuleInit {
 
   getMinerId(): string {
     const config = this.getConfig();
-    return config?.minerId || this.generateMinerId();
+    // Do NOT generate a fallback minerId!
+    return config?.minerId || '';
   }
 
   /**
@@ -164,18 +181,19 @@ export class ConfigService implements OnModuleInit {
 
       const apiConfig = response.data;
       this.loggingService.log(`📥 Received config data: ${JSON.stringify(apiConfig)}`, 'DEBUG', 'config');
-      
-      // Check if API is trying to change the minerId
+
+      // Accept the backend's minerId if it differs
       if (apiConfig.minerId && apiConfig.minerId !== currentConfig.minerId) {
-        this.loggingService.log(`⚠️ API provided different minerId (${apiConfig.minerId}), keeping local minerId (${currentConfig.minerId})`, 'WARN', 'config');
+        this.loggingService.log(
+          `API provided different minerId (${apiConfig.minerId}), updating local minerId to match backend`,
+          'INFO',
+          'config',
+        );
+        currentConfig.minerId = apiConfig.minerId;
       }
-      
-      // Create a clean config with API values BUT preserve the local minerId
+      // Create a clean config with API values and backend minerId
       const updatedConfig: Config = {
-        // Always keep the local minerId
         minerId: currentConfig.minerId,
-        
-        // Take the rest from API
         rigId: apiConfig.rigId || currentConfig.rigId,
         name: apiConfig.name || currentConfig.name,
         thresholds: {
@@ -183,25 +201,22 @@ export class ConfigService implements OnModuleInit {
           maxBatteryTemp: apiConfig.thresholds?.maxBatteryTemp ?? currentConfig.thresholds.maxBatteryTemp,
           maxStorageUsage: apiConfig.thresholds?.maxStorageUsage ?? currentConfig.thresholds.maxStorageUsage,
           minHashrate: apiConfig.thresholds?.minHashrate ?? currentConfig.thresholds.minHashrate,
-          shareRatio: apiConfig.thresholds?.shareRatio ?? currentConfig.thresholds.shareRatio
+          shareRatio: apiConfig.thresholds?.shareRatio ?? currentConfig.thresholds.shareRatio,
         },
         schedules: {
-          scheduledMining: apiConfig.schedules?.scheduledMining ?? currentConfig.schedules.scheduledMining,
-          scheduledRestarts: apiConfig.schedules?.scheduledRestarts ?? currentConfig.schedules.scheduledRestarts
-        }
+          scheduledMining: {
+            enabled: apiConfig.schedules?.scheduledMining?.enabled ?? currentConfig.schedules.scheduledMining.enabled,
+            periods: apiConfig.schedules?.scheduledMining?.periods ?? currentConfig.schedules.scheduledMining.periods,
+          },
+          scheduledRestarts: apiConfig.schedules?.scheduledRestarts ?? currentConfig.schedules.scheduledRestarts,
+        },
       };
-
-      // Save updated config
-      const saved = this.saveConfig(updatedConfig);
-      if (saved) {
-        this.loggingService.log('✅ Config synchronized with API successfully', 'INFO', 'config');
-        this.loggingService.log(`📄 Updated config: ${JSON.stringify(updatedConfig)}`, 'DEBUG', 'config');
-      }
-      return saved;
-
+      this.saveConfig(updatedConfig);
+      this.loggingService.log('✅ Config synchronized with API successfully', 'INFO', 'config');
+      this.loggingService.log(`📄 Updated config: ${JSON.stringify(updatedConfig)}`, 'DEBUG', 'config');
+      return true;
     } catch (error) {
       this.loggingService.log(`❌ Failed to sync config with API: ${error.message}`, 'ERROR', 'config');
-      this.loggingService.log(`❌ Error stack: ${error.stack}`, 'DEBUG', 'config');
       return false;
     }
   }
@@ -213,15 +228,6 @@ export class ConfigService implements OnModuleInit {
   async forceSyncWithApi(): Promise<boolean> {
     this.loggingService.log('🔄 Forcing immediate config sync...', 'INFO', 'config');
     return await this.syncConfigWithApi();
-  }
-
-  /**
-   * Generate a unique miner ID if one doesn't exist
-   */
-  private generateMinerId(): string {
-    const timestamp = Date.now();
-    const random = Math.floor(Math.random() * 10000);
-    return `miner-${timestamp}-${random}`;
   }
 
   /**
@@ -237,7 +243,7 @@ export class ConfigService implements OnModuleInit {
 
       // Create a new config with exactly the expected structure
       const cleanConfig: Config = {
-        minerId: currentConfig.minerId || this.generateMinerId(),
+        minerId: currentConfig.minerId || '',
         rigId: currentConfig.rigId || '',
         name: currentConfig.name || 'Unnamed Rig',
         thresholds: {

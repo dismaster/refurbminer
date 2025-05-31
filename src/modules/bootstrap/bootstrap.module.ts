@@ -6,6 +6,7 @@ import { ApiCommunicationModule } from '../api-communication/api-communication.m
 import { DeviceMonitoringModule } from '../device-monitoring/device-monitoring.module';
 import { MinerManagerModule } from '../miner-manager/miner-manager.module';
 import { FlightsheetModule } from '../flightsheet/flightsheet.module';
+import { ConfigModule } from '../config/config.module';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { FlightsheetModule } from '../flightsheet/flightsheet.module';
     DeviceMonitoringModule,
     MinerManagerModule,
     FlightsheetModule,
+    ConfigModule,
   ],
   providers: [BootstrapService],
   controllers: [BootstrapController],
