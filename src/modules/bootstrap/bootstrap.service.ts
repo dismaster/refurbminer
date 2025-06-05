@@ -677,21 +677,10 @@ export class BootstrapService implements OnModuleInit {
         aesSupport: false,
         pmullSupport: false,
       };
-      const miningCpus = Array.from(
-        { length: cpuInfo.cores || 1 },
-        (_, index) => ({
-          coreId: index,
-          model: cpuInfo.model || 'Unknown',
-          cores: cpuInfo.cores || 1,
-          architecture: cpuInfo.architecture || '64-bit',
-          aesSupport: cpuInfo.aesSupport || false,
-          pmullSupport: cpuInfo.pmullSupport || false,
-        }),
-      );
-      
+
       const registrationMetadata = {
         ...metadata,
-        miningCpus: miningCpus,
+        miningCpus: cpuInfo.cores || 8, // Just the count, not an array
         lastSeenIp: ipAddress,
       };
       
