@@ -204,24 +204,28 @@ export class BootstrapService implements OnModuleInit {
           network: ['netcat-openbsd', 'dnsutils', 'traceroute'],
           networkFallback: ['netcat', 'bind9-host', 'iputils-ping'],
           system: ['gnupg', 'debianutils'],
+          hardware: ['lm-sensors', 'acpi'],
         },
         dnf: {
           essential: ['curl', 'screen', 'git'],
           network: ['nc', 'bind-utils', 'traceroute'],
           networkFallback: ['nmap-ncat', 'bind-utils', 'iputils'],
           system: ['gnupg', 'which'],
+          hardware: ['lm_sensors', 'acpi'],
         },
         yum: {
           essential: ['curl', 'screen', 'git'],
           network: ['nc', 'bind-utils', 'traceroute'],
           networkFallback: ['nmap-ncat', 'bind-utils', 'iputils'],
           system: ['gnupg', 'which'],
+          hardware: ['lm_sensors', 'acpi'],
         },
         pacman: {
           essential: ['curl', 'screen', 'git'],
           network: ['openbsd-netcat', 'bind-tools', 'traceroute'],
           networkFallback: ['gnu-netcat', 'bind', 'iputils'],
           system: ['gnupg', 'which'],
+          hardware: ['lm_sensors', 'acpi'],
         },
       };
 
@@ -306,7 +310,7 @@ export class BootstrapService implements OnModuleInit {
     await this.setupPackageRepositories(packageManager, sudoPrefix, osType);
 
     // Install package groups with fallback
-    const packageGroups = ['essential', 'network', 'system'];
+    const packageGroups = ['essential', 'network', 'system', 'hardware'];
     let successfulInstalls = 0;
     let totalAttempts = 0;
 
