@@ -37,6 +37,7 @@ export class ConfigService implements OnModuleInit {
   private configPath = path.join(process.cwd(), 'config', 'config.json');
   private syncInterval: NodeJS.Timeout;
   private apiUrl: string;
+  private readonly MAX_BACKUPS = 5; // Maximum number of backup files to keep
 
   constructor(
     private readonly loggingService: LoggingService,
@@ -138,12 +139,29 @@ export class ConfigService implements OnModuleInit {
 
   saveConfig(config: Config): boolean {
     try {
+      // Create a backup of the current config file if it exists
+      if (fs.existsSync(this.configPath)) {
+        const timestamp = Date.now();
+        const backupPath = `${this.configPath}.${timestamp}.bak`;
+        fs.copyFileSync(this.configPath, backupPath);
+        this.loggingService.log(
+          `📦 Config backup created: ${backupPath}`,
+          'DEBUG',
+          'config',
+        );
+      }
+      
+      // Write new config
       fs.writeFileSync(this.configPath, JSON.stringify(config, null, 2));
       this.loggingService.log(
         '✅ Config saved successfully',
         'DEBUG',
         'config',
       );
+      
+      // Clean up old backups
+      this.cleanupConfigBackups();
+      
       return true;
     } catch (error) {
       this.loggingService.log(
@@ -367,6 +385,58 @@ export class ConfigService implements OnModuleInit {
         'config',
       );
       return false;
+    }
+  }
+
+  /**
+   * Cleans up old backup files, keeping only the most recent ones
+   */
+  private cleanupConfigBackups(): void {
+    try {
+      const dirPath = path.dirname(this.configPath);
+      const fileName = path.basename(this.configPath);
+
+      // Get all files in the directory
+      const files = fs.readdirSync(dirPath);
+
+      // Filter for backup files matching our pattern
+      const backupFiles = files
+        .filter((file) => file.startsWith(`${fileName}.`) && file.endsWith('.bak'))
+        .map((file) => ({
+          name: file,
+          path: path.join(dirPath, file),
+          // Extract timestamp from filename
+          timestamp:
+            parseInt(file.replace(`${fileName}.`, '').replace('.bak', ''), 10) ||
+            0,
+        }))
+        .sort((a, b) => b.timestamp - a.timestamp); // Sort newest first
+
+      // Remove older backups if we have more than MAX_BACKUPS
+      if (backupFiles.length > this.MAX_BACKUPS) {
+        backupFiles.slice(this.MAX_BACKUPS).forEach((file) => {
+          try {
+            fs.unlinkSync(file.path);
+            this.loggingService.log(
+              `🗑️ Removed old config backup: ${file.name}`,
+              'DEBUG',
+              'config',
+            );
+          } catch (error: any) {
+            this.loggingService.log(
+              `Failed to delete backup ${file.name}: ${error.message}`,
+              'WARN',
+              'config',
+            );
+          }
+        });
+      }
+    } catch (error: any) {
+      this.loggingService.log(
+        `❌ Failed to clean up config backups: ${error.message}`,
+        'ERROR',
+        'config',
+      );
     }
   }
 }

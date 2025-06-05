@@ -18,76 +18,6 @@ import { MinerThreadsUtil } from './utils/miner/miner-threads.util';
 // Import safe execution helpers
 import { safeExecute, safeExecuteAsync } from './safe-execute';
 
-interface TelemetryData {
-  status: string;
-  minerSoftware: {
-    name: string;
-    version: string;
-    algorithm: string;
-    hashrate: number;
-    acceptedShares: number;
-    rejectedShares: number;
-    uptime: number;
-    solvedBlocks: number;
-    miningStatus: string;
-  };
-  pool: {
-    name: string;
-    hashrate: number;
-    miners: number;
-    workers: number;
-  };
-  deviceInfo: {
-    cpuModel: Array<{ coreId: number; model: string; khs?: number }>;
-    cpuUsage: number;
-    cpuTemp: number;
-    memTotal: number;
-    memFree: number;
-    diskTotal: number;
-    diskFree: number;
-    systemUptime: number;
-  };
-  network: {
-    primaryIp: string;
-    externalIp: string;
-    gateway: string;
-    interfaces: string[];
-    ping: { refurbminer: number };
-    traffic: {
-      rxBytes: number;
-      txBytes: number;
-      rxSpeed: number;
-      txSpeed: number;
-      timestamp: number;
-    };
-  };
-  battery: {
-    level: number;
-    isCharging: boolean;
-    temperature: number;
-  };
-}
-
-interface FullTelemetryData extends TelemetryData {
-  schedules: {
-    mining: {
-      enabled: boolean;
-      periods: Array<{
-        start: string;
-        end: string;
-        days: string[];
-      }>;
-    };
-    restarts: Array<{
-      time: string;
-      days: string[];
-    }>;
-  };
-  historicalHashrate: Array<{ timestamp: number; khs: number }>;
-}
-
-type LogFunction = (message: string, level: string, context: string) => void;
-
 @Injectable()
 export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
   private readonly telemetryFilePath: string;
@@ -102,22 +32,14 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
     private readonly loggingService: LoggingService,
     private readonly minerManagerService: MinerManagerService,
     private readonly osDetectionService: OsDetectionService,
-    private readonly configService: ConfigService,
+    private readonly configService: ConfigService
   ) {
-    this.telemetryFilePath = path.join(
-      process.cwd(),
-      'storage',
-      'telemetry.json',
-    );
-    this.historyFilePath = path.join(
-      process.cwd(),
-      'storage',
-      'hashrate-history.json',
-    );
+    this.telemetryFilePath = path.join(process.cwd(), 'storage', 'telemetry.json');
+    this.historyFilePath = path.join(process.cwd(), 'storage', 'hashrate-history.json');
     this.ensureStorageExists();
   }
 
-  onModuleInit(): void {
+  async onModuleInit() {
     this.startDataCollection();
   }
   

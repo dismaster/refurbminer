@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
-import { TelemetryService } from './telemetry.service';
+//import { TelemetryService } from './telemetry.service';
+import { EnhancedTelemetryService } from './enhanced-telemetry.service';
 import { TelemetryController } from './telemetry.controller';
 import { LoggingModule } from '../logging/logging.module';
 import { ConfigModule } from '../config/config.module';
@@ -29,7 +30,8 @@ import { StorageInfoUtil } from './utils/hardware/storage-info.util';
   ],
   controllers: [TelemetryController],
   providers: [
-    TelemetryService,
+    //TelemetryService,
+    EnhancedTelemetryService,
     HardwareInfoUtil,
     NetworkInfoUtil,
     BatteryInfoUtil,
@@ -39,6 +41,7 @@ import { StorageInfoUtil } from './utils/hardware/storage-info.util';
     MemoryInfoUtil,
     StorageInfoUtil
   ],
-  exports: [TelemetryService]
+  //exports: [TelemetryService]
+  exports: [EnhancedTelemetryService]
 })
 export class TelemetryModule {}

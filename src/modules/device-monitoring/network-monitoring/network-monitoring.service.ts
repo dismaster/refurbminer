@@ -561,9 +561,23 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
     this.disconnectionHistory = this.disconnectionHistory.filter(entry => now - entry.timestamp <= this.MIN_RECOVERY_INTERVAL);
 
     if (connectivityLost) {
-      // Log the disconnection event
-      this.disconnectionHistory.push({ timestamp: now });
-      this.loggingService.log('📉 Connectivity lost, logging event...', 'INFO', 'network-monitoring');
+      // Log the disconnection event if this is a new disconnection
+      if (this.disconnectionHistory.length === 0 || 
+          (this.disconnectionHistory.length > 0 && this.disconnectionHistory[this.disconnectionHistory.length - 1].duration !== undefined)) {
+        this.disconnectionHistory.push({ timestamp: now });
+        this.loggingService.log('📉 Connectivity lost, logging event...', 'INFO', 'network-monitoring');
+        
+        // Enforce maximum history size by removing oldest entries
+        if (this.disconnectionHistory.length > this.MAX_HISTORY_SIZE) {
+          const removed = this.disconnectionHistory.length - this.MAX_HISTORY_SIZE;
+          this.disconnectionHistory = this.disconnectionHistory.slice(-this.MAX_HISTORY_SIZE);
+          this.loggingService.log(
+            `🔄 Trimmed disconnection history (removed ${removed} oldest entries)`,
+            'DEBUG',
+            'network-monitoring'
+          );
+        }
+      }
       
       // If we have enough consecutive failures, consider a recovery attempt
       if (this.disconnectionHistory.length >= this.MIN_CONSECUTIVE_SUCCESSES) {
@@ -577,7 +591,8 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
           this.loggingService.log('⚠️ Increasing disconnection duration detected, triggering recovery actions...', 'WARN', 'network-monitoring');
           this.performRecoveryActions(this.osDetectionService.detectOS());
         }
-      }    } else {
+      }
+    } else {
       // Connectivity is good, only reset disconnection history if we were previously tracking disconnections
       if (this.disconnectionHistory.length > 0) {
         this.loggingService.log('✅ Connectivity restored, resetting disconnection history', 'INFO', 'network-monitoring');

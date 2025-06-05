@@ -1,5 +1,5 @@
 import { Injectable, OnModuleInit, OnApplicationShutdown } from '@nestjs/common';
-import { TelemetryService } from '../telemetry/telemetry.service';
+import { EnhancedTelemetryService } from '../telemetry/enhanced-telemetry.service';
 import { ApiCommunicationService } from '../api-communication/api-communication.service';
 import { LoggingService } from '../logging/logging.service';
 import { ConfigService } from '../config/config.service';
@@ -11,7 +11,7 @@ export class MinerDataService implements OnModuleInit, OnApplicationShutdown {
   private rigToken: string | null = null;
 
   constructor(
-    private readonly telemetryService: TelemetryService,
+    private readonly telemetryService: EnhancedTelemetryService,
     private readonly apiService: ApiCommunicationService,
     private readonly loggingService: LoggingService,
     private readonly configService: ConfigService

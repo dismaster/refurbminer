@@ -1,4 +1,4 @@
-import { Module, OnModuleInit } from '@nestjs/common';
+import { Module, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { join } from 'path';
 import { LoggingModule } from './modules/logging/logging.module';
 import { LoggingService } from './modules/logging/logging.service';
@@ -47,8 +47,13 @@ import { OsDetectionModule } from './modules/device-monitoring/os-detection/os-d
   controllers: [AppController],
   providers: [AppService],
 })
-export class AppModule implements OnModuleInit {
+export class AppModule implements OnModuleInit, OnModuleDestroy {
   constructor(private readonly loggingService: LoggingService) {}
+  
+  onModuleDestroy() {
+    this.loggingService.log('💤 Application shutting down, cleaning up resources', 'INFO', 'app');
+    // Any additional global cleanup can be added here
+  }
 
   async onModuleInit() {
     this.loggingService.log('🚀 Application startup', 'INFO', 'app');

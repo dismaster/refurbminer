@@ -1,9 +1,9 @@
 import { Controller, Get } from '@nestjs/common';
-import { TelemetryService } from './telemetry.service';
+import { EnhancedTelemetryService } from './enhanced-telemetry.service';
 
 @Controller('api/telemetry')
 export class TelemetryController {
-  constructor(private readonly telemetryService: TelemetryService) {}
+  constructor(private readonly telemetryService: EnhancedTelemetryService) {}
 
   @Get()
   getTelemetry() {
