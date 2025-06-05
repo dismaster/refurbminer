@@ -104,12 +104,19 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
         'OS detection',
         this.loggingService.log.bind(this.loggingService)
       );
-      
-      // Get previous telemetry data with error handling
+        // Get previous telemetry data with error handling
       const previousData = safeExecute(
         () => this.getPreviousTelemetry(),
         null,
         'previous telemetry retrieval',
+        this.loggingService.log.bind(this.loggingService)
+      );
+
+      // Get manual stop status safely
+      const isManuallyStoppedByUser = safeExecute(
+        () => this.minerManagerService.isManuallyStoppedByUser,
+        false,
+        'manual stop status check',
         this.loggingService.log.bind(this.loggingService)
       );
 
@@ -231,9 +238,8 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
           acceptedShares: minerSummary.acceptedShares,
           rejectedShares: minerSummary.rejectedShares,
           uptime: minerSummary.uptime,
-          solvedBlocks: minerSummary.solvedBlocks,
-          // Use more detailed status for mining
-          miningStatus: this.minerManagerService.isManuallyStoppedByUser 
+          solvedBlocks: minerSummary.solvedBlocks,          // Use more detailed status for mining
+          miningStatus: isManuallyStoppedByUser 
             ? 'manually_stopped' 
             : (minerRunning ? 'active' : 'stopped'),
         },

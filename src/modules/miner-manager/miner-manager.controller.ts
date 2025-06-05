@@ -10,10 +10,9 @@ export class MinerManagerController {
     const result = this.minerManagerService.startMiner();
     return { message: result ? 'Miner started successfully.' : 'Failed to start miner.' };
   }
-
   @Post('stop')
   stopMiner() {
-    const result = this.minerManagerService.stopMiner();
+    const result = this.minerManagerService.stopMiner(true); // Set manual stop flag
     return { message: result ? 'Miner stopped successfully.' : 'No miner was running.' };
   }
 
