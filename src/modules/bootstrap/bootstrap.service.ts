@@ -71,13 +71,27 @@ export class BootstrapService implements OnModuleInit {
       }
     } // --- END ENFORCE ---
 
-    // Skip immediate config sync to prevent overwriting newly assigned miner ID
-    // The periodic sync (every 5 minutes) will handle config updates later
+    // Now that registration is complete, trigger config sync to get schedules and other config data
     this.loggingService.log(
-      'Registration complete. Skipping immediate config sync to prevent race conditions.',
+      'Registration complete. Triggering config sync to fetch schedules and configuration...',
       'INFO',
       'bootstrap',
     );
+    
+    try {
+      await this.configService.triggerConfigSyncAfterRegistration();
+      this.loggingService.log(
+        '✅ Config sync triggered successfully after registration',
+        'INFO',
+        'bootstrap',
+      );
+    } catch (error) {
+      this.loggingService.log(
+        `⚠️ Failed to trigger config sync after registration: ${error instanceof Error ? error.message : String(error)}`,
+        'WARN',
+        'bootstrap',
+      );
+    }
 
     // Trigger initial flightsheet fetch now that registration is complete
     this.loggingService.log(
