@@ -18,6 +18,7 @@ export class MinerManagerService
   private minerScreen = 'miner-session';
   private pollingInterval?: NodeJS.Timeout;
   private configSyncInterval?: NodeJS.Timeout; // Config sync includes schedule data
+  private scheduleCheckInterval?: NodeJS.Timeout; // Dedicated schedule checking
   private crashMonitorInterval?: NodeJS.Timeout;
   private crashCount = 0;
   private readonly MAX_CRASHES = 3;
@@ -64,6 +65,10 @@ export class MinerManagerService
     if (this.configSyncInterval) {
       clearInterval(this.configSyncInterval);
       this.configSyncInterval = undefined;
+    }
+    if (this.scheduleCheckInterval) {
+      clearInterval(this.scheduleCheckInterval);
+      this.scheduleCheckInterval = undefined;
     }
     if (this.crashMonitorInterval) {
       clearInterval(this.crashMonitorInterval);
@@ -130,8 +135,8 @@ export class MinerManagerService
         // Sync config from backend API (includes schedule data)
         await this.configService.syncConfigWithApi();
         
-        // After successful sync, check schedules with fresh data
-        this.checkSchedules();
+        // Schedule checking is now handled by dedicated interval
+        // No need to check schedules here to avoid duplicate calls
       } catch (error) {
         this.loggingService.log(
           `⚠️ Config sync failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -146,6 +151,11 @@ export class MinerManagerService
       this.checkMinerHealth();
     }, 30000);
 
+    // Set up dedicated schedule checking - more frequent than config sync for proper enforcement
+    this.scheduleCheckInterval = setInterval(() => {
+      this.checkSchedules();
+    }, 60000); // Every minute for responsive schedule enforcement
+
     // Run an initial schedule check and dump status
     // DO NOT sync with API here - this causes race condition before registration is complete
     // The BootstrapService will trigger the initial sync after successful registration
@@ -154,7 +164,7 @@ export class MinerManagerService
 
     // Log configuration for monitoring intervals
     this.loggingService.log(
-      '📋 Monitoring configured: Flightsheet check every minute, config sync (with schedules) every 5 minutes',
+      '📋 Monitoring configured: Flightsheet check every minute, config sync every 5 minutes, schedule check every minute',
       'INFO',
       'miner-manager',
     );
