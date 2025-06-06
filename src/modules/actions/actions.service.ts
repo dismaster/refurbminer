@@ -1,12 +1,17 @@
-import { Injectable, OnModuleInit, OnApplicationShutdown } from '@nestjs/common';
+import { Injectable, OnModuleInit } from '@nestjs/common';
 import { ApiCommunicationService } from '../api-communication/api-communication.service';
 import { LoggingService } from '../logging/logging.service';
 import { ConfigService } from '../config/config.service';
 import { MinerManagerService } from '../miner-manager/miner-manager.service';
+import { OsDetectionService } from '../device-monitoring/os-detection/os-detection.service';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs';
-import { MinerAction, MinerActionCommand, MinerActionStatus } from './interfaces/action.interface';
+import {
+  MinerAction,
+  MinerActionCommand,
+  MinerActionStatus,
+} from './interfaces/action.interface';
 
 const execAsync = promisify(exec);
 
@@ -19,12 +24,16 @@ export class ActionsService implements OnModuleInit {
     private readonly apiService: ApiCommunicationService,
     private readonly loggingService: LoggingService,
     private readonly configService: ConfigService,
-    private readonly minerManagerService: MinerManagerService
+    private readonly minerManagerService: MinerManagerService,
+    private readonly osDetectionService: OsDetectionService,
   ) {}
-
   onModuleInit() {
     this.startActionsMonitoring();
-    this.loggingService.log('✅ Actions monitoring initialized', 'INFO', 'actions');
+    this.loggingService.log(
+      '✅ Actions monitoring initialized',
+      'INFO',
+      'actions',
+    );
   }
 
   /**
@@ -51,10 +60,13 @@ export class ActionsService implements OnModuleInit {
    * Check for any pending actions from the API
    */
   async checkForPendingActions(): Promise<void> {
-    try {
-      // Skip if already processing actions
+    try {      // Skip if already processing actions
       if (this.isProcessingActions) {
-        this.loggingService.log('⏳ Already processing actions, skipping check', 'DEBUG', 'actions');
+        this.loggingService.log(
+          '⏳ Already processing actions, skipping check',
+          'DEBUG',
+          'actions',
+        );
         return;
       }
       
@@ -64,13 +76,13 @@ export class ActionsService implements OnModuleInit {
         this.loggingService.log('❌ Cannot check actions: No minerId found', 'ERROR', 'actions');
         return;
       }
-      
-      this.loggingService.log('🔍 Checking for pending actions...', 'DEBUG', 'actions');
+        this.loggingService.log('🔍 Checking for pending actions...', 'DEBUG', 'actions');
       this.isProcessingActions = true;
-      
-      // Fetch pending actions from API - this will use the miners-actions/miner/:minerId/pending endpoint
-      const response = await this.apiService.getPendingMinerActions(config.minerId);
-      const actions = response as MinerAction[];
+        // Fetch pending actions from API - this will use the miners-actions/miner/:minerId/pending endpoint
+      const response = await this.apiService.getPendingMinerActions(
+        config.minerId,
+      );
+      const actions = (response as unknown) as MinerAction[];
       
       if (!actions || actions.length === 0) {
         this.loggingService.log('✅ No pending actions found', 'DEBUG', 'actions');
@@ -84,9 +96,12 @@ export class ActionsService implements OnModuleInit {
       for (const action of actions) {
         await this.processAction(action);
       }
-      
-    } catch (error) {
-      this.loggingService.log(`❌ Error checking for actions: ${error.message}`, 'ERROR', 'actions');
+        } catch (error) {
+      this.loggingService.log(
+        `❌ Error checking for actions: ${(error as Error).message}`,
+        'ERROR',
+        'actions',
+      );
     } finally {
       this.isProcessingActions = false;
     }
@@ -268,11 +283,10 @@ export class ActionsService implements OnModuleInit {
         
         // Execute the update script - use bash explicitly to ensure proper execution
         this.loggingService.log(`🚀 Running update script: ${updateScriptPath}`, 'INFO', 'actions');
+          // Detect OS environment and use appropriate execution method
+        const osType = await this.detectOSType();
         
-        // For Termux, we need a more reliable approach
-        const isTermux = await this.checkIfTermux();
-        
-        if (isTermux) {
+        if (osType === 'termux') {
         // On Termux, use a different approach that's more reliable
         this.loggingService.log('📱 Detected Termux environment, using simplified execution method', 'INFO', 'actions');
         
@@ -317,8 +331,38 @@ fi`;
         
         this.loggingService.log('🚀 Update will continue in background with output logged to update_log.txt', 'INFO', 'actions');
         this.loggingService.log('⚠️ Service may restart shortly as part of the update process', 'WARN', 'actions');
+        } else if (osType && osType !== 'unknown') {
+        // For Linux distributions, use enhanced wrapper with systemd/service management
+        this.loggingService.log(`🐧 Detected Linux environment (${osType}), using enhanced execution method`, 'INFO', 'actions');
+        
+        const wrapperPath = `${homeDir}/update_wrapper.sh`;
+        const logPath = `${homeDir}/update_log.txt`;
+        
+        // Create enhanced wrapper script for Linux systems
+        const wrapperContent = await this.createLinuxUpdateWrapper(updateScriptPath, homeDir, osType);
+        
+        // Write wrapper script
+        fs.writeFileSync(wrapperPath, wrapperContent);
+        await execAsync(`chmod +x ${wrapperPath}`);
+        
+        // Launch wrapper with nohup to keep it running after our process exits
+        this.loggingService.log(`📋 Creating update log at ${logPath}`, 'INFO', 'actions');
+        
+        // Create a visual indicator for the user that update is happening
+        try {
+          await this.showLinuxUpdateNotification(osType, 'start');
+        } catch {
+          // Notification might not be available, continue anyway
+        }
+        
+        // Execute the wrapper using nohup to ensure it continues after we exit
+        await execAsync(`nohup ${wrapperPath} >/dev/null 2>&1 &`);
+        
+        this.loggingService.log('🚀 Update will continue in background with output logged to update_log.txt', 'INFO', 'actions');
+        this.loggingService.log('⚠️ Service may restart shortly as part of the update process', 'WARN', 'actions');
         } else {
-        // Standard execution for non-Termux environments
+        // Standard execution for unknown/other environments
+        this.loggingService.log('💻 Using standard execution method for current environment', 'INFO', 'actions');
         const { stdout, stderr } = await execAsync(`bash ${updateScriptPath}`);
         
         // Log the output
@@ -435,6 +479,197 @@ fi`;
     if (this.actionsInterval) {
       clearInterval(this.actionsInterval);
       this.actionsInterval = undefined;
+    }
+  }
+
+  /**
+   * Helper method to detect OS type using the OS detection service
+   */
+  private async detectOSType(): Promise<string> {
+    try {
+      return this.osDetectionService.detectOS();
+    } catch (error) {
+      this.loggingService.log(
+        `Failed to detect OS type: ${(error as Error).message}`,
+        'WARN',
+        'actions',
+      );
+      return 'unknown';
+    }
+  }
+
+  /**
+   * Create enhanced Linux update wrapper script with distribution-specific package management
+   */
+  private async createLinuxUpdateWrapper(
+    updateScriptPath: string,
+    homeDir: string,
+    osType: string,
+  ): Promise<string> {
+    const logPath = `${homeDir}/update_log.txt`;
+
+    // Detect package manager and service management commands
+    let packageUpdateCmd = '';
+    let serviceRestartCmd = '';
+
+    try {
+      // Try to detect distribution-specific package managers
+      const { stdout: lsbRelease } = await execAsync('lsb_release -si 2>/dev/null || echo "unknown"');
+      const distro = lsbRelease.trim().toLowerCase();
+
+      if (distro.includes('ubuntu') || distro.includes('debian')) {
+        packageUpdateCmd = 'apt update && apt upgrade -y';
+        serviceRestartCmd = 'systemctl restart refurbminer || service refurbminer restart';
+      } else if (distro.includes('centos') || distro.includes('rhel') || distro.includes('fedora')) {
+        packageUpdateCmd = 'yum update -y || dnf update -y';
+        serviceRestartCmd = 'systemctl restart refurbminer || service refurbminer restart';
+      } else if (distro.includes('arch')) {
+        packageUpdateCmd = 'pacman -Syu --noconfirm';
+        serviceRestartCmd = 'systemctl restart refurbminer';
+      } else {
+        // Generic Linux fallback
+        packageUpdateCmd = 'echo "Generic Linux - package updates not automated"';
+        serviceRestartCmd = 'systemctl restart refurbminer 2>/dev/null || service refurbminer restart 2>/dev/null || echo "Service restart not available"';
+      }
+    } catch (error) {
+      this.loggingService.log(
+        `Could not detect Linux distribution: ${(error as Error).message}`,
+        'WARN',
+        'actions',
+      );
+      packageUpdateCmd = 'echo "Could not detect package manager"';
+      serviceRestartCmd = 'echo "Could not detect service manager"';
+    }
+
+    const wrapperContent = `#!/bin/bash
+# RefurbMiner Linux Update Wrapper Script
+# Generated for ${osType} environment
+
+# Wait for the current process to exit
+sleep 5
+
+# Create log file with timestamp
+echo "=== RefurbMiner Update Started at $(date) ===" > ${logPath}
+
+# Function to log with timestamp
+log_message() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a ${logPath}
+}
+
+log_message "Starting RefurbMiner update process..."
+
+# Update system packages if running as root
+if [ "$EUID" -eq 0 ]; then
+    log_message "Running as root - updating system packages..."
+    ${packageUpdateCmd} >> ${logPath} 2>&1
+    PACKAGE_EXIT_CODE=$?
+    if [ $PACKAGE_EXIT_CODE -eq 0 ]; then
+        log_message "System packages updated successfully"
+    else
+        log_message "System package update failed with exit code $PACKAGE_EXIT_CODE"
+    fi
+else
+    log_message "Not running as root - skipping system package updates"
+fi
+
+# Execute the main update script
+log_message "Executing RefurbMiner update script: ${updateScriptPath}"
+bash "${updateScriptPath}" >> ${logPath} 2>&1
+UPDATE_EXIT_CODE=$?
+
+# Check update result and handle service restart
+if [ $UPDATE_EXIT_CODE -eq 0 ]; then
+    log_message "RefurbMiner update completed successfully"
+    
+    # Try to restart the service
+    log_message "Attempting to restart RefurbMiner service..."
+    
+    # Stop existing RefurbMiner processes
+    if pgrep -f "node.*refurbminer" > /dev/null; then
+        log_message "Stopping existing RefurbMiner processes..."
+        pkill -f "node.*refurbminer"
+        sleep 3
+    fi
+    
+    # Try systemd/service restart
+    ${serviceRestartCmd} >> ${logPath} 2>&1
+    SERVICE_EXIT_CODE=$?
+    
+    if [ $SERVICE_EXIT_CODE -eq 0 ]; then
+        log_message "RefurbMiner service restarted successfully"
+    else
+        log_message "Service restart failed, attempting manual start..."
+        cd ${homeDir}/refurbminer && npm start >> ${logPath} 2>&1 &
+        log_message "Manual start command executed"
+    fi
+    
+    # Send success notification
+    ${this.getLinuxNotificationCommand(osType, 'RefurbMiner Update Complete', 'Update completed successfully and service restarted')}
+else
+    log_message "RefurbMiner update failed with exit code $UPDATE_EXIT_CODE"
+    # Send failure notification
+    ${this.getLinuxNotificationCommand(osType, 'RefurbMiner Update Failed', "Update failed with exit code $UPDATE_EXIT_CODE")}
+fi
+
+log_message "=== RefurbMiner Update Process Completed ==="
+
+# Keep the log file readable
+chmod 644 ${logPath} 2>/dev/null || true
+`;
+
+    return wrapperContent;
+  }
+
+  /**
+   * Get Linux notification command based on the distribution
+   */
+  private getLinuxNotificationCommand(osType: string, title: string, message: string): string {
+    // Try different notification systems in order of preference
+    return `(
+      notify-send "${title}" "${message}" 2>/dev/null ||
+      zenity --info --title="${title}" --text="${message}" 2>/dev/null ||
+      echo "${title}: ${message}" ||
+      true
+    ) >> /dev/null 2>&1 &`;
+  }
+
+  /**
+   * Show Linux update notification using available notification systems
+   */
+  private async showLinuxUpdateNotification(osType: string, phase: 'start' | 'complete' | 'error'): Promise<void> {
+    let title = '';
+    let message = '';
+
+    switch (phase) {
+      case 'start':
+        title = 'RefurbMiner Update Started';
+        message = 'Update process initiated. Please wait for completion.';
+        break;
+      case 'complete':
+        title = 'RefurbMiner Update Complete';
+        message = 'Update completed successfully. Service is restarting.';
+        break;
+      case 'error':
+        title = 'RefurbMiner Update Failed';
+        message = 'Update process encountered an error. Check logs for details.';
+        break;
+    }
+
+    try {
+      const notificationCmd = this.getLinuxNotificationCommand(osType, title, message);
+      await execAsync(notificationCmd);
+      this.loggingService.log(
+        `Notification sent: ${title}`,
+        'DEBUG',
+        'actions',
+      );
+    } catch (error) {
+      this.loggingService.log(
+        `Failed to send notification: ${(error as Error).message}`,
+        'DEBUG',
+        'actions',
+      );
+      // Not a critical error, continue
     }
   }
 }
