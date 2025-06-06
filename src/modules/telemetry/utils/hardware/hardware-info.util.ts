@@ -260,19 +260,24 @@ private static extractValue(output: string[], key: string): number {
 
   /** ✅ Get CPU Temperature Based on OS */
   static getCpuTemperature(systemType: string): number {
+    console.log(`🔍 [DEBUG] Getting CPU temperature for system type: ${systemType}`);
     try {
       switch (systemType) {
         case 'raspberry-pi':
+          console.log('🔍 [DEBUG] Using Raspberry Pi temperature method');
           return this.getVcgencmdTemperature();
         case 'termux':
+          console.log('🔍 [DEBUG] Using Termux temperature method');
           return this.getTermuxCpuTemperature();
         case 'linux':
+          console.log('🔍 [DEBUG] Using Linux temperature method');
           return this.getLinuxCpuTemperature();
         default:
+          console.log(`🔍 [DEBUG] Unknown system type: ${systemType}, returning 0`);
           return 0;
       }
     } catch (error) {
-      console.error(`❌ Failed to get CPU temperature: ${error.message}`);
+      console.error(`❌ [DEBUG] Failed to get CPU temperature: ${error.message}`);
       return 0;
     }
   }
@@ -319,14 +324,24 @@ private static extractValue(output: string[], key: string): number {
     }
   }
 
-  /** ✅ Linux: Default Method for CPU Temperature with better fallbacks */
+  /** ✅ Linux: Default Method for CPU Temperature with better fallbacks and debugging */
   private static getLinuxCpuTemperature(): number {
     try {
-      // Method 1: Try thermal zone (most reliable)
+      console.log('🔍 [DEBUG] Starting Linux CPU temperature detection...');
+      
+      // Method 1: Try thermal zone (most reliable for most systems)
       if (fs.existsSync('/sys/class/thermal/thermal_zone0/temp')) {
-        const tempRaw = execSync('cat /sys/class/thermal/thermal_zone0/temp', { encoding: 'utf8' }).trim();
-        const temp = parseInt(tempRaw) / 1000;
-        if (!isNaN(temp) && temp > 0 && temp < 150) return temp;
+        try {
+          const tempRaw = execSync('cat /sys/class/thermal/thermal_zone0/temp', { encoding: 'utf8' }).trim();
+          const temp = parseInt(tempRaw) / 1000;
+          console.log(`🔍 [DEBUG] Thermal zone 0: ${temp}°C`);
+          if (!isNaN(temp) && temp > 0 && temp < 150) {
+            console.log(`✅ [DEBUG] Using thermal zone 0 temperature: ${temp}°C`);
+            return temp;
+          }
+        } catch (thermalError) {
+          console.log(`⚠️ [DEBUG] Thermal zone 0 failed: ${thermalError.message}`);
+        }
       }
 
       // Method 2: Try other thermal zones (1-9)
@@ -336,63 +351,249 @@ private static extractValue(output: string[], key: string): number {
           try {
             const tempRaw = execSync(`cat ${zonePath}`, { encoding: 'utf8' }).trim();
             const temp = parseInt(tempRaw) / 1000;
-            if (!isNaN(temp) && temp > 0 && temp < 150) return temp;
+            console.log(`🔍 [DEBUG] Thermal zone ${i}: ${temp}°C`);
+            if (!isNaN(temp) && temp > 0 && temp < 150) {
+              console.log(`✅ [DEBUG] Using thermal zone ${i} temperature: ${temp}°C`);
+              return temp;
+            }
           } catch {
             continue;
           }
         }
       }
 
-      // Method 3: Try sensors command (lm-sensors package)
+      // Method 3: Try sensors command (lm-sensors package) - Enhanced parsing with debugging
       try {
+        console.log('🔍 [DEBUG] Trying sensors command...');
         const sensorsOutput = execSync('sensors', { encoding: 'utf8' }).trim();
+        console.log(`🔍 [DEBUG] Sensors output length: ${sensorsOutput.length} characters`);
         
-        // Format 1: "Package id 0:  +45.0°C"
-        const packageMatch = sensorsOutput.match(/Package id \d+:\s+\+(\d+\.\d+)°C/);
+        // Priority 1: AMD k10temp Tctl (most accurate for AMD CPUs)
+        const tctlMatch = sensorsOutput.match(/Tctl:\s*\+?(\d+\.\d+)°C/);
+        if (tctlMatch && tctlMatch[1]) {
+          const temp = parseFloat(tctlMatch[1]);
+          console.log(`🔍 [DEBUG] Found AMD Tctl: ${temp}°C`);
+          if (temp > 0 && temp < 150) {
+            console.log(`✅ [DEBUG] Using AMD Tctl temperature: ${temp}°C`);
+            return temp;
+          }
+        }
+
+        // Priority 2: Intel Package temperature
+        const packageMatch = sensorsOutput.match(/Package id \d+:\s*\+?(\d+\.\d+)°C/);
         if (packageMatch && packageMatch[1]) {
-          return parseFloat(packageMatch[1]);
+          const temp = parseFloat(packageMatch[1]);
+          console.log(`🔍 [DEBUG] Found Intel Package: ${temp}°C`);
+          if (temp > 0 && temp < 150) {
+            console.log(`✅ [DEBUG] Using Intel Package temperature: ${temp}°C`);
+            return temp;
+          }
         }
-        
-        // Format 2: "Core 0:        +39.0°C"
-        const coreMatch = sensorsOutput.match(/Core \d+:\s+\+(\d+\.\d+)°C/);
+
+        // Priority 3: TSI0_TEMP (AMD motherboard sensor)
+        const tsi0Match = sensorsOutput.match(/TSI0_TEMP:\s*\+?(\d+\.\d+)°C/);
+        if (tsi0Match && tsi0Match[1]) {
+          const temp = parseFloat(tsi0Match[1]);
+          console.log(`🔍 [DEBUG] Found TSI0_TEMP: ${temp}°C`);
+          if (temp > 0 && temp < 150) {
+            console.log(`✅ [DEBUG] Using TSI0_TEMP temperature: ${temp}°C`);
+            return temp;
+          }
+        }
+
+        // Priority 4: CPUTIN (motherboard CPU sensor)
+        const cputinMatch = sensorsOutput.match(/CPUTIN:\s*\+?(\d+\.\d+)°C/);
+        if (cputinMatch && cputinMatch[1]) {
+          const temp = parseFloat(cputinMatch[1]);
+          console.log(`🔍 [DEBUG] Found CPUTIN: ${temp}°C`);
+          if (temp > 0 && temp < 150) {
+            console.log(`✅ [DEBUG] Using CPUTIN temperature: ${temp}°C`);
+            return temp;
+          }
+        }
+
+        // Priority 5: Core temperature (Intel)
+        const coreMatch = sensorsOutput.match(/Core \d+:\s*\+?(\d+\.\d+)°C/);
         if (coreMatch && coreMatch[1]) {
-          return parseFloat(coreMatch[1]);
+          const temp = parseFloat(coreMatch[1]);
+          console.log(`🔍 [DEBUG] Found Core temp: ${temp}°C`);
+          if (temp > 0 && temp < 150) {
+            console.log(`✅ [DEBUG] Using Core temperature: ${temp}°C`);
+            return temp;
+          }
         }
-      } catch {
-        // Silently continue to next method
+
+        // Priority 6: Any other CPU-related temperature
+        const cpuTempMatch = sensorsOutput.match(/CPU[^:]*:\s*\+?(\d+\.\d+)°C/i);
+        if (cpuTempMatch && cpuTempMatch[1]) {
+          const temp = parseFloat(cpuTempMatch[1]);
+          console.log(`🔍 [DEBUG] Found CPU temp: ${temp}°C`);
+          if (temp > 0 && temp < 150) {
+            console.log(`✅ [DEBUG] Using CPU temperature: ${temp}°C`);
+            return temp;
+          }
+        }
+
+        // Debug: Show what patterns we're looking for vs what we found
+        console.log('🔍 [DEBUG] Searching for temperature patterns in sensors output...');
+        const tempLines = sensorsOutput.split('\n').filter(line => line.includes('°C'));
+        console.log(`🔍 [DEBUG] Found ${tempLines.length} temperature lines:`);
+        tempLines.forEach((line, index) => {
+          console.log(`🔍 [DEBUG] Temp line ${index + 1}: ${line.trim()}`);
+        });
+
+        // Priority 7: Processor temperature
+        const processorMatch = sensorsOutput.match(/Processor[^:]*:\s*\+?(\d+\.\d+)°C/i);
+        if (processorMatch && processorMatch[1]) {
+          const temp = parseFloat(processorMatch[1]);
+          console.log(`🔍 [DEBUG] Found Processor temp: ${temp}°C`);
+          if (temp > 0 && temp < 150) {
+            console.log(`✅ [DEBUG] Using Processor temperature: ${temp}°C`);
+            return temp;
+          }
+        }
+
+        // Priority 8: Any temperature that looks like a main sensor (first one found)
+        const anyTempMatch = sensorsOutput.match(/^\s*[^:]+:\s*\+?(\d+\.\d+)°C/m);
+        if (anyTempMatch && anyTempMatch[1]) {
+          const temp = parseFloat(anyTempMatch[1]);
+          console.log(`🔍 [DEBUG] Found any temp: ${temp}°C`);
+          if (temp > 20 && temp < 150) {
+            console.log(`✅ [DEBUG] Using fallback temperature: ${temp}°C`);
+            return temp;
+          }
+        }
+
+        console.log('⚠️ [DEBUG] No valid temperature found in sensors output');
+
+      } catch (sensorsError) {
+        console.log(`⚠️ [DEBUG] Sensors command failed: ${sensorsError.message}`);
       }
 
-      // Method 4: Try acpi as fallback (only if we have it installed)
+      // Method 4: Try /sys/class/hwmon approach (alternative to sensors)
       try {
+        console.log('🔍 [DEBUG] Trying hwmon approach...');
+        const hwmonDirs = execSync('ls /sys/class/hwmon/', { encoding: 'utf8' }).trim().split('\n');
+        console.log(`🔍 [DEBUG] Found ${hwmonDirs.length} hwmon directories: ${hwmonDirs.join(', ')}`);
+        
+        for (const hwmonDir of hwmonDirs) {
+          const hwmonPath = `/sys/class/hwmon/${hwmonDir}`;
+          
+          // Check if this is a CPU temperature sensor
+          try {
+            const nameFile = `${hwmonPath}/name`;
+            if (fs.existsSync(nameFile)) {
+              const sensorName = fs.readFileSync(nameFile, 'utf8').trim().toLowerCase();
+              console.log(`🔍 [DEBUG] Checking hwmon sensor: ${sensorName}`);
+              
+              // Look for CPU-related sensor names
+              if (sensorName.includes('k10temp') || 
+                  sensorName.includes('coretemp') || 
+                  sensorName.includes('cpu') ||
+                  sensorName.includes('tctl')) {
+                
+                console.log(`🔍 [DEBUG] Found CPU sensor: ${sensorName}`);
+                
+                // Try to read temp1_input (main temperature)
+                const tempFile = `${hwmonPath}/temp1_input`;
+                if (fs.existsSync(tempFile)) {
+                  const tempRaw = fs.readFileSync(tempFile, 'utf8').trim();
+                  const temp = parseInt(tempRaw) / 1000;
+                  console.log(`🔍 [DEBUG] ${sensorName} temp1_input: ${temp}°C`);
+                  if (!isNaN(temp) && temp > 0 && temp < 150) {
+                    console.log(`✅ [DEBUG] Using ${sensorName} temperature: ${temp}°C`);
+                    return temp;
+                  }
+                }
+              }
+            }
+          } catch (hwmonError) {
+            console.log(`⚠️ [DEBUG] Hwmon error for ${hwmonDir}: ${hwmonError.message}`);
+            continue;
+          }
+        }
+      } catch (hwmonListError) {
+        console.log(`⚠️ [DEBUG] Failed to list hwmon directories: ${hwmonListError.message}`);
+      }
+
+      // Method 5: Try acpi as fallback (only if we have it installed)
+      try {
+        console.log('🔍 [DEBUG] Trying ACPI approach...');
         // Check if acpi exists before trying to use it
         execSync('command -v acpi > /dev/null 2>&1');
         
         const tempOutput = execSync('acpi -t', { encoding: 'utf8' });
-        const match = tempOutput.match(/\d+\.\d+/);
-        if (match) return parseFloat(match[0]);
-      } catch {
-        // Silently continue to next method
-      }
-
-      // Method 5: Try /proc/acpi/thermal_zone
-      try {
-        if (fs.existsSync('/proc/acpi/thermal_zone')) {
-          const zones = execSync('ls /proc/acpi/thermal_zone', { encoding: 'utf8' }).trim().split('\n');
-          if (zones.length > 0) {
-            const tempOutput = execSync(`cat /proc/acpi/thermal_zone/${zones[0]}/temperature`, { encoding: 'utf8' });
-            const match = tempOutput.match(/\d+/);
-            if (match) return parseInt(match[0]);
+        console.log(`🔍 [DEBUG] ACPI output: ${tempOutput.trim()}`);
+        const match = tempOutput.match(/(\d+\.\d+)/);
+        if (match) {
+          const temp = parseFloat(match[0]);
+          console.log(`🔍 [DEBUG] ACPI temperature: ${temp}°C`);
+          if (temp > 0 && temp < 150) {
+            console.log(`✅ [DEBUG] Using ACPI temperature: ${temp}°C`);
+            return temp;
           }
         }
-      } catch {
-        // No more methods to try
+      } catch (acpiError) {
+        console.log(`⚠️ [DEBUG] ACPI failed: ${acpiError.message}`);
+      }
+
+      // Method 6: Try /proc/acpi/thermal_zone
+      try {
+        console.log('🔍 [DEBUG] Trying /proc/acpi/thermal_zone...');
+        if (fs.existsSync('/proc/acpi/thermal_zone')) {
+          const zones = execSync('ls /proc/acpi/thermal_zone', { encoding: 'utf8' }).trim().split('\n');
+          console.log(`🔍 [DEBUG] Found thermal zones: ${zones.join(', ')}`);
+          if (zones.length > 0) {
+            const tempOutput = execSync(`cat /proc/acpi/thermal_zone/${zones[0]}/temperature`, { encoding: 'utf8' });
+            console.log(`🔍 [DEBUG] Thermal zone output: ${tempOutput.trim()}`);
+            const match = tempOutput.match(/(\d+)/);
+            if (match) {
+              const temp = parseInt(match[0]);
+              console.log(`🔍 [DEBUG] Thermal zone temperature: ${temp}°C`);
+              if (temp > 0 && temp < 150) {
+                console.log(`✅ [DEBUG] Using thermal zone temperature: ${temp}°C`);
+                return temp;
+              }
+            }
+          }
+        }
+      } catch (procAcpiError) {
+        console.log(`⚠️ [DEBUG] /proc/acpi/thermal_zone failed: ${procAcpiError.message}`);
+      }
+
+      // Method 7: Try direct AMD temperature reading (for systems without sensors package)
+      try {
+        console.log('🔍 [DEBUG] Trying direct AMD k10temp reading...');
+        // Look for AMD k10temp in hwmon
+        const hwmonDirs = fs.readdirSync('/sys/class/hwmon/');
+        for (const dir of hwmonDirs) {
+          const namePath = `/sys/class/hwmon/${dir}/name`;
+          if (fs.existsSync(namePath)) {
+            const name = fs.readFileSync(namePath, 'utf8').trim();
+            console.log(`🔍 [DEBUG] Checking direct sensor: ${name}`);
+            if (name === 'k10temp') {
+              const tempPath = `/sys/class/hwmon/${dir}/temp1_input`;
+              if (fs.existsSync(tempPath)) {
+                const tempRaw = fs.readFileSync(tempPath, 'utf8').trim();
+                const temp = parseInt(tempRaw) / 1000;
+                console.log(`🔍 [DEBUG] Direct k10temp: ${temp}°C`);
+                if (!isNaN(temp) && temp > 0 && temp < 150) {
+                  console.log(`✅ [DEBUG] Using direct k10temp: ${temp}°C`);
+                  return temp;
+                }
+              }
+            }
+          }
+        }
+      } catch (directAmdError) {
+        console.log(`⚠️ [DEBUG] Direct AMD reading failed: ${directAmdError.message}`);
       }
 
       // No temperature data available
-      console.log('No CPU temperature sensors detected');
+      console.log('❌ [DEBUG] No CPU temperature sensors detected or accessible');
       return 0;
     } catch (error) {
-      console.error(`❌ Failed to get Linux temperature: ${error.message}`);
+      console.error(`❌ [DEBUG] Failed to get Linux temperature: ${error.message}`);
       return 0;
     }
   }
