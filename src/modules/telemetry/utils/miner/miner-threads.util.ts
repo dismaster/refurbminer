@@ -1,5 +1,5 @@
 import { execSync } from 'child_process';
-import * as os from 'os'; // ✅ Import the OS module
+import * as os from 'os';
 
 export class MinerThreadsUtil {
   /** ✅ Get thread performance data */
@@ -29,26 +29,36 @@ export class MinerThreadsUtil {
     }
   }
 
-  /** ✅ Get CPU information */
+  /** ✅ Get CPU information with improved parsing */
   private static getCpuInfo(): any[] {
     try {
-      // Try using lscpu first
+      // Try using lscpu first with improved parsing
       const lscpuOutput = execSync('lscpu', { encoding: 'utf8' }).split('\n');
-      const modelName = lscpuOutput.find(l => l.includes('Model name'))?.split(':')[1]?.trim() || '';
+      
+      // Extract basic CPU info
+      const modelNameLine = lscpuOutput.find(l => l.includes('Model name'));
+      let modelName = '';
+      if (modelNameLine) {
+        // Clean up the model name to avoid "None CPU" issues
+        modelName = modelNameLine.split(':')[1]?.trim() || '';
+        // Remove any "None CPU" artifacts
+        modelName = modelName.replace(/\s*None CPU.*$/, '').trim();
+      }
+      
       const maxMHz = parseFloat(lscpuOutput.find(l => l.includes('CPU max MHz'))?.split(':')[1]?.trim() || '0');
       const minMHz = parseFloat(lscpuOutput.find(l => l.includes('CPU min MHz'))?.split(':')[1]?.trim() || '0');
-      const cores = parseInt(lscpuOutput.find(l => l.includes('CPU(s)'))?.split(':')[1]?.trim() || '0');
+      const cores = parseInt(lscpuOutput.find(l => l.includes('CPU(s):'))?.split(':')[1]?.trim() || '0');
 
       if (modelName && cores) {
         return Array(cores).fill(null).map((_, index) => ({
           model: modelName,
           coreId: index,
-          maxMHz: maxMHz,
-          minMHz: minMHz
+          maxMHz: maxMHz || 0,
+          minMHz: minMHz || 0
         }));
       }
 
-      // Fallback to /proc/cpuinfo
+      // Fallback to /proc/cpuinfo with improved parsing
       const cpuinfo = execSync('cat /proc/cpuinfo', { encoding: 'utf8' });
       const processors = cpuinfo.split('\n\n').filter(block => block.trim());
 
@@ -60,8 +70,12 @@ export class MinerThreadsUtil {
             return line ? line.split(':')[1].trim() : '';
           };
 
+          let model = getField('model name') || getField('Hardware');
+          // Clean up model name
+          model = model.replace(/\s*None CPU.*$/, '').trim();
+
           return {
-            model: getField('model name') || getField('Hardware'),
+            model: model || 'Unknown CPU',
             coreId: index,
             maxMHz: parseFloat(getField('cpu MHz')) || 0,
             minMHz: parseFloat(getField('cpu MHz')) * 0.3 || 0
@@ -71,7 +85,7 @@ export class MinerThreadsUtil {
 
       // Ultimate fallback to os.cpus()
       return os.cpus().map((cpu, index) => ({
-        model: cpu.model,
+        model: cpu.model.replace(/\s*None CPU.*$/, '').trim() || 'Unknown CPU',
         coreId: index,
         maxMHz: cpu.speed,
         minMHz: Math.floor(cpu.speed * 0.3)
@@ -97,13 +111,60 @@ export class MinerThreadsUtil {
     }
   }
 
-  /** ✅ Get CCMiner thread statistics */
+  /** ✅ Get CCMiner thread statistics with fallback methods */
   private static getCcminerThreadStats(): any[] {
     try {
-      const threadsRaw = execSync(`echo 'threads' | nc -w 1 127.0.0.1 4068`, { encoding: 'utf8' });
-      const stats = this.parseCcminerThreads(threadsRaw);
-      return stats.length ? stats : this.getDefaultThreadStats();
-    } catch {
+      // Method 1: Try the threads command
+      let threadsRaw = '';
+      try {
+        threadsRaw = execSync(`echo 'threads' | nc -w 1 127.0.0.1 4068`, { encoding: 'utf8' });
+        if (threadsRaw && threadsRaw.trim()) {
+          const stats = this.parseCcminerThreads(threadsRaw);
+          if (stats.length > 0) {
+            return stats;
+          }
+        }
+      } catch (error) {
+        console.log('CCMiner threads command failed, trying alternatives...');
+      }
+
+      // Method 2: Try to get total hashrate from summary and distribute evenly
+      try {
+        const summaryRaw = execSync(`echo 'summary' | nc -w 1 127.0.0.1 4068`, { encoding: 'utf8' });
+        const hashMatch = summaryRaw.match(/KHS=([\d.]+)/);
+        if (hashMatch) {
+          const totalHashrate = parseFloat(hashMatch[1]);
+          const cpuCount = os.cpus().length;
+          const hashratePerThread = totalHashrate / cpuCount;
+          
+          return Array(cpuCount).fill(null).map((_, index) => ({
+            coreId: index,
+            hashrate: hashratePerThread
+          }));
+        }
+      } catch (error) {
+        console.log('CCMiner summary fallback failed');
+      }
+
+      // Method 3: Try hwinfo for CPU count and estimate
+      try {
+        const hwinfoRaw = execSync(`echo 'hwinfo' | nc -w 1 127.0.0.1 4068`, { encoding: 'utf8' });
+        const cpusMatch = hwinfoRaw.match(/CPUS=(\d+)/);
+        if (cpusMatch) {
+          const cpuCount = parseInt(cpusMatch[1]);
+          // Return zero hashrate for each core since we can't get individual thread stats
+          return Array(cpuCount).fill(null).map((_, index) => ({
+            coreId: index,
+            hashrate: 0
+          }));
+        }
+      } catch (error) {
+        console.log('CCMiner hwinfo fallback failed');
+      }
+
+      return this.getDefaultThreadStats();
+    } catch (error) {
+      console.error('Failed to get CCMiner stats:', error);
       return this.getDefaultThreadStats();
     }
   }
@@ -111,14 +172,24 @@ export class MinerThreadsUtil {
   /** ✅ Get XMRig thread statistics */
   private static async getXmrigThreadStats(): Promise<any[]> {
     try {
-      const response = await fetch(`http://127.0.0.1:4067/threads`);
-      if (!response.ok) return this.getDefaultThreadStats();
+      const response = await fetch(`http://127.0.0.1:4067/2/threads`);
+      if (!response.ok) {
+        // Try alternative endpoint
+        const altResponse = await fetch(`http://127.0.0.1:4067/threads`);
+        if (!altResponse.ok) return this.getDefaultThreadStats();
+        
+        const json = await altResponse.json();
+        return json.threads?.map((thread: any, index: number) => ({
+          coreId: index,
+          hashrate: parseFloat(thread.hashrate?.[0] || '0')
+        })) || this.getDefaultThreadStats();
+      }
 
       const json = await response.json();
-      return json.threads.map((thread: any, index: number) => ({
+      return json.threads?.map((thread: any, index: number) => ({
         coreId: index,
         hashrate: parseFloat(thread.hashrate?.[0] || '0')
-      }));
+      })) || this.getDefaultThreadStats();
     } catch {
       return this.getDefaultThreadStats();
     }
@@ -126,15 +197,38 @@ export class MinerThreadsUtil {
 
   /** ✅ Parse CCMiner thread output */
   private static parseCcminerThreads(output: string): any[] {
-    return output
-      .split('|')
-      .map((thread, index) => {
-        const match = thread.match(/KHS=([\d.]+)/);
+    if (!output || !output.trim()) {
+      return [];
+    }
+
+    try {
+      // Try to parse pipe-separated format first
+      if (output.includes('|')) {
+        return output
+          .split('|')
+          .filter(thread => thread.trim())
+          .map((thread, index) => {
+            const match = thread.match(/KHS=([\d.]+)/);
+            return {
+              coreId: index,
+              hashrate: match ? parseFloat(match[1]) : 0
+            };
+          });
+      }
+
+      // Try to parse line-separated format
+      const lines = output.split('\n').filter(line => line.trim());
+      return lines.map((line, index) => {
+        const match = line.match(/KHS=([\d.]+)/);
         return {
           coreId: index,
           hashrate: match ? parseFloat(match[1]) : 0
         };
       });
+    } catch (error) {
+      console.error('Failed to parse CCMiner threads:', error);
+      return [];
+    }
   }
 
   /** ✅ Default thread stats fallback */
