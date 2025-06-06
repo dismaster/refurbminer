@@ -17,7 +17,7 @@ export class MinerManagerService
   private static isInitialized = false;
   private minerScreen = 'miner-session';
   private pollingInterval?: NodeJS.Timeout;
-  private scheduleInterval?: NodeJS.Timeout;
+  private configSyncInterval?: NodeJS.Timeout; // Config sync includes schedule data
   private crashMonitorInterval?: NodeJS.Timeout;
   private crashCount = 0;
   private readonly MAX_CRASHES = 3;
@@ -61,9 +61,9 @@ export class MinerManagerService
       clearInterval(this.pollingInterval);
       this.pollingInterval = undefined;
     }
-    if (this.scheduleInterval) {
-      clearInterval(this.scheduleInterval);
-      this.scheduleInterval = undefined;
+    if (this.configSyncInterval) {
+      clearInterval(this.configSyncInterval);
+      this.configSyncInterval = undefined;
     }
     if (this.crashMonitorInterval) {
       clearInterval(this.crashMonitorInterval);
@@ -73,7 +73,8 @@ export class MinerManagerService
 
   private async initializeMiner(): Promise<void> {
     try {
-      this.stopMiner();
+      // Clean up any existing miner sessions first
+      this.cleanupAllMinerSessions();
 
       const miner = this.getMinerFromFlightsheet();
       if (!miner) {
@@ -93,8 +94,8 @@ export class MinerManagerService
       this.startMiner();
     } catch (error) {
       await this.logMinerError(
-        `Initialization failed: ${error.message}`,
-        error.stack,
+        `Initialization failed: ${error instanceof Error ? error.message : String(error)}`,
+        error instanceof Error ? error.stack || '' : '',
       );
     }
   }
@@ -117,13 +118,28 @@ export class MinerManagerService
       }
     }, 60000); // Every minute for faster response to user changes
 
-    // Set up schedule interval - check more frequently (every minute)
-    // Also sync config before checking to ensure latest schedule data
-    this.scheduleInterval = setInterval(() => {
-      // Use local config cache for more frequent checks
-      // API sync happens in pollingInterval above
-      this.checkSchedules();
-    }, 60000);
+    // Set up config sync interval every 5 minutes - includes schedule checking
+    this.configSyncInterval = setInterval(async () => {
+      this.loggingService.log(
+        '🔄 Syncing config from backend API...',
+        'DEBUG',
+        'miner-manager',
+      );
+
+      try {
+        // Sync config from backend API (includes schedule data)
+        await this.configService.syncConfigWithApi();
+        
+        // After successful sync, check schedules with fresh data
+        this.checkSchedules();
+      } catch (error) {
+        this.loggingService.log(
+          `⚠️ Config sync failed: ${error instanceof Error ? error.message : String(error)}`,
+          'WARN',
+          'miner-manager',
+        );
+      }
+    }, 300000); // Every 5 minutes
 
     // Set up crash monitoring
     this.crashMonitorInterval = setInterval(() => {
@@ -138,7 +154,7 @@ export class MinerManagerService
 
     // Log configuration for monitoring intervals
     this.loggingService.log(
-      '📋 Schedule monitoring configured: Flightsheet check every minute, local schedule check every minute',
+      '📋 Monitoring configured: Flightsheet check every minute, config sync (with schedules) every 5 minutes',
       'INFO',
       'miner-manager',
     );
@@ -325,13 +341,98 @@ export class MinerManagerService
     }
   }
 
+  /**
+   * Get the count of running miner sessions
+   */
+  public getMinerSessionCount(): number {
+    try {
+      const output = execSync(`screen -ls | grep ${this.minerScreen}`, {
+        encoding: 'utf8',
+      });
+      
+      if (!output.trim()) {
+        return 0;
+      }
+      
+      const lines = output.split('\n');
+      let count = 0;
+      
+      for (const line of lines) {
+        if (line.match(/^\s*\d+\.miner-session/)) {
+          count++;
+        }
+      }
+      
+      return count;
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
+   * Clean up all miner sessions (useful when multiple sessions exist)
+   */
+  private cleanupAllMinerSessions(): void {
+    try {
+      const output = execSync(`screen -ls | grep ${this.minerScreen}`, {
+        encoding: 'utf8',
+      });
+      
+      if (output.trim()) {
+        // Extract session IDs from screen -ls output
+        const lines = output.split('\n');
+        const sessionIds: string[] = [];
+        
+        for (const line of lines) {
+          const match = line.match(/^\s*(\d+)\.miner-session/);
+          if (match) {
+            sessionIds.push(match[1]);
+          }
+        }
+        
+        if (sessionIds.length > 0) {
+          this.loggingService.log(
+            `🧹 Found ${sessionIds.length} miner sessions to clean up: ${sessionIds.join(', ')}`,
+            'INFO',
+            'miner-manager',
+          );
+          
+          // Kill all miner sessions
+          for (const sessionId of sessionIds) {
+            try {
+              execSync(`screen -X -S ${sessionId}.${this.minerScreen} quit`, { timeout: 5000 });
+              this.loggingService.log(
+                `✅ Cleaned up session: ${sessionId}.${this.minerScreen}`,
+                'DEBUG',
+                'miner-manager',
+              );
+            } catch (error) {
+              this.loggingService.log(
+                `⚠️ Failed to clean up session ${sessionId}.${this.minerScreen}: ${error instanceof Error ? error.message : String(error)}`,
+                'WARN',
+                'miner-manager',
+              );
+            }
+          }
+        }
+      }
+    } catch (error) {
+      // No sessions found or other error - this is expected when no sessions exist
+      this.loggingService.log(
+        'No miner sessions found to clean up',
+        'DEBUG',
+        'miner-manager',
+      );
+    }
+  }
+
   public startMiner(): boolean {
     try {
       const miner = this.getMinerFromFlightsheet();
       if (!miner) {
         const error = 'Cannot start miner: No miner found in flightsheet';
         this.loggingService.log(`❌ ${error}`, 'ERROR', 'miner-manager');
-        this.logMinerError(error);
+        void this.logMinerError(error);
         return false;
       }
 
@@ -341,9 +442,12 @@ export class MinerManagerService
       if (!fs.existsSync(configPath) || !fs.existsSync(minerExecutable)) {
         const error = `Cannot start miner: Missing files at ${configPath} or ${minerExecutable}`;
         this.loggingService.log(`❌ ${error}`, 'ERROR', 'miner-manager');
-        this.logMinerError(error);
+        void this.logMinerError(error);
         return false;
       }
+
+      // Clean up any existing miner sessions before starting a new one
+      this.cleanupAllMinerSessions();
 
       execSync(`chmod +x ${minerExecutable}`);
       exec(
@@ -357,9 +461,9 @@ export class MinerManagerService
       );
       return true;
     } catch (error) {
-      this.logMinerError(
-        `Failed to start miner: ${error.message}`,
-        error.stack,
+      void this.logMinerError(
+        `Failed to start miner: ${error instanceof Error ? error.message : String(error)}`,
+        error instanceof Error ? error.stack || '' : '',
       );
       return false;
     }
@@ -376,7 +480,8 @@ export class MinerManagerService
         return true;
       }
 
-      execSync(`screen -X -S ${this.minerScreen} quit`);
+      // Clean up all miner sessions instead of just trying to stop one
+      this.cleanupAllMinerSessions();
 
       // Set the manual stop flag if applicable
       if (isManualStop) {
@@ -397,7 +502,10 @@ export class MinerManagerService
 
       return true;
     } catch (error) {
-      this.logMinerError(`Failed to stop miner: ${error.message}`, error.stack);
+      void this.logMinerError(
+        `Failed to stop miner: ${error instanceof Error ? error.message : String(error)}`, 
+        error instanceof Error ? error.stack || '' : ''
+      );
       return false;
     }
   }
@@ -509,8 +617,18 @@ export class MinerManagerService
       .toLowerCase();
     const currentTime = now.toTimeString().split(' ')[0].substring(0, 5);
 
+    // Check for multiple sessions and log warning
+    const sessionCount = this.getMinerSessionCount();
+    if (sessionCount > 1) {
+      this.loggingService.log(
+        `⚠️ Multiple miner sessions detected (${sessionCount}). This may indicate session cleanup issues.`,
+        'WARN',
+        'miner-manager',
+      );
+    }
+
     this.loggingService.log(
-      `🕒 Checking schedules at ${currentTime} on ${currentDay}`,
+      `🕒 Checking schedules at ${currentTime} on ${currentDay} (${sessionCount} sessions)`,
       'DEBUG',
       'miner-manager',
     );
@@ -585,9 +703,24 @@ export class MinerManagerService
 
     // Check scheduled restarts - independent of mining schedule
     const restarts = config.schedules?.scheduledRestarts || [];
-    for (const restartTime of restarts) {
-      // Since scheduledRestarts is now a string array, compare directly with currentTime
-      if (currentTime === restartTime) {
+    for (const restart of restarts) {
+      // Only support new object format from backend API
+      if (!restart || typeof restart !== 'object' || !restart.time) {
+        this.loggingService.log(
+          `⚠️ Invalid restart configuration (expected object with time property): ${JSON.stringify(restart)}`,
+          'WARN',
+          'miner-manager',
+        );
+        continue;
+      }
+
+      const restartTime = restart.time;
+      const restartDays = restart.days;
+
+      // Check if restart applies to current day (if days are specified)
+      const appliesToday = !restartDays || restartDays.includes(currentDay);
+
+      if (appliesToday && currentTime === restartTime) {
         this.loggingService.log(
           `⏰ Restarting miner for scheduled restart at ${restartTime} on ${currentDay}`,
           'INFO',
@@ -794,10 +927,16 @@ export class MinerManagerService
       if (restarts.length > 0) {
         // Find the next restart time
         const futureRestarts = restarts
-          .map((time) => {
-            const timeMinutes = this.timeToMinutes(time);
+          .map((restart) => {
+            // Only support new object format from backend API
+            if (!restart || typeof restart !== 'object' || !restart.time) {
+              return null; // Invalid format
+            }
+
+            const restartTime = restart.time;
+            const timeMinutes = this.timeToMinutes(restartTime);
             return {
-              time,
+              time: restartTime,
               minutes: timeMinutes,
               isToday: timeMinutes > currentMinutes,
               timeUntil:
@@ -806,6 +945,7 @@ export class MinerManagerService
                   : 24 * 60 - currentMinutes + timeMinutes,
             };
           })
+          .filter((restart): restart is NonNullable<typeof restart> => restart !== null) // Remove invalid entries
           .sort((a, b) => a.timeUntil - b.timeUntil);
 
         nextRestart = futureRestarts.length > 0 ? futureRestarts[0] : null;

@@ -11,7 +11,13 @@ interface SchedulePeriod {
   days: string[]; // Keep for future compatibility
 }
 
-// Match database structure where scheduledRestarts is array of strings
+// Interface for new backend API restart objects
+interface ScheduledRestart {
+  time: string;
+  days?: string[]; // Optional array of days
+}
+
+// Match database structure where scheduledRestarts is array of objects
 interface Config {
   minerId: string;
   rigId: string;
@@ -28,7 +34,7 @@ interface Config {
       enabled: boolean;
       periods: SchedulePeriod[];
     };
-    scheduledRestarts: string[]; // Array of times like ["16:00"]
+    scheduledRestarts: ScheduledRestart[]; // Array of objects like [{time: "16:00", days: ["monday"]}]
   };
 }
 
