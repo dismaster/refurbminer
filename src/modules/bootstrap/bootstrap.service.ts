@@ -249,11 +249,7 @@ export class BootstrapService implements OnModuleInit {
         execSync('command -v sudo', { stdio: 'ignore' });
         hasSudo = true;
       } catch {
-        this.loggingService.log(
-          'sudo not available, will attempt direct installation',
-          'INFO',
-          'bootstrap',
-        );
+        // No sudo available
       }
 
       // Detect package manager
@@ -279,22 +275,37 @@ export class BootstrapService implements OnModuleInit {
           'WARN',
           'bootstrap',
         );
+        // Continue without package installation
+      } else if (!hasSudo && packageManager !== 'pkg') {
+        this.loggingService.log(
+          `Package manager ${packageManager} requires sudo privileges, but sudo is not available`,
+          'WARN',
+          'bootstrap',
+        );
+        this.loggingService.log(
+          'Skipping package installation and verifying existing tools...',
+          'INFO',
+          'bootstrap',
+        );
+        
+        // Just verify that essential tools are available
+        await this.verifyEssentialTools();
         return;
+      } else {
+        this.loggingService.log(
+          `Installing dependencies for ${osType} using ${packageManager}...`,
+          'INFO',
+          'bootstrap',
+        );
+
+        // Enhanced installation with individual package fallback
+        await this.installDependenciesWithFallback(
+          packageManager,
+          hasSudo,
+          osType,
+          PACKAGE_MAPPING[packageManager] || PACKAGE_MAPPING['apt-get'],
+        );
       }
-
-      this.loggingService.log(
-        `Installing dependencies for ${osType} using ${packageManager}...`,
-        'INFO',
-        'bootstrap',
-      );
-
-      // Enhanced installation with individual package fallback
-      await this.installDependenciesWithFallback(
-        packageManager,
-        hasSudo,
-        osType,
-        PACKAGE_MAPPING[packageManager] || PACKAGE_MAPPING['apt-get'],
-      );
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.loggingService.log(
@@ -921,6 +932,87 @@ export class BootstrapService implements OnModuleInit {
         'bootstrap',
       );
       // Continue execution despite failures
+    }
+  }
+
+  /** Verify that essential tools are available without installing packages */
+  private async verifyEssentialTools(): Promise<void> {
+    const essentialTools = [
+      { command: 'curl', required: true, description: 'HTTP client for API communication' },
+      { command: 'screen', required: true, description: 'Terminal multiplexer for background processes' },
+      { command: 'git', required: false, description: 'Version control system' },
+      { command: 'nc', required: false, description: 'Network connectivity testing' },
+      { command: 'ping', required: false, description: 'Network connectivity testing' },
+    ];
+
+    const available: string[] = [];
+    const missing: string[] = [];
+    const criticalMissing: string[] = [];
+
+    for (const tool of essentialTools) {
+      try {
+        execSync(`command -v ${tool.command}`, { stdio: 'ignore' });
+        available.push(tool.command);
+        this.loggingService.log(
+          `✅ ${tool.command} is available`,
+          'DEBUG',
+          'bootstrap',
+        );
+      } catch {
+        missing.push(tool.command);
+        if (tool.required) {
+          criticalMissing.push(tool.command);
+          this.loggingService.log(
+            `❌ CRITICAL: ${tool.command} is missing (${tool.description})`,
+            'ERROR',
+            'bootstrap',
+          );
+        } else {
+          this.loggingService.log(
+            `⚠️ Optional: ${tool.command} is missing (${tool.description})`,
+            'WARN',
+            'bootstrap',
+          );
+        }
+      }
+    }
+
+    this.loggingService.log(
+      `Tools available: ${available.length > 0 ? available.join(', ') : 'none'}`,
+      'INFO',
+      'bootstrap',
+    );
+
+    if (missing.length > 0) {
+      this.loggingService.log(
+        `Tools missing: ${missing.join(', ')}`,
+        'WARN',
+        'bootstrap',
+      );
+    }
+
+    if (criticalMissing.length > 0) {
+      this.loggingService.log(
+        'CRITICAL TOOLS MISSING: RefurbMiner may not function properly.',
+        'ERROR',
+        'bootstrap',
+      );
+      this.loggingService.log(
+        `Please install these tools manually: ${criticalMissing.join(', ')}`,
+        'ERROR',
+        'bootstrap',
+      );
+      this.loggingService.log(
+        'Example: sudo apt-get install curl screen',
+        'INFO',
+        'bootstrap',
+      );
+    } else {
+      this.loggingService.log(
+        'All critical tools are available - RefurbMiner should function properly',
+        'INFO',
+        'bootstrap',
+      );
     }
   }
 }
