@@ -301,13 +301,22 @@ UPDATE_EXIT_CODE=$?
 
 # Send notification when complete
 if [ $UPDATE_EXIT_CODE -eq 0 ]; then
-  # Try to restart the service
+  # Try to restart the service in proper screen session
   if pgrep -f "node.*refurbminer" > /dev/null; then
     pkill -f "node.*refurbminer"
     sleep 2
-    cd ${homeDir}/refurbminer && npm start &
   fi
-  termux-notification --title "RefurbMiner Update" --content "Update completed successfully" || true
+  
+  # Stop any existing refurbminer screen session
+  if screen -list | grep -q "refurbminer"; then
+    screen -S refurbminer -X quit
+    sleep 1
+  fi
+  
+  # Start RefurbMiner in proper screen session
+  cd ${homeDir}/refurbminer && screen -dmS refurbminer npm start
+  
+  termux-notification --title "RefurbMiner Update" --content "Update completed successfully and restarted in screen session" || true
 else
   termux-notification --title "RefurbMiner Update" --content "Update failed with exit code $UPDATE_EXIT_CODE" || true
 fi`;
@@ -606,16 +615,23 @@ if [ $UPDATE_EXIT_CODE -eq 0 ]; then
         sleep 3
     fi
     
-    # Try systemd/service restart
+    # Stop any existing refurbminer screen session
+    if screen -list | grep -q "refurbminer" 2>/dev/null; then
+        log_message "Stopping existing RefurbMiner screen session..."
+        screen -S refurbminer -X quit 2>/dev/null || true
+        sleep 1
+    fi
+    
+    # Try systemd/service restart first
     ${serviceRestartCmd} >> ${logPath} 2>&1
     SERVICE_EXIT_CODE=$?
     
     if [ $SERVICE_EXIT_CODE -eq 0 ]; then
         log_message "RefurbMiner service restarted successfully"
     else
-        log_message "Service restart failed, attempting manual start..."
-        cd ${homeDir}/refurbminer && npm start >> ${logPath} 2>&1 &
-        log_message "Manual start command executed"
+        log_message "Service restart failed, attempting manual start in screen session..."
+        cd ${homeDir}/refurbminer && screen -dmS refurbminer npm start
+        log_message "RefurbMiner started in screen session 'refurbminer'"
     fi
     
     # Send success notification
