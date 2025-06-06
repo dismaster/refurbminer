@@ -356,7 +356,22 @@ fi`;
         }
         
         // Execute the wrapper using nohup to ensure it continues after we exit
-        await execAsync(`nohup ${wrapperPath} >/dev/null 2>&1 &`);
+        try {
+          this.loggingService.log(`📋 Attempting to execute wrapper: ${wrapperPath}`, 'DEBUG', 'actions');
+          await execAsync(`nohup bash ${wrapperPath} >/dev/null 2>&1 &`);
+          this.loggingService.log('✅ Wrapper script launched successfully', 'DEBUG', 'actions');
+        } catch (nohupError) {
+          this.loggingService.log(`⚠️ nohup failed, trying alternative method: ${nohupError.message}`, 'WARN', 'actions');
+          // Fallback: try direct execution with bash
+          try {
+            await execAsync(`bash ${wrapperPath} &`);
+            this.loggingService.log('✅ Wrapper script launched with fallback method', 'DEBUG', 'actions');
+          } catch (fallbackError) {
+            this.loggingService.log(`❌ Both execution methods failed: ${fallbackError.message}`, 'ERROR', 'actions');
+            // Try synchronous execution as last resort
+            await execAsync(`bash ${wrapperPath}`);
+          }
+        }
         
         this.loggingService.log('🚀 Update will continue in background with output logged to update_log.txt', 'INFO', 'actions');
         this.loggingService.log('⚠️ Service may restart shortly as part of the update process', 'WARN', 'actions');
