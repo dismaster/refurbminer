@@ -96,12 +96,16 @@ export class ApiCommunicationService {
       throw new HttpException('Failed to update telemetry', HttpStatus.BAD_REQUEST);
     }
   }
-
   /** 📝 Fetch flightsheet (mining configuration) */
-  async getFlightsheet(): Promise<any> {
+  async getFlightsheet(minerId?: string): Promise<any> {
     try {
+      let url = `${this.apiUrl}/api/miners/flightsheet?rigToken=${this.rigToken}`;
+      if (minerId) {
+        url += `&minerId=${minerId}`;
+      }
+      
       const response = await firstValueFrom(
-        this.httpService.get(`${this.apiUrl}/api/miners/flightsheet?rigToken=${this.rigToken}`),
+        this.httpService.get(url),
       );
       return response.data;
     } catch (error) {

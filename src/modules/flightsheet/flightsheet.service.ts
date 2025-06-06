@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { LoggingService } from '../logging/logging.service';
 import { ApiCommunicationService } from '../api-communication/api-communication.service';
+import { ConfigService } from '../config/config.service';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -10,13 +11,20 @@ export class FlightsheetService {
 
   constructor(
     private readonly loggingService: LoggingService,
-    private readonly apiService: ApiCommunicationService
+    private readonly apiService: ApiCommunicationService,
+    private readonly configService: ConfigService
   ) {}
-
   async updateFlightsheet(): Promise<boolean> {
     try {
       this.loggingService.log('📡 Fetching flightsheet from API...', 'INFO', 'flightsheet');
-      const flightsheet = await this.apiService.getFlightsheet();
+      
+      const minerId = this.configService.getMinerId();
+      if (!minerId) {
+        this.loggingService.log('❌ Cannot fetch flightsheet: No minerId found', 'ERROR', 'flightsheet');
+        return false;
+      }
+      
+      const flightsheet = await this.apiService.getFlightsheet(minerId);
 
       if (!flightsheet || !flightsheet.minerSoftware) {
         this.loggingService.log('❌ Invalid flightsheet received.', 'ERROR', 'flightsheet');
