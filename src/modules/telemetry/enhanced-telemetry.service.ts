@@ -226,24 +226,34 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
         'battery info retrieval',
         this.loggingService.log.bind(this.loggingService)
       );
-      
-      // Create API telemetry object
+        // Create API telemetry object
       const apiTelemetry = {
         status: 'active', // App is running, so always 'active'
         minerSoftware: {
           name: minerSummary.name,
           version: minerSummary.version,
           algorithm: minerSummary.algorithm,
-          hashrate: minerSummary.hashrate,
-          acceptedShares: minerSummary.acceptedShares,
-          rejectedShares: minerSummary.rejectedShares,
-          uptime: minerSummary.uptime,
-          solvedBlocks: minerSummary.solvedBlocks,          // Use more detailed status for mining
+          // Reset hashrate to 0 when miner is not running
+          hashrate: minerRunning ? minerSummary.hashrate : 0,
+          // Reset share counts when miner is not running
+          acceptedShares: minerRunning ? minerSummary.acceptedShares : 0,
+          rejectedShares: minerRunning ? minerSummary.rejectedShares : 0,
+          uptime: minerRunning ? minerSummary.uptime : 0,
+          solvedBlocks: minerRunning ? minerSummary.solvedBlocks : 0,
+          // Use more detailed status for mining
           miningStatus: isManuallyStoppedByUser 
             ? 'manually_stopped' 
             : (minerRunning ? 'active' : 'stopped'),
         },
-        pool: poolStats,
+        pool: {
+          ...poolStats,
+          // Reset pool statistics when miner is not running
+          acceptedShares: minerRunning ? poolStats.acceptedShares : 0,
+          rejectedShares: minerRunning ? poolStats.rejectedShares : 0,
+          staleShares: minerRunning ? poolStats.staleShares : 0,
+          ping: minerRunning ? poolStats.ping : 0,
+          uptime: minerRunning ? poolStats.uptime : 0
+        },
         deviceInfo: deviceInfo,
         network: network,
         battery: battery
