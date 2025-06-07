@@ -654,18 +654,24 @@ export class MinerSoftwareService {
         execSync('pkg install cmake -y', { stdio: 'pipe' });
         execSync('pkg install make -y', { stdio: 'pipe' });
         execSync('pkg install clang -y', { stdio: 'pipe' });
-        execSync('pkg install git -y', { stdio: 'pipe' });
-      } else {
+        execSync('pkg install git -y', { stdio: 'pipe' });      } else {
         // Regular Linux environment - use apt-based installation
-        this.loggingService.log('Installing cmake and dependencies for Linux...', 'INFO', 'miner-software');
+        const isRoot = process.getuid ? process.getuid() === 0 : false;
+        const cmdPrefix = isRoot ? '' : 'sudo ';
+        
+        this.loggingService.log(
+          `Installing cmake and dependencies for Linux... (Running as ${isRoot ? 'root' : 'user'})`,
+          'INFO',
+          'miner-software'
+        );
         
         // Update package index
-        execSync('sudo apt update', { stdio: 'pipe' });
+        execSync(`${cmdPrefix}apt update`, { stdio: 'pipe' });
         
         // Install build dependencies
-        execSync('sudo apt install -y cmake build-essential git', { stdio: 'pipe' });
-        execSync('sudo apt install -y libuv1-dev libssl-dev libhwloc-dev', { stdio: 'pipe' });
-      }      // Step 2: Clone the repository
+        execSync(`${cmdPrefix}apt install -y cmake build-essential git`, { stdio: 'pipe' });
+        execSync(`${cmdPrefix}apt install -y libuv1-dev libssl-dev libhwloc-dev`, { stdio: 'pipe' });
+      }// Step 2: Clone the repository
       const gitRepoUrl = 'https://github.com/dismaster/xmrig';
       this.loggingService.log(`Cloning XMRig repository from: ${gitRepoUrl}`, 'INFO', 'miner-software');
       
@@ -877,9 +883,10 @@ export class MinerSoftwareService {
       recommendations.push(
         'Root access recommended for optimal mining performance',
       );
-    }
+    }    // Check for required tools
+    const isRoot = process.getuid ? process.getuid() === 0 : false;
+    const aptCommand = isRoot ? 'apt install' : 'sudo apt install';
 
-    // Check for required tools
     try {
       // Check for git
       execSync('command -v git', { stdio: 'pipe' });
@@ -888,7 +895,7 @@ export class MinerSoftwareService {
       if (compatibility.isTermux) {
         recommendations.push('Install git with: pkg install git');
       } else {
-        recommendations.push('Install git with: sudo apt install git');
+        recommendations.push(`Install git with: ${aptCommand} git`);
       }
     }
 
@@ -900,7 +907,7 @@ export class MinerSoftwareService {
       if (compatibility.isTermux) {
         recommendations.push('Install make with: pkg install make');
       } else {
-        recommendations.push('Install make with: sudo apt install build-essential');
+        recommendations.push(`Install make with: ${aptCommand} build-essential`);
       }
     }
 
@@ -912,7 +919,7 @@ export class MinerSoftwareService {
       if (compatibility.isTermux) {
         recommendations.push('Install compiler with: pkg install clang');
       } else {
-        recommendations.push('Install compiler with: sudo apt install build-essential');
+        recommendations.push(`Install compiler with: ${aptCommand} build-essential`);
       }
     }
 
@@ -924,7 +931,7 @@ export class MinerSoftwareService {
       if (compatibility.isTermux) {
         recommendations.push('Install cmake with: pkg install cmake');
       } else {
-        recommendations.push('Install cmake with: sudo apt install cmake');
+        recommendations.push(`Install cmake with: ${aptCommand} cmake`);
       }
     }
 
