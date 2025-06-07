@@ -219,6 +219,7 @@ export class BootstrapService implements OnModuleInit {
           networkFallback: ['netcat', 'bind9-host', 'iputils-ping'],
           system: ['gnupg', 'debianutils'],
           hardware: ['lm-sensors', 'acpi'],
+          compilation: ['make', 'clang', 'cmake'],
         },
         dnf: {
           essential: ['curl', 'screen', 'git'],
@@ -226,6 +227,7 @@ export class BootstrapService implements OnModuleInit {
           networkFallback: ['nmap-ncat', 'bind-utils', 'iputils'],
           system: ['gnupg', 'which'],
           hardware: ['lm_sensors', 'acpi'],
+          compilation: ['make', 'clang', 'cmake'],
         },
         yum: {
           essential: ['curl', 'screen', 'git'],
@@ -233,6 +235,7 @@ export class BootstrapService implements OnModuleInit {
           networkFallback: ['nmap-ncat', 'bind-utils', 'iputils'],
           system: ['gnupg', 'which'],
           hardware: ['lm_sensors', 'acpi'],
+          compilation: ['make', 'clang', 'cmake'],
         },
         pacman: {
           essential: ['curl', 'screen', 'git'],
@@ -240,6 +243,15 @@ export class BootstrapService implements OnModuleInit {
           networkFallback: ['gnu-netcat', 'bind', 'iputils'],
           system: ['gnupg', 'which'],
           hardware: ['lm_sensors', 'acpi'],
+          compilation: ['make', 'clang', 'cmake'],
+        },
+        pkg: {
+          essential: ['curl', 'screen', 'git'],
+          network: ['netcat-openbsd', 'dnsutils', 'traceroute'],
+          networkFallback: ['netcat', 'bind9-host', 'iputils-ping'],
+          system: ['gnupg', 'debianutils'],
+          hardware: ['lm-sensors', 'acpi'],
+          compilation: ['make', 'clang', 'cmake'],
         },
       };
 
@@ -335,7 +347,7 @@ export class BootstrapService implements OnModuleInit {
     await this.setupPackageRepositories(packageManager, sudoPrefix, osType);
 
     // Install package groups with fallback
-    const packageGroups = ['essential', 'network', 'system', 'hardware'];
+    const packageGroups = ['essential', 'compilation', 'network', 'system', 'hardware'];
     let successfulInstalls = 0;
     let totalAttempts = 0;
 
