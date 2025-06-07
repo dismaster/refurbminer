@@ -613,6 +613,24 @@ export class MinerSoftwareService {
 
     const xmrigDir = path.join(this.appsDir, 'xmrig');
     const xmrigPath = path.join(xmrigDir, 'xmrig');
+    
+    // Early check: if binary already exists and is executable, skip compilation
+    if (fs.existsSync(xmrigPath)) {
+      try {
+        const stats = fs.statSync(xmrigPath);
+        if (stats.isFile() && (stats.mode & 0o111)) {
+          this.loggingService.log(
+            `✅ XMRig binary already exists at ${xmrigPath}, skipping compilation`,
+            'INFO',
+            'miner-software'
+          );
+          return true;
+        }
+      } catch (e) {
+        this.loggingService.log(`Existing binary check failed: ${e.message}`, 'WARN', 'miner-software');
+      }
+    }
+
     const homeDir = process.env.HOME || '~';
     const buildDir = path.join(homeDir, 'xmrig');
 
@@ -753,10 +771,31 @@ export class MinerSoftwareService {
           this.loggingService.log(`Could not search for binary: ${error.message}`, 'WARN', 'miner-software');
         }
         throw new Error(`Compiled XMRig binary not found in any expected location: ${possibleBinaryPaths.join(', ')}`);
+      }      this.loggingService.log('Copying compiled XMRig binary...', 'INFO', 'miner-software');
+      this.loggingService.log(`  Source: ${compiledXmrigPath}`, 'INFO', 'miner-software');
+      this.loggingService.log(`  Destination: ${xmrigPath}`, 'INFO', 'miner-software');
+      
+      // Verify source exists before copying
+      if (!fs.existsSync(compiledXmrigPath)) {
+        throw new Error(`Source binary not found at ${compiledXmrigPath}`);
       }
-
-      this.loggingService.log('Copying compiled XMRig binary...', 'INFO', 'miner-software');
+      
+      // Ensure destination directory exists
+      const xmrigDirCheck = path.dirname(xmrigPath);
+      if (!fs.existsSync(xmrigDirCheck)) {
+        this.loggingService.log(`  Creating destination directory: ${xmrigDirCheck}`, 'INFO', 'miner-software');
+        fs.mkdirSync(xmrigDirCheck, { recursive: true });
+      }
+      
       execSync(`cp "${compiledXmrigPath}" "${xmrigPath}"`, { stdio: 'pipe' });
+      
+      // Verify copy was successful
+      if (!fs.existsSync(xmrigPath)) {
+        throw new Error(`Failed to copy binary to ${xmrigPath}`);
+      }
+      
+      const copiedStats = fs.statSync(xmrigPath);
+      this.loggingService.log(`  Copy successful - Size: ${copiedStats.size} bytes`, 'INFO', 'miner-software');
       
       // Set executable permissions
       execSync(`chmod +x "${xmrigPath}"`, { stdio: 'pipe' });
