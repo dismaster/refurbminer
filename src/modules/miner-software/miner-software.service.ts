@@ -660,7 +660,10 @@ export class MinerSoftwareService {
         execSync(`rm -rf "${buildDir}"`, { stdio: 'pipe' });
       }
       
-      execSync(`cd "${homeDir}" && git clone https://github.com/dismaster/xmrig/`, { stdio: 'pipe' });
+      execSync(
+        `cd "${homeDir}" && git clone https://github.com/dismaster/xmrig`,
+        { stdio: 'pipe' },
+      );
 
       // Step 3: Create build directory
       this.loggingService.log('Creating build directory...', 'INFO', 'miner-software');
@@ -684,16 +687,46 @@ export class MinerSoftwareService {
       // Step 5: Compile with make
       this.loggingService.log('Compiling XMRig (this may take several minutes)...', 'INFO', 'miner-software');
       const nproc = execSync('nproc', { encoding: 'utf8' }).trim();
-      execSync(`cd "${buildPath}" && make -j${nproc}`, { stdio: 'pipe', timeout: 900000 }); // 15 min timeout
-
-      // Step 6: Copy the compiled binary
-      this.loggingService.log('Copying compiled XMRig binary...', 'INFO', 'miner-software');
-      const compiledXmrigPath = path.join(buildPath, 'xmrig');
+      execSync(`cd "${buildPath}" && make -j${nproc}`, { stdio: 'pipe', timeout: 900000 }); // 15 min timeout      // Step 6: Find and copy the compiled binary with fallback paths
+      this.loggingService.log('Locating compiled XMRig binary...', 'INFO', 'miner-software');
       
-      if (!fs.existsSync(compiledXmrigPath)) {
-        throw new Error('Compiled XMRig binary not found');
+      // Multiple possible locations for the compiled binary
+      const possibleBinaryPaths = [
+        path.join(buildPath, 'xmrig'),        // Standard build location
+        path.join(buildDir, 'xmrig'),         // Alternative build location
+        path.join(buildDir, 'bin', 'xmrig'),  // Some builds put binary in bin/
+        path.join(buildDir, 'build', 'bin', 'xmrig'), // Another common location
+      ];
+      
+      let compiledXmrigPath: string | null = null;
+      for (const possiblePath of possibleBinaryPaths) {
+        if (fs.existsSync(possiblePath)) {
+          compiledXmrigPath = possiblePath;
+          this.loggingService.log(
+            `Found compiled XMRig binary at: ${possiblePath}`,
+            'INFO',
+            'miner-software'
+          );
+          break;
+        }
+      }
+      
+      if (!compiledXmrigPath) {
+        // Log directory contents for debugging
+        try {
+          const buildContents = execSync(`find "${buildDir}" -name "xmrig" -type f 2>/dev/null || true`, { encoding: 'utf8' });
+          this.loggingService.log(
+            `XMRig binary search results: ${buildContents || 'No xmrig binary found'}`,
+            'WARN',
+            'miner-software'
+          );
+        } catch (error) {
+          this.loggingService.log('Could not search for binary', 'WARN', 'miner-software');
+        }
+        throw new Error(`Compiled XMRig binary not found in any expected location: ${possibleBinaryPaths.join(', ')}`);
       }
 
+      this.loggingService.log('Copying compiled XMRig binary...', 'INFO', 'miner-software');
       execSync(`cp "${compiledXmrigPath}" "${xmrigPath}"`, { stdio: 'pipe' });
       
       // Set executable permissions
