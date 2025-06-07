@@ -68,7 +68,9 @@ export class MinerPoolUtil {
         uptime: 0
       };
     }
-  }  /** ✅ Get XMRig pool info */
+  }  
+  
+  /** ✅ Get XMRig pool info */
   private static async getXmrigPoolInfo(): Promise<any> {
     try {
       const response = await fetch(`http://127.0.0.1:4068/1/summary`, {

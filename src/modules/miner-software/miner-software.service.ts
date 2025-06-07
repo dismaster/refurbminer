@@ -647,10 +647,9 @@ export class MinerSoftwareService {
         // Install build dependencies
         execSync('sudo apt install -y cmake build-essential git', { stdio: 'pipe' });
         execSync('sudo apt install -y libuv1-dev libssl-dev libhwloc-dev', { stdio: 'pipe' });
-      }
-
-      // Step 2: Clone the repository
-      this.loggingService.log('Cloning XMRig repository...', 'INFO', 'miner-software');
+      }      // Step 2: Clone the repository
+      const gitRepoUrl = 'https://github.com/dismaster/xmrig';
+      this.loggingService.log(`Cloning XMRig repository from: ${gitRepoUrl}`, 'INFO', 'miner-software');
       
       // Remove existing directory if it exists
       if (fs.existsSync(buildDir)) {
@@ -658,7 +657,7 @@ export class MinerSoftwareService {
       }
       
       execSync(
-        `cd "${homeDir}" && git clone https://github.com/dismaster/xmrig`,
+        `cd "${homeDir}" && git clone ${gitRepoUrl}`,
         { stdio: 'pipe' },
       );
 
@@ -672,11 +671,11 @@ export class MinerSoftwareService {
       
       let cmakeOptions = '';
       if (compatibility.isTermux) {
-        // Termux-specific cmake configuration
-        cmakeOptions = '-DWITH_HWLOC=OFF -DWITH_TLS=OFF -DWITH_ASM=OFF';
+        // Termux-specific cmake configuration - simplified to create standard xmrig binary
+        cmakeOptions = '-DWITH_HWLOC=OFF';
       } else {
         // Linux-specific cmake configuration
-        cmakeOptions = '-DWITH_HWLOC=ON -DWITH_TLS=ON -DWITH_ASM=ON -DBUILD_STATIC=ON';
+        cmakeOptions = '';
       }
       
       execSync(`cd "${buildPath}" && cmake ${cmakeOptions} ..`, { stdio: 'pipe' });
@@ -708,18 +707,50 @@ export class MinerSoftwareService {
           break;
         }
       }
-      
-      if (!compiledXmrigPath) {
+        if (!compiledXmrigPath) {
+        // Enhanced debugging: Log all checked paths and their status
+        this.loggingService.log('Detailed binary search debugging:', 'WARN', 'miner-software');
+        possibleBinaryPaths.forEach((path, index) => {
+          const exists = fs.existsSync(path);
+          let details = `Path ${index + 1}: ${path} - ${exists ? 'EXISTS' : 'NOT FOUND'}`;
+          if (exists) {
+            try {
+              const stats = fs.statSync(path);
+              details += ` (size: ${stats.size} bytes, executable: ${!!(stats.mode & 0o111)})`;
+            } catch (e) {
+              details += ` (stat error: ${e.message})`;
+            }
+          }
+          this.loggingService.log(details, 'WARN', 'miner-software');
+        });
+
         // Log directory contents for debugging
         try {
-          const buildContents = execSync(`find "${buildDir}" -name "xmrig" -type f 2>/dev/null || true`, { encoding: 'utf8' });
+          const buildContents = execSync(`find "${buildDir}" -name "xmrig" -type f 2>/dev/null || true`, { encoding: 'utf8' }).trim();
           this.loggingService.log(
-            `XMRig binary search results: ${buildContents || 'No xmrig binary found'}`,
+            `Find command results: ${buildContents || 'No xmrig binary found'}`,
             'WARN',
             'miner-software'
           );
+          
+          // If find found files, let's check why our paths didn't work
+          if (buildContents) {
+            const foundPaths = buildContents.split('\n').filter(p => p.trim());
+            this.loggingService.log(`Found ${foundPaths.length} potential binaries:`, 'WARN', 'miner-software');
+            foundPaths.forEach((foundPath, index) => {
+              this.loggingService.log(`  Found ${index + 1}: ${foundPath}`, 'WARN', 'miner-software');
+              // Check if this path was in our search list
+              const wasChecked = possibleBinaryPaths.includes(foundPath);
+              this.loggingService.log(`    Was this path checked? ${wasChecked}`, 'WARN', 'miner-software');
+            });
+          }
+          
+          // Also list the entire build directory structure for debugging
+          const buildStructure = execSync(`find "${buildDir}" -type f | head -20`, { encoding: 'utf8' }).trim();
+          this.loggingService.log(`Build directory structure (first 20 files): ${buildStructure}`, 'WARN', 'miner-software');
+          
         } catch (error) {
-          this.loggingService.log('Could not search for binary', 'WARN', 'miner-software');
+          this.loggingService.log(`Could not search for binary: ${error.message}`, 'WARN', 'miner-software');
         }
         throw new Error(`Compiled XMRig binary not found in any expected location: ${possibleBinaryPaths.join(', ')}`);
       }

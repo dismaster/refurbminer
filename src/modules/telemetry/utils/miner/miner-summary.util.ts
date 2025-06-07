@@ -48,7 +48,9 @@ export class MinerSummaryUtil {
     } catch {
       return this.getDefaultSummary();
     }
-  }  /** ✅ Get XMRig summary */
+  }  
+  
+  /** ✅ Get XMRig summary */
   private static async getXmrigSummary(): Promise<any> {
     try {
       const response = await fetch(`http://127.0.0.1:4068/1/summary`, {
