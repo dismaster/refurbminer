@@ -98,7 +98,7 @@ export class MinerManagerService
         'miner-manager',
       );
       // No longer fetch flightsheet here - it will be triggered after registration
-      this.startMiner();
+      void this.startMiner();
     } catch (error) {
       await this.logMinerError(
         `Initialization failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -136,7 +136,7 @@ export class MinerManagerService
       try {
         // Sync config from backend API (includes schedule data)
         await this.configService.syncConfigWithApi();
-        
+
         // Schedule checking is now handled by dedicated interval
         // No need to check schedules here to avoid duplicate calls
       } catch (error) {
@@ -324,7 +324,7 @@ export class MinerManagerService
   }
 
   public getMinerFromFlightsheet(): string | undefined {
-        try {
+    try {
       // Get the miner software from main config
       const minerSoftware = this.configService.getMinerSoftware();
       if (minerSoftware) {
@@ -371,20 +371,20 @@ export class MinerManagerService
       const output = execSync(`screen -ls | grep ${this.minerScreen}`, {
         encoding: 'utf8',
       });
-      
+
       if (!output.trim()) {
         return 0;
       }
-      
+
       const lines = output.split('\n');
       let count = 0;
-      
+
       for (const line of lines) {
         if (line.match(/^\s*\d+\.miner-session/)) {
           count++;
         }
       }
-      
+
       return count;
     } catch {
       return 0;
@@ -399,30 +399,32 @@ export class MinerManagerService
       const output = execSync(`screen -ls | grep ${this.minerScreen}`, {
         encoding: 'utf8',
       });
-      
+
       if (output.trim()) {
         // Extract session IDs from screen -ls output
         const lines = output.split('\n');
         const sessionIds: string[] = [];
-        
+
         for (const line of lines) {
           const match = line.match(/^\s*(\d+)\.miner-session/);
           if (match) {
             sessionIds.push(match[1]);
           }
         }
-        
+
         if (sessionIds.length > 0) {
           this.loggingService.log(
             `🧹 Found ${sessionIds.length} miner sessions to clean up: ${sessionIds.join(', ')}`,
             'INFO',
             'miner-manager',
           );
-          
+
           // Kill all miner sessions
           for (const sessionId of sessionIds) {
             try {
-              execSync(`screen -X -S ${sessionId}.${this.minerScreen} quit`, { timeout: 5000 });
+              execSync(`screen -X -S ${sessionId}.${this.minerScreen} quit`, {
+                timeout: 5000,
+              });
               this.loggingService.log(
                 `✅ Cleaned up session: ${sessionId}.${this.minerScreen}`,
                 'DEBUG',
@@ -543,8 +545,8 @@ export class MinerManagerService
       return true;
     } catch (error) {
       void this.logMinerError(
-        `Failed to stop miner: ${error instanceof Error ? error.message : String(error)}`, 
-        error instanceof Error ? error.stack || '' : ''
+        `Failed to stop miner: ${error instanceof Error ? error.message : String(error)}`,
+        error instanceof Error ? error.stack || '' : '',
       );
       return false;
     }
@@ -560,7 +562,7 @@ export class MinerManagerService
       return false;
     }
 
-    const started = this.startMiner();
+    const started = await this.startMiner();
     if (!started) {
       const error = 'Failed to restart: Could not start miner';
       this.loggingService.log(`❌ ${error}`, 'ERROR', 'miner-manager');
@@ -617,7 +619,7 @@ export class MinerManagerService
 
         const miner = this.getMinerFromFlightsheet();
         if (miner) {
-          this.startMiner();
+          void this.startMiner();
         } else {
           this.loggingService.log(
             '❌ No miner found in flightsheet after fetch',
@@ -707,7 +709,7 @@ export class MinerManagerService
                 'INFO',
                 'miner-manager',
               );
-              this.startMiner();
+              void this.startMiner();
             } else {
               this.loggingService.log(
                 `✅ Miner already running as scheduled: ${period.startTime} - ${period.endTime} on ${currentDay}`,
@@ -737,7 +739,7 @@ export class MinerManagerService
           'DEBUG',
           'miner-manager',
         );
-        this.startMiner();
+        void this.startMiner();
       }
     }
 
@@ -985,7 +987,10 @@ export class MinerManagerService
                   : 24 * 60 - currentMinutes + timeMinutes,
             };
           })
-          .filter((restart): restart is NonNullable<typeof restart> => restart !== null) // Remove invalid entries
+          .filter(
+            (restart): restart is NonNullable<typeof restart> =>
+              restart !== null,
+          ) // Remove invalid entries
           .sort((a, b) => a.timeUntil - b.timeUntil);
 
         nextRestart = futureRestarts.length > 0 ? futureRestarts[0] : null;
@@ -1033,8 +1038,9 @@ export class MinerManagerService
       );
 
       // Check system compatibility first
-      const compatibility = await this.minerSoftwareService.checkCPUCompatibility();
-      
+      const compatibility =
+        await this.minerSoftwareService.checkCPUCompatibility();
+
       this.loggingService.log(
         `📋 System compatibility - OS: ${compatibility.os}, Arch: ${compatibility.architecture}, Termux: ${compatibility.isTermux}, AES: ${compatibility.hasAES}`,
         'INFO',
@@ -1049,15 +1055,18 @@ export class MinerManagerService
           'miner-manager',
         );
 
-        const prerequisites = await this.minerSoftwareService.checkXmrigPrerequisites(compatibility);
-        
+        const prerequisites =
+          await this.minerSoftwareService.checkXmrigPrerequisites(
+            compatibility,
+          );
+
         if (!prerequisites.canCompile) {
           this.loggingService.log(
             `❌ Cannot compile XMRig. Issues: ${prerequisites.issues.join(', ')}`,
             'ERROR',
             'miner-manager',
           );
-          
+
           if (prerequisites.recommendations.length > 0) {
             this.loggingService.log(
               `💡 Recommendations: ${prerequisites.recommendations.join(', ')}`,
@@ -1065,7 +1074,7 @@ export class MinerManagerService
               'miner-manager',
             );
           }
-          
+
           return false;
         }
 
@@ -1075,8 +1084,9 @@ export class MinerManagerService
           'miner-manager',
         );
 
-        const success = await this.minerSoftwareService.compileAndInstallXmrig(compatibility);
-        
+        const success =
+          await this.minerSoftwareService.compileAndInstallXmrig(compatibility);
+
         if (success) {
           this.loggingService.log(
             '🎉 XMRig compilation and installation completed successfully!',
@@ -1090,9 +1100,8 @@ export class MinerManagerService
             'miner-manager',
           );
         }
-        
-        return success;
 
+        return success;
       } else if (minerName === 'ccminer') {
         // For ccminer, download pre-compiled binary
         this.loggingService.log(
@@ -1101,8 +1110,9 @@ export class MinerManagerService
           'miner-manager',
         );
 
-        const success = await this.minerSoftwareService.downloadOptimalCcminer(compatibility);
-        
+        const success =
+          await this.minerSoftwareService.downloadOptimalCcminer(compatibility);
+
         if (success) {
           this.loggingService.log(
             '🎉 CCMiner download and installation completed successfully!',
@@ -1116,9 +1126,8 @@ export class MinerManagerService
             'miner-manager',
           );
         }
-        
-        return success;
 
+        return success;
       } else {
         this.loggingService.log(
           `❌ Unsupported miner for automatic installation: ${minerName}`,
@@ -1127,7 +1136,6 @@ export class MinerManagerService
         );
         return false;
       }
-
     } catch (error) {
       this.loggingService.log(
         `❌ Error during automatic installation of ${minerName}: ${error instanceof Error ? error.message : String(error)}`,
