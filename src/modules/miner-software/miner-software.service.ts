@@ -22,11 +22,10 @@ export class MinerSoftwareService {
     private readonly osDetectionService: OsDetectionService,
     private readonly configService: ConfigService,
   ) {}
-
   /**
    * Check CPU compatibility based on your installer logic
    */
-  async checkCPUCompatibility(): Promise<SystemCompatibility> {
+  checkCPUCompatibility(): SystemCompatibility {
     const osType = this.osDetectionService.detectOS();
     
     let cpuFlags: string[] = [];
@@ -50,11 +49,9 @@ export class MinerSoftwareService {
         }
       } else {
         hasRoot = process.getuid ? process.getuid() === 0 : false;
-      }
-
-      // Get CPU information
-      const cpuInfo = execSync('lscpu 2>/dev/null || cat /proc/cpuinfo', { 
-        encoding: 'utf8' 
+      }      // Get CPU information
+      const cpuInfo = execSync('lscpu 2>/dev/null || cat /proc/cpuinfo', {
+        encoding: 'utf8',
       });
 
       // Check for 64-bit support
@@ -692,10 +689,11 @@ export class MinerSoftwareService {
       
       // Multiple possible locations for the compiled binary
       const possibleBinaryPaths = [
-        path.join(buildPath, 'xmrig'),        // Standard build location
-        path.join(buildDir, 'xmrig'),         // Alternative build location
-        path.join(buildDir, 'bin', 'xmrig'),  // Some builds put binary in bin/
-        path.join(buildDir, 'build', 'bin', 'xmrig'), // Another common location
+        path.join(buildDir, 'build', 'xmrig'), // Most common actual location (xmrig/build/xmrig)
+        path.join(buildPath, 'xmrig'),        // Standard build location (build/xmrig)
+        path.join(buildDir, 'xmrig'),         // Alternative build location (xmrig/xmrig)
+        path.join(buildDir, 'bin', 'xmrig'),  // Some builds put binary in bin/ (xmrig/bin/xmrig)
+        path.join(buildDir, 'build', 'bin', 'xmrig'), // Another common location (xmrig/build/bin/xmrig)
       ];
       
       let compiledXmrigPath: string | null = null;
