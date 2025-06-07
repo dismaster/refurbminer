@@ -7,6 +7,7 @@ import { LoggingService } from '../logging/logging.service';
 import { FlightsheetService } from '../flightsheet/flightsheet.service';
 import { ConfigService } from '../config/config.service';
 import { ApiCommunicationService } from '../api-communication/api-communication.service';
+import { MinerSoftwareService } from '../miner-software/miner-software.service';
 import { execSync, exec } from 'child_process';
 import * as fs from 'fs';
 
@@ -33,6 +34,7 @@ export class MinerManagerService
     private readonly flightsheetService: FlightsheetService,
     private readonly configService: ConfigService,
     private readonly apiService: ApiCommunicationService,
+    private readonly minerSoftwareService: MinerSoftwareService,
   ) {}
 
   async onModuleInit() {
@@ -446,7 +448,7 @@ export class MinerManagerService
     }
   }
 
-  public startMiner(): boolean {
+  public async startMiner(): Promise<boolean> {
     try {
       const miner = this.getMinerFromFlightsheet();
       if (!miner) {
@@ -460,10 +462,28 @@ export class MinerManagerService
       const minerExecutable = `apps/${miner}/${miner}`;
 
       if (!fs.existsSync(configPath) || !fs.existsSync(minerExecutable)) {
-        const error = `Cannot start miner: Missing files at ${configPath} or ${minerExecutable}`;
-        this.loggingService.log(`❌ ${error}`, 'ERROR', 'miner-manager');
-        void this.logMinerError(error);
-        return false;
+        this.loggingService.log(
+          `⚠️ Miner ${miner} not found. Attempting automatic installation...`,
+          'WARN',
+          'miner-manager',
+        );
+
+        // Attempt automatic installation
+        const installSuccess = await this.installMinerIfMissing(miner);
+        if (!installSuccess) {
+          const error = `Cannot start miner: Failed to install ${miner}`;
+          this.loggingService.log(`❌ ${error}`, 'ERROR', 'miner-manager');
+          void this.logMinerError(error);
+          return false;
+        }
+
+        // Check again after installation
+        if (!fs.existsSync(configPath) || !fs.existsSync(minerExecutable)) {
+          const error = `Cannot start miner: Missing files at ${configPath} or ${minerExecutable} after installation`;
+          this.loggingService.log(`❌ ${error}`, 'ERROR', 'miner-manager');
+          void this.logMinerError(error);
+          return false;
+        }
       }
 
       // Clean up any existing miner sessions before starting a new one
@@ -999,5 +1019,122 @@ export class MinerManagerService
       'INFO',
       'miner-manager',
     );
+  }
+
+  /**
+   * Automatically install miner if it's missing
+   */
+  private async installMinerIfMissing(minerName: string): Promise<boolean> {
+    try {
+      this.loggingService.log(
+        `🔧 Starting automatic installation for ${minerName}...`,
+        'INFO',
+        'miner-manager',
+      );
+
+      // Check system compatibility first
+      const compatibility = await this.minerSoftwareService.checkCPUCompatibility();
+      
+      this.loggingService.log(
+        `📋 System compatibility - OS: ${compatibility.os}, Arch: ${compatibility.architecture}, Termux: ${compatibility.isTermux}, AES: ${compatibility.hasAES}`,
+        'INFO',
+        'miner-manager',
+      );
+
+      if (minerName === 'xmrig') {
+        // For XMRig, check prerequisites and compile
+        this.loggingService.log(
+          '🔍 Checking XMRig compilation prerequisites...',
+          'INFO',
+          'miner-manager',
+        );
+
+        const prerequisites = await this.minerSoftwareService.checkXmrigPrerequisites(compatibility);
+        
+        if (!prerequisites.canCompile) {
+          this.loggingService.log(
+            `❌ Cannot compile XMRig. Issues: ${prerequisites.issues.join(', ')}`,
+            'ERROR',
+            'miner-manager',
+          );
+          
+          if (prerequisites.recommendations.length > 0) {
+            this.loggingService.log(
+              `💡 Recommendations: ${prerequisites.recommendations.join(', ')}`,
+              'INFO',
+              'miner-manager',
+            );
+          }
+          
+          return false;
+        }
+
+        this.loggingService.log(
+          '✅ Prerequisites met. Starting XMRig compilation...',
+          'INFO',
+          'miner-manager',
+        );
+
+        const success = await this.minerSoftwareService.compileAndInstallXmrig(compatibility);
+        
+        if (success) {
+          this.loggingService.log(
+            '🎉 XMRig compilation and installation completed successfully!',
+            'INFO',
+            'miner-manager',
+          );
+        } else {
+          this.loggingService.log(
+            '❌ XMRig compilation failed',
+            'ERROR',
+            'miner-manager',
+          );
+        }
+        
+        return success;
+
+      } else if (minerName === 'ccminer') {
+        // For ccminer, download pre-compiled binary
+        this.loggingService.log(
+          '📥 Downloading optimal ccminer binary...',
+          'INFO',
+          'miner-manager',
+        );
+
+        const success = await this.minerSoftwareService.downloadOptimalCcminer(compatibility);
+        
+        if (success) {
+          this.loggingService.log(
+            '🎉 CCMiner download and installation completed successfully!',
+            'INFO',
+            'miner-manager',
+          );
+        } else {
+          this.loggingService.log(
+            '❌ CCMiner download failed',
+            'ERROR',
+            'miner-manager',
+          );
+        }
+        
+        return success;
+
+      } else {
+        this.loggingService.log(
+          `❌ Unsupported miner for automatic installation: ${minerName}`,
+          'ERROR',
+          'miner-manager',
+        );
+        return false;
+      }
+
+    } catch (error) {
+      this.loggingService.log(
+        `❌ Error during automatic installation of ${minerName}: ${error instanceof Error ? error.message : String(error)}`,
+        'ERROR',
+        'miner-manager',
+      );
+      return false;
+    }
   }
 }
