@@ -776,10 +776,17 @@ export class MinerSoftwareService {
           : `curl -s -L -o "${configPath}" "${configUrl}"`;
         
         execSync(downloadCommand, { stdio: 'pipe' });
-      }
+      }      // Verify the final installation
+      this.loggingService.log('Verifying XMRig installation...', 'INFO', 'miner-software');
+      const finalMinerInfo = this.getMinerInfo('xmrig');
+      this.loggingService.log(
+        `Final verification - Binary exists: ${finalMinerInfo.exists}, Executable: ${finalMinerInfo.executable}, Path: ${finalMinerInfo.path}`,
+        'INFO',
+        'miner-software'
+      );
 
       this.loggingService.log(
-        `XMRig compilation and installation completed successfully for ${environmentType}`,
+        `✅ XMRig compilation and installation completed successfully for ${environmentType}`,
         'INFO',
         'miner-software'
       );

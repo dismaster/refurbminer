@@ -469,6 +469,16 @@ export class MinerManagerService
           'WARN',
           'miner-manager',
         );
+        this.loggingService.log(
+          `  Initial check - Config: ${configPath} exists: ${fs.existsSync(configPath)}`,
+          'INFO',
+          'miner-manager',
+        );
+        this.loggingService.log(
+          `  Initial check - Executable: ${minerExecutable} exists: ${fs.existsSync(minerExecutable)}`,
+          'INFO',
+          'miner-manager',
+        );
 
         // Attempt automatic installation
         const installSuccess = await this.installMinerIfMissing(miner);
@@ -480,6 +490,22 @@ export class MinerManagerService
         }
 
         // Check again after installation
+        this.loggingService.log(
+          `🔍 Post-installation verification for ${miner}...`,
+          'INFO',
+          'miner-manager',
+        );
+        this.loggingService.log(
+          `  Config path: ${configPath} - exists: ${fs.existsSync(configPath)}`,
+          'INFO',
+          'miner-manager',
+        );
+        this.loggingService.log(
+          `  Executable path: ${minerExecutable} - exists: ${fs.existsSync(minerExecutable)}`,
+          'INFO',
+          'miner-manager',
+        );
+        
         if (!fs.existsSync(configPath) || !fs.existsSync(minerExecutable)) {
           const error = `Cannot start miner: Missing files at ${configPath} or ${minerExecutable} after installation`;
           this.loggingService.log(`❌ ${error}`, 'ERROR', 'miner-manager');
