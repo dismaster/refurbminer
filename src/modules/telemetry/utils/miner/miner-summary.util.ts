@@ -48,12 +48,14 @@ export class MinerSummaryUtil {
     } catch {
       return this.getDefaultSummary();
     }
-  }
-
-  /** ✅ Get XMRig summary */
+  }  /** ✅ Get XMRig summary */
   private static async getXmrigSummary(): Promise<any> {
     try {
-      const response = await fetch(`http://127.0.0.1:4067/summary`);
+      const response = await fetch(`http://127.0.0.1:4068/1/summary`, {
+        headers: {
+          'Authorization': 'Bearer xmrig'
+        }
+      });
       if (!response.ok) return this.getDefaultSummary();
 
       const json = await response.json();
@@ -62,11 +64,11 @@ export class MinerSummaryUtil {
         version: json.version || 'unknown',
         algorithm: json.algo || 'unknown',
         hashrate: parseFloat(json.hashrate?.total?.[0] || 0),
-        acceptedShares: parseInt(json.results.shares_good || '0'),
-        rejectedShares: parseInt((json.results.shares_total - json.results.shares_good).toString() || '0'),
-        uptime: parseInt(json.connection.uptime || '0'),
-        averageShareRate: parseFloat(json.results.avg_time || '0'),
-        solvedBlocks: json.results.best?.length || 0
+        acceptedShares: parseInt(json.connection?.accepted || '0'),
+        rejectedShares: parseInt(json.connection?.rejected || '0'),
+        uptime: parseInt(json.uptime || '0'),
+        averageShareRate: parseFloat(json.results?.avg_time_ms || '0') / 1000, // Convert ms to seconds
+        solvedBlocks: json.results?.best?.filter((b: number) => b > 0)?.length || 0
       };
     } catch {
       return this.getDefaultSummary();

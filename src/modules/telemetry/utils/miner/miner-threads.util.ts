@@ -168,28 +168,26 @@ export class MinerThreadsUtil {
       return this.getDefaultThreadStats();
     }
   }
-
   /** ✅ Get XMRig thread statistics */
   private static async getXmrigThreadStats(): Promise<any[]> {
     try {
-      const response = await fetch(`http://127.0.0.1:4067/2/threads`);
-      if (!response.ok) {
-        // Try alternative endpoint
-        const altResponse = await fetch(`http://127.0.0.1:4067/threads`);
-        if (!altResponse.ok) return this.getDefaultThreadStats();
-        
-        const json = await altResponse.json();
-        return json.threads?.map((thread: any, index: number) => ({
-          coreId: index,
-          hashrate: parseFloat(thread.hashrate?.[0] || '0')
-        })) || this.getDefaultThreadStats();
-      }
+      const response = await fetch(`http://127.0.0.1:4068/1/summary`, {
+        headers: {
+          'Authorization': 'Bearer xmrig'
+        }
+      });
+      if (!response.ok) return this.getDefaultThreadStats();
 
       const json = await response.json();
-      return json.threads?.map((thread: any, index: number) => ({
-        coreId: index,
-        hashrate: parseFloat(thread.hashrate?.[0] || '0')
-      })) || this.getDefaultThreadStats();
+        // XMRig provides thread hashrates in the main summary endpoint
+      if (json.hashrate?.threads && Array.isArray(json.hashrate.threads)) {
+        return json.hashrate.threads.map((threadHashrates: number[], index: number) => ({
+          coreId: index,
+          hashrate: threadHashrates[0] || 0 // First element is current hashrate
+        }));
+      }
+      
+      return this.getDefaultThreadStats();
     } catch {
       return this.getDefaultThreadStats();
     }

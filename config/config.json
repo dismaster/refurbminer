@@ -2,6 +2,7 @@
   "minerId": "",
   "rigId": "",
   "name": "",
+  "minerSoftware": "xmrig",
   "thresholds": {
     "maxCpuTemp": 85,
     "maxBatteryTemp": 45,

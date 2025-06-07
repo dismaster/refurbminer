@@ -68,24 +68,26 @@ export class MinerPoolUtil {
         uptime: 0
       };
     }
-  }
-
-  /** ✅ Get XMRig pool info */
+  }  /** ✅ Get XMRig pool info */
   private static async getXmrigPoolInfo(): Promise<any> {
     try {
-      const response = await fetch(`http://127.0.0.1:4067/summary`);
+      const response = await fetch(`http://127.0.0.1:4068/1/summary`, {
+        headers: {
+          'Authorization': 'Bearer xmrig'
+        }
+      });
       if (!response.ok) return this.getDefaultPoolInfo();
 
       const json = await response.json();
       return {
-        name: json.connection.pool || 'unknown',
-        url: json.connection.pool || 'unknown',
+        name: json.connection?.pool || 'unknown',
+        url: json.connection?.pool || 'unknown',
         user: 'unknown',
-        acceptedShares: parseInt(json.results.shares_good || '0'),
-        rejectedShares: parseInt((json.results.shares_total - json.results.shares_good).toString() || '0'),
+        acceptedShares: parseInt(json.connection?.accepted || '0'),
+        rejectedShares: parseInt(json.connection?.rejected || '0'),
         staleShares: 0,
-        ping: parseInt(json.connection.ping || '0'),
-        uptime: parseInt(json.connection.uptime || '0')
+        ping: parseInt(json.connection?.ping || '0'),
+        uptime: parseInt(json.connection?.uptime || '0')
       };
     } catch {
       return this.getDefaultPoolInfo();

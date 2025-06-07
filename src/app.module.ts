@@ -5,6 +5,7 @@ import { LoggingService } from './modules/logging/logging.service';
 import { ApiCommunicationModule } from './modules/api-communication/api-communication.module';
 import { BootstrapModule } from './modules/bootstrap/bootstrap.module';
 import { MinerManagerModule } from './modules/miner-manager/miner-manager.module';
+import { MinerSoftwareModule } from './modules/miner-software/miner-software.module';
 import { DeviceMonitoringModule } from './modules/device-monitoring/device-monitoring.module';
 import { TelemetryModule } from './modules/telemetry/telemetry.module';
 import { FlightsheetModule } from './modules/flightsheet/flightsheet.module';
@@ -16,10 +17,9 @@ import { WebModule } from './modules/web/web.module';
 import { ServeStaticModule } from '@nestjs/serve-static';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
-import { OsDetectionModule } from './modules/device-monitoring/os-detection/os-detection.module';
 
 @Module({
-  imports: [
+  imports: [    
     // Core modules
     LoggingModule,
     ApiCommunicationModule,
@@ -27,13 +27,12 @@ import { OsDetectionModule } from './modules/device-monitoring/os-detection/os-d
     // Feature modules
     BootstrapModule,
     MinerManagerModule,
+    MinerSoftwareModule,
     DeviceMonitoringModule,
     NetworkMonitoringModule,
     TelemetryModule,
-    FlightsheetModule,
-    ActionsModule,
+    FlightsheetModule,    ActionsModule,
     MinerDataModule,
-    OsDetectionModule,
     ConfigModule,
 
     // Web interface

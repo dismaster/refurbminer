@@ -5,6 +5,6 @@ import { OsDetectionModule } from './os-detection/os-detection.module';
 @Module({
   imports: [OsDetectionModule],
   providers: [DeviceMonitoringService],
-  exports: [DeviceMonitoringService],
+  exports: [DeviceMonitoringService, OsDetectionModule],
 })
 export class DeviceMonitoringModule {}

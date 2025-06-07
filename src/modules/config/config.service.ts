@@ -22,6 +22,7 @@ interface Config {
   minerId: string;
   rigId: string;
   name: string;
+  minerSoftware?: string; // Current selected miner software (xmrig, ccminer, etc.)
   thresholds: {
     maxCpuTemp: number;
     maxBatteryTemp: number;
@@ -64,6 +65,7 @@ export class ConfigService implements OnModuleInit {
         minerId: '',
         rigId: '',
         name: 'Unnamed Rig',
+        minerSoftware: undefined, // Will be synced from backend API after registration
         thresholds: {
           maxCpuTemp: 85,
           maxBatteryTemp: 45,
@@ -105,11 +107,12 @@ export class ConfigService implements OnModuleInit {
   public async triggerConfigSyncAfterRegistration() {
     await this.syncConfigWithApi();
     if (!this.syncInterval) {
+      // Set up periodic sync every 5 minutes to avoid log flooding
       this.syncInterval = setInterval(
         () => {
           this.syncConfigWithApi();
         },
-        15 * 60 * 1000,
+        5 * 60 * 1000, // 5 minutes - reduced frequency to minimize log noise
       );
     }
   }
@@ -227,7 +230,7 @@ export class ConfigService implements OnModuleInit {
 
       this.loggingService.log(
         '🔄 Syncing configuration with API...',
-        'INFO',
+        'DEBUG',
         'config',
       );
 
@@ -251,6 +254,15 @@ export class ConfigService implements OnModuleInit {
         'config',
       );
 
+      // Only log minerSoftware changes, not every sync
+      if (apiConfig.minerSoftware !== currentConfig.minerSoftware) {
+        this.loggingService.log(
+          `🔄 Miner software changing: ${currentConfig.minerSoftware} → ${apiConfig.minerSoftware}`,
+          'INFO',
+          'config',
+        );
+      }
+
       // PRESERVE the local minerId - never overwrite with API data
       // The miner ID should only be set during initial registration
       // API sync is only for configuration data (schedules, thresholds, etc.)
@@ -267,6 +279,7 @@ export class ConfigService implements OnModuleInit {
         minerId: currentConfig.minerId, // Always preserve local minerId
         rigId: apiConfig.rigId || currentConfig.rigId,
         name: apiConfig.name || currentConfig.name,
+        minerSoftware: apiConfig.minerSoftware || currentConfig.minerSoftware, // Sync mining software from backend
         thresholds: {
           maxCpuTemp:
             apiConfig.thresholds?.maxCpuTemp ??
@@ -301,9 +314,10 @@ export class ConfigService implements OnModuleInit {
       this.saveConfig(updatedConfig);
       this.loggingService.log(
         '✅ Config synchronized with API successfully',
-        'INFO',
+        'DEBUG',
         'config',
       );
+      // Only log the final config in DEBUG, not INFO
       this.loggingService.log(
         `📄 Updated config: ${JSON.stringify(updatedConfig)}`,
         'DEBUG',
@@ -327,7 +341,7 @@ export class ConfigService implements OnModuleInit {
   async forceSyncWithApi(): Promise<boolean> {
     this.loggingService.log(
       '🔄 Forcing immediate config sync...',
-      'INFO',
+      'DEBUG',
       'config',
     );
     return await this.syncConfigWithApi();
@@ -353,6 +367,7 @@ export class ConfigService implements OnModuleInit {
         minerId: currentConfig.minerId || '',
         rigId: currentConfig.rigId || '',
         name: currentConfig.name || 'Unnamed Rig',
+        minerSoftware: currentConfig.minerSoftware, // Preserve mining software selection
         thresholds: {
           maxCpuTemp: currentConfig.thresholds?.maxCpuTemp ?? 85,
           maxBatteryTemp: currentConfig.thresholds?.maxBatteryTemp ?? 45,
@@ -374,9 +389,10 @@ export class ConfigService implements OnModuleInit {
       if (saved) {
         this.loggingService.log(
           '✅ Config cleaned up successfully',
-          'INFO',
+          'DEBUG',
           'config',
         );
+        // Only log cleaned config details in DEBUG mode
         this.loggingService.log(
           `📄 Cleaned config: ${JSON.stringify(cleanConfig)}`,
           'DEBUG',
@@ -443,6 +459,48 @@ export class ConfigService implements OnModuleInit {
         'ERROR',
         'config',
       );
+    }
+  }
+
+  /**
+   * Get the currently configured miner software
+   */
+  getMinerSoftware(): string | undefined {
+    const config = this.getConfig();
+    return config?.minerSoftware;
+  }
+
+  /**
+   * Set the current miner software in config
+   */
+  setMinerSoftware(minerSoftware: string): boolean {
+    try {
+      const config = this.getConfig();
+      if (!config) {
+        this.loggingService.log(
+          '❌ Cannot set miner software: Config not found',
+          'ERROR',
+          'config',
+        );
+        return false;
+      }
+
+      config.minerSoftware = minerSoftware;
+      fs.writeFileSync(this.configPath, JSON.stringify(config, null, 2));
+      
+      this.loggingService.log(
+        `✅ Miner software updated to: ${minerSoftware}`,
+        'INFO',
+        'config',
+      );
+      return true;
+    } catch (error) {
+      this.loggingService.log(
+        `❌ Failed to set miner software: ${error.message}`,
+        'ERROR',
+        'config',
+      );
+      return false;
     }
   }
 }

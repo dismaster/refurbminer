@@ -322,20 +322,30 @@ export class MinerManagerService
   }
 
   public getMinerFromFlightsheet(): string | undefined {
-    try {
-      const minerFolders = fs
-        .readdirSync('apps')
-        .filter((folder) => fs.existsSync(`apps/${folder}/config.json`));
-
-      if (minerFolders.length === 0) {
-        return undefined;
+        try {
+      // Get the miner software from main config
+      const minerSoftware = this.configService.getMinerSoftware();
+      if (minerSoftware) {
+        this.loggingService.log(
+          `🔍 Using miner from config: ${minerSoftware}`,
+          'DEBUG',
+          'miner-manager',
+        );
+        return minerSoftware;
       }
 
-      const flightsheetPath = `apps/${minerFolders[0]}/config.json`;
-      const flightsheet = JSON.parse(fs.readFileSync(flightsheetPath, 'utf8'));
-
-      return flightsheet.minerSoftware ?? undefined;
-    } catch {
+      this.loggingService.log(
+        '⚠️ No minerSoftware found in config',
+        'WARN',
+        'miner-manager',
+      );
+      return undefined;
+    } catch (error) {
+      this.loggingService.log(
+        `❌ Error getting miner from config: ${error instanceof Error ? error.message : String(error)}`,
+        'ERROR',
+        'miner-manager',
+      );
       return undefined;
     }
   }
