@@ -150,7 +150,7 @@ export class MinerManagerService
 
     // Set up crash monitoring
     this.crashMonitorInterval = setInterval(() => {
-      this.checkMinerHealth();
+      void this.checkMinerHealth();
     }, 30000);
 
     // Set up dedicated schedule checking - more frequent than config sync for proper enforcement
@@ -219,7 +219,7 @@ export class MinerManagerService
           return;
         }
 
-        this.restartMiner();
+        void this.restartMiner();
       } else {
         this.crashCount = 0;
       }
