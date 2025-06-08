@@ -342,7 +342,8 @@ export class BootstrapService implements OnModuleInit {
     packageMap: Record<string, string[]>,
   ) {
     const sudoPrefix = hasSudo ? 'sudo ' : '';
-    const timeoutMs = 30000; // 30 second timeout per package group
+    // Increased timeout for slow networks/systems, especially Termux
+    const timeoutMs = osType === 'termux' ? 120000 : 60000; // 2 minutes for Termux, 1 minute for others
 
     // Setup package repositories first
     await this.setupPackageRepositories(packageManager, sudoPrefix, osType);
