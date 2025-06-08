@@ -21,6 +21,13 @@ export class LoggingService {
     this.logLevel = (process.env.LOG_LEVEL || DEFAULT_LOG_LEVEL).toUpperCase().trim();
     this.logToConsole = process.env.LOG_TO_CONSOLE === 'true';
 
+    // Debug: Log the resolved paths
+    console.log(`[LoggingService] Working directory: ${process.cwd()}`);
+    console.log(`[LoggingService] LOGS_DIR: ${LOGS_DIR}`);
+    console.log(`[LoggingService] LOG_FILE_PATH: ${LOG_FILE_PATH}`);
+    console.log(`[LoggingService] Log level: ${this.logLevel}`);
+    console.log(`[LoggingService] Log to console: ${this.logToConsole}`);
+
     this.ensureLogFileExists();
   }
 
@@ -53,17 +60,22 @@ export class LoggingService {
       this.printToConsole(logEntry, level);
     }
   }
-
   /** ✅ Write logs to file (keeps last 100 logs) */
   private writeToFile(logEntry: string): void {
     try {
+      // Debug: Log that we're attempting to write
+      console.log(`[LoggingService] Attempting to write: ${logEntry}`);
+      console.log(`[LoggingService] Writing to: ${LOG_FILE_PATH}`);
+      
       // Ensure logs directory exists
       if (!fs.existsSync(LOGS_DIR)) {
+        console.log(`[LoggingService] Creating directory: ${LOGS_DIR}`);
         fs.mkdirSync(LOGS_DIR, { recursive: true });
       }
 
       // Ensure log file exists
       if (!fs.existsSync(LOG_FILE_PATH)) {
+        console.log(`[LoggingService] Creating log file: ${LOG_FILE_PATH}`);
         fs.writeFileSync(LOG_FILE_PATH, '', { flag: 'w' });
       }
 
@@ -71,6 +83,8 @@ export class LoggingService {
       const logs = fs.existsSync(LOG_FILE_PATH)
         ? fs.readFileSync(LOG_FILE_PATH, 'utf8').split('\n').filter(Boolean)
         : [];
+
+      console.log(`[LoggingService] Existing logs count: ${logs.length}`);
 
       // Add new log entry
       logs.push(logEntry);
@@ -82,8 +96,9 @@ export class LoggingService {
 
       // Write updated logs
       fs.writeFileSync(LOG_FILE_PATH, logs.join('\n') + '\n', 'utf8');
+      console.log(`[LoggingService] Successfully wrote log entry to file`);
     } catch (error) {
-      console.error(`[ERROR] LoggingService failed to write to log file: ${error.message}`);
+      console.error(`[ERROR] LoggingService failed to write to log file: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
