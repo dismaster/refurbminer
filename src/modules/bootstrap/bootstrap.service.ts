@@ -463,71 +463,206 @@ export class BootstrapService implements OnModuleInit {
   }
 
   /** Setup package repositories with better error handling */
-  private setupPackageRepositories(
+  private async setupPackageRepositories(
     packageManager: string,
     sudoPrefix: string,
     osType: string,
   ): Promise<void> {
-    return new Promise((resolve) => {
-      if (packageManager !== 'apt-get') {
-        resolve();
-        return;
-      }
+    // Handle Termux package repository switching
+    if (packageManager === 'pkg') {
+      await this.setupTermuxRepositories();
+      return;
+    }
 
-      try {
-        // Update package lists first
-        this.loggingService.log('Updating package lists...', 'INFO', 'bootstrap');
-        execSync(`${sudoPrefix}apt-get update -qq`, {
-          stdio: 'ignore',
-          timeout: 30000,
-        });
-        resolve();
-      } catch {
-        this.loggingService.log(
-          'Package list update failed, checking repositories...',
-          'WARN',
-          'bootstrap',
-        );
+    if (packageManager !== 'apt-get') {
+      return;
+    }
 
-        // Setup minimal repository if needed
-        if (
-          !fs.existsSync('/etc/apt/sources.list') ||
-          fs.readFileSync('/etc/apt/sources.list', 'utf8').trim() === ''
-        ) {
-          try {
-            const distro = execSync(
-              'lsb_release -sc 2>/dev/null || echo bookworm',
-              { encoding: 'utf8' },
-            ).trim();
+    try {
+      // Update package lists first
+      this.loggingService.log('Updating package lists...', 'INFO', 'bootstrap');
+      execSync(`${sudoPrefix}apt-get update -qq`, {
+        stdio: 'ignore',
+        timeout: 30000,
+      });
+    } catch {
+      this.loggingService.log(
+        'Package list update failed, checking repositories...',
+        'WARN',
+        'bootstrap',
+      );
 
-            const sourcesList =
-              osType === 'raspberry-pi'
-                ? `deb http://deb.debian.org/debian ${distro} main\ndeb http://archive.raspberrypi.org/debian/ ${distro} main`
-                : `deb http://deb.debian.org/debian ${distro} main`;
+      // Setup minimal repository if needed
+      if (
+        !fs.existsSync('/etc/apt/sources.list') ||
+        fs.readFileSync('/etc/apt/sources.list', 'utf8').trim() === ''
+      ) {
+        try {
+          const distro = execSync(
+            'lsb_release -sc 2>/dev/null || echo bookworm',
+            { encoding: 'utf8' },
+          ).trim();
 
-            fs.writeFileSync('/etc/apt/sources.list', sourcesList);
+          const sourcesList =
+            osType === 'raspberry-pi'
+              ? `deb http://deb.debian.org/debian ${distro} main\ndeb http://archive.raspberrypi.org/debian/ ${distro} main`
+              : `deb http://deb.debian.org/debian ${distro} main`;
 
-            this.loggingService.log(
-              'Repository sources configured',
-              'INFO',
-              'bootstrap',
-            );
-            execSync(`${sudoPrefix}apt-get update -qq`, {
-              stdio: 'ignore',
-              timeout: 30000,
-            });
-          } catch (repoError) {
-            const errorMessage = repoError instanceof Error ? repoError.message : String(repoError);
-            this.loggingService.log(
-              `Repository setup failed: ${errorMessage}`,
-              'WARN',
-              'bootstrap',
-            );
-          }
+          fs.writeFileSync('/etc/apt/sources.list', sourcesList);
+
+          this.loggingService.log(
+            'Repository sources configured',
+            'INFO',
+            'bootstrap',
+          );
+          execSync(`${sudoPrefix}apt-get update -qq`, {
+            stdio: 'ignore',
+            timeout: 30000,
+          });
+        } catch (repoError) {
+          const errorMessage = repoError instanceof Error ? repoError.message : String(repoError);
+          this.loggingService.log(
+            `Repository setup failed: ${errorMessage}`,
+            'WARN',
+            'bootstrap',
+          );
         }
-        resolve();
       }
-    });
+    }
+  }
+
+  /** Setup Termux repositories with fallback options */
+  private async setupTermuxRepositories(): Promise<void> {
+    const termuxRepos = [
+      {
+        name: 'Main Termux Repository',
+        url: 'https://packages.termux.org/apt/termux-main',
+        commands: ['pkg update'],
+      },
+      {
+        name: 'Grimler Mirror (Europe)',
+        url: 'https://grimler.se/termux-packages-24',
+        commands: ['termux-change-repo', 'pkg update'],
+      },
+      {
+        name: 'Albatross Mirror (Asia)',
+        url: 'https://albatross.termux-mirror.ml',
+        commands: [
+          'sed -i "s@packages.termux.org@albatross.termux-mirror.ml@g" $PREFIX/etc/apt/sources.list',
+          'pkg update',
+        ],
+      },
+      {
+        name: 'Kcubeterm Mirror (Global)',
+        url: 'https://dl.kcubeterm.me',
+        commands: [
+          'sed -i "s@packages.termux.org@dl.kcubeterm.me@g" $PREFIX/etc/apt/sources.list',
+          'pkg update',
+        ],
+      },
+      {
+        name: 'BFSU Mirror (China)',
+        url: 'https://mirrors.bfsu.edu.cn/termux/apt/termux-main',
+        commands: [
+          'sed -i "s@packages.termux.org@mirrors.bfsu.edu.cn/termux@g" $PREFIX/etc/apt/sources.list',
+          'pkg update',
+        ],
+      },
+    ];
+
+    let repoWorking = false;
+    let lastError = '';
+
+    // First, try to update with current repository
+    try {
+      this.loggingService.log(
+        'Testing current Termux repository...',
+        'INFO',
+        'bootstrap',
+      );
+      execSync('pkg update', { stdio: 'ignore', timeout: 45000 });
+      repoWorking = true;
+      this.loggingService.log(
+        'Current repository working correctly',
+        'INFO',
+        'bootstrap',
+      );
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      lastError = errorMessage;
+      this.loggingService.log(
+        `Current repository failed: ${errorMessage}`,
+        'WARN',
+        'bootstrap',
+      );
+    }
+
+    // If current repo doesn't work, try alternatives
+    if (!repoWorking) {
+      this.loggingService.log(
+        'Attempting to switch to alternative Termux repositories...',
+        'INFO',
+        'bootstrap',
+      );
+
+      for (const repo of termuxRepos.slice(1)) { // Skip the main repo since we tried it
+        try {
+          this.loggingService.log(
+            `Trying ${repo.name}...`,
+            'INFO',
+            'bootstrap',
+          );
+
+          // Execute repository switch commands
+          for (const command of repo.commands) {
+            if (command === 'termux-change-repo') {
+              // Use termux-change-repo if available
+              try {
+                execSync('command -v termux-change-repo', { stdio: 'ignore' });
+                execSync('echo -e "1\\n1" | termux-change-repo', {
+                  stdio: 'ignore',
+                  timeout: 30000,
+                });
+              } catch {
+                // If termux-change-repo not available, skip this repo
+                continue;
+              }
+            } else {
+              execSync(command, { stdio: 'ignore', timeout: 45000 });
+            }
+          }
+
+          repoWorking = true;
+          this.loggingService.log(
+            `Successfully switched to ${repo.name}`,
+            'INFO',
+            'bootstrap',
+          );
+          break;
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          this.loggingService.log(
+            `${repo.name} failed: ${errorMessage}`,
+            'WARN',
+            'bootstrap',
+          );
+          lastError = errorMessage;
+        }
+      }
+    }
+
+    if (!repoWorking) {
+      this.loggingService.log(
+        `All Termux repositories failed. Last error: ${lastError}`,
+        'ERROR',
+        'bootstrap',
+      );
+      this.loggingService.log(
+        'Continuing with package installation, but some packages may fail...',
+        'WARN',
+        'bootstrap',
+      );
+    }
   }
 
   /** Install individual network tools as fallback */
