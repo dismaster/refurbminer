@@ -108,6 +108,7 @@ export class BootstrapService implements OnModuleInit {
     // Check if we're on Termux to run ADB optimizations
     const osType = this.deviceMonitoringService.getOS();
     if (osType === 'termux') {
+      this.cleanupScreenSessions();
       await this.setupAdbOptimizations();
     }
 
@@ -1315,6 +1316,74 @@ export class BootstrapService implements OnModuleInit {
       this.loggingService.log(
         'All critical tools are available - RefurbMiner should function properly',
         'INFO',
+        'bootstrap',
+      );
+    }
+  }
+
+  /** Clean up dead or detached screen sessions */
+  private cleanupScreenSessions(): void {
+    this.loggingService.log(
+      'Cleaning up dead or detached screen sessions...',
+      'INFO',
+      'bootstrap',
+    );
+
+    try {
+      // Get list of screen sessions
+      const screenList = execSync('screen -list', {
+        encoding: 'utf8',
+        stdio: 'pipe',
+      }).trim();
+
+      this.loggingService.log(
+        `Current screen sessions: ${screenList}`,
+        'DEBUG',
+        'bootstrap',
+      );
+
+      // Find detached sessions
+      const detachedSessions = screenList
+        .split('\n')
+        .filter(line => line.includes('Detached') || line.includes('Dead'))
+        .map(line => {
+          const match = line.match(/^\s*(\d+\.\S+)/);
+          return match ? match[1] : null;
+        })
+        .filter(sessionId => sessionId !== null);
+
+      if (detachedSessions.length > 0) {
+        // Kill detached and dead sessions
+        detachedSessions.forEach(sessionId => {
+          this.loggingService.log(
+            `Killing detached screen session: ${sessionId}`,
+            'INFO',
+            'bootstrap',
+          );
+          try {
+            execSync(`screen -S ${sessionId} -X quit`, { stdio: 'ignore' });
+          } catch (error) {
+            // Session might already be gone, ignore errors
+          }
+        });
+
+        this.loggingService.log(
+          'Detached screen sessions cleaned up',
+          'INFO',
+          'bootstrap',
+        );
+      } else {
+        this.loggingService.log(
+          'No detached screen sessions found',
+          'INFO',
+          'bootstrap',
+        );
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.loggingService.log(
+        `Screen cleanup error: ${errorMessage}`,
+        'WARN',
         'bootstrap',
       );
     }
