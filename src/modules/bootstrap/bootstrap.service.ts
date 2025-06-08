@@ -605,17 +605,26 @@ export class BootstrapService implements OnModuleInit {
     let repoWorking = false;
     let lastError = '';
 
-    // First, try to update with current repository
+    // First, try to update with current repository with shorter timeout
     try {
       this.loggingService.log(
-        'Testing current Termux repository...',
+        'Testing current Termux repository speed...',
         'INFO',
         'bootstrap',
       );
-      execSync('pkg update', { stdio: 'ignore', timeout: 45000 });
+      execSync('pkg update', { stdio: 'ignore', timeout: 15000 }); // Shorter timeout for speed test
+      
+      // Test actual package download speed with a small package
+      this.loggingService.log(
+        'Testing package download speed...',
+        'INFO',
+        'bootstrap',
+      );
+      execSync('pkg install -y --download-only curl', { stdio: 'ignore', timeout: 10000 });
+      
       repoWorking = true;
       this.loggingService.log(
-        'Current repository working correctly',
+        'Current repository working with good speed',
         'INFO',
         'bootstrap',
       );
@@ -623,7 +632,7 @@ export class BootstrapService implements OnModuleInit {
       const errorMessage = error instanceof Error ? error.message : String(error);
       lastError = errorMessage;
       this.loggingService.log(
-        `Current repository failed: ${errorMessage}`,
+        `Current repository too slow or failed: ${errorMessage}`,
         'WARN',
         'bootstrap',
       );
