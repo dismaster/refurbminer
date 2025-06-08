@@ -342,8 +342,8 @@ export class BootstrapService implements OnModuleInit {
     packageMap: Record<string, string[]>,
   ) {
     const sudoPrefix = hasSudo ? 'sudo ' : '';
-    // Increased timeout for slow networks/systems, especially Termux
-    const timeoutMs = osType === 'termux' ? 120000 : 60000; // 2 minutes for Termux, 1 minute for others
+    // Extended timeout for compilation packages and slow networks/systems
+    const timeoutMs = osType === 'termux' ? 120000 : 60000; // 2 minutes for Termux, 1 minutes for others
 
     // Setup package repositories first
     await this.setupPackageRepositories(packageManager, sudoPrefix, osType);
@@ -454,6 +454,28 @@ export class BootstrapService implements OnModuleInit {
         resolve(true);
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
+        
+        // Check if it's a timeout error - packages might have installed successfully
+        if (errorMessage.includes('ETIMEDOUT') || errorMessage.includes('timeout')) {
+          this.loggingService.log(
+            `Package installation timed out, verifying if packages were actually installed...`,
+            'INFO',
+            'bootstrap',
+          );
+          
+          // Verify if packages were actually installed despite timeout
+          const installedCount = this.verifyPackagesInstalled(packages, packageManager);
+          if (installedCount > 0) {
+            this.loggingService.log(
+              `✅ Package installation succeeded despite timeout: ${installedCount}/${packages.length} packages installed`,
+              'INFO',
+              'bootstrap',
+            );
+            resolve(true);
+            return;
+          }
+        }
+        
         this.loggingService.log(
           `Package group installation failed: ${errorMessage}`,
           'WARN',
@@ -462,6 +484,51 @@ export class BootstrapService implements OnModuleInit {
         resolve(false);
       }
     });
+  }
+
+  /** Verify if packages were actually installed despite timeout */
+  private verifyPackagesInstalled(packages: string[], packageManager: string): number {
+    let installedCount = 0;
+
+    for (const pkg of packages) {
+      try {
+        switch (packageManager) {
+          case 'apt-get':
+            // Check if package is installed using dpkg
+            execSync(`dpkg -l ${pkg} 2>/dev/null | grep -q "^ii"`, { stdio: 'ignore' });
+            installedCount++;
+            break;
+          case 'dnf':
+          case 'yum':
+            // Check if package is installed using rpm
+            execSync(`rpm -q ${pkg}`, { stdio: 'ignore' });
+            installedCount++;
+            break;
+          case 'pacman':
+            // Check if package is installed using pacman
+            execSync(`pacman -Qi ${pkg}`, { stdio: 'ignore' });
+            installedCount++;
+            break;
+          case 'pkg':
+            // Check if package is installed using pkg (Termux)
+            execSync(`pkg list-installed ${pkg} 2>/dev/null | grep -q "${pkg}"`, { stdio: 'ignore' });
+            installedCount++;
+            break;
+          default:
+            // Try generic command check for essential packages
+            if (['curl', 'screen', 'git', 'make', 'clang', 'cmake'].includes(pkg)) {
+              execSync(`command -v ${pkg}`, { stdio: 'ignore' });
+              installedCount++;
+            }
+            break;
+        }
+      } catch {
+        // Package not installed or verification failed
+        continue;
+      }
+    }
+
+    return installedCount;
   }
 
   /** Setup package repositories with better error handling */

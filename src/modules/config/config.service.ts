@@ -45,6 +45,11 @@ export class ConfigService implements OnModuleInit {
   private syncInterval: NodeJS.Timeout;
   private apiUrl: string;
   private readonly MAX_BACKUPS = 5; // Maximum number of backup files to keep
+  
+  // Cache to prevent excessive file reads
+  private configCache: Config | null = null;
+  private lastCacheTime: number = 0;
+  private readonly CACHE_TTL = 30000; // Cache TTL of 30 seconds
 
   constructor(
     private readonly loggingService: LoggingService,
@@ -119,6 +124,17 @@ export class ConfigService implements OnModuleInit {
 
   getConfig(): Config | null {
     try {
+      // Check if cache is still valid
+      const now = Date.now();
+      if (this.configCache && (now - this.lastCacheTime) < this.CACHE_TTL) {
+        this.loggingService.log(
+          '📋 Using cached config data',
+          'DEBUG',
+          'config',
+        );
+        return this.configCache;
+      }
+
       this.loggingService.log(
         `📂 Reading config from: ${this.configPath}`,
         'DEBUG',
@@ -130,8 +146,13 @@ export class ConfigService implements OnModuleInit {
       }
 
       const config = JSON.parse(fs.readFileSync(this.configPath, 'utf8'));
+      
+      // Update cache
+      this.configCache = config;
+      this.lastCacheTime = now;
+      
       this.loggingService.log(
-        '✅ Config loaded successfully',
+        '✅ Config loaded successfully and cached',
         'DEBUG',
         'config',
       );
@@ -162,6 +183,11 @@ export class ConfigService implements OnModuleInit {
       
       // Write new config
       fs.writeFileSync(this.configPath, JSON.stringify(config, null, 2));
+      
+      // Invalidate cache after saving
+      this.configCache = null;
+      this.lastCacheTime = 0;
+      
       this.loggingService.log(
         '✅ Config saved successfully',
         'DEBUG',
@@ -502,5 +528,18 @@ export class ConfigService implements OnModuleInit {
       );
       return false;
     }
+  }
+
+  /**
+   * Force refresh of config cache - useful when external changes are made
+   */
+  refreshCache(): void {
+    this.configCache = null;
+    this.lastCacheTime = 0;
+    this.loggingService.log(
+      '🔄 Config cache cleared - next access will read from disk',
+      'DEBUG',
+      'config',
+    );
   }
 }

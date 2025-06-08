@@ -20,20 +20,23 @@ import { AppService } from './app.service';
 
 @Module({
   imports: [    
-    // Core modules
+    // Core modules (order matters for initialization)
     LoggingModule,
     ApiCommunicationModule,
+    ConfigModule,
 
-    // Feature modules
+    // Bootstrap must run before MinerManager to handle screen cleanup properly
     BootstrapModule,
+    
+    // Feature modules (MinerManager depends on Bootstrap being initialized first)
     MinerManagerModule,
     MinerSoftwareModule,
     DeviceMonitoringModule,
     NetworkMonitoringModule,
     TelemetryModule,
-    FlightsheetModule,    ActionsModule,
+    FlightsheetModule,
+    ActionsModule,
     MinerDataModule,
-    ConfigModule,
 
     // Web interface
     WebModule,
