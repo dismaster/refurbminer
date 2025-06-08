@@ -1321,10 +1321,10 @@ export class BootstrapService implements OnModuleInit {
     }
   }
 
-  /** Clean up dead or detached screen sessions */
+  /** Clean up dead screen sessions only (not detached ones that might be running) */
   private cleanupScreenSessions(): void {
     this.loggingService.log(
-      'Cleaning up dead or detached screen sessions...',
+      'Cleaning up dead screen sessions...',
       'INFO',
       'bootstrap',
     );
@@ -1342,21 +1342,21 @@ export class BootstrapService implements OnModuleInit {
         'bootstrap',
       );
 
-      // Find detached sessions
-      const detachedSessions = screenList
+      // Only find truly dead sessions (not detached ones that might be running)
+      const deadSessions = screenList
         .split('\n')
-        .filter(line => line.includes('Detached') || line.includes('Dead'))
-        .map(line => {
+        .filter((line) => line.includes('Dead') || line.includes('Remote or dead'))
+        .map((line) => {
           const match = line.match(/^\s*(\d+\.\S+)/);
           return match ? match[1] : null;
         })
-        .filter(sessionId => sessionId !== null);
+        .filter((sessionId) => sessionId !== null);
 
-      if (detachedSessions.length > 0) {
-        // Kill detached and dead sessions
-        detachedSessions.forEach(sessionId => {
+      if (deadSessions.length > 0) {
+        // Kill only dead sessions, leave detached ones alone
+        deadSessions.forEach((sessionId) => {
           this.loggingService.log(
-            `Killing detached screen session: ${sessionId}`,
+            `Killing dead screen session: ${sessionId}`,
             'INFO',
             'bootstrap',
           );
@@ -1368,13 +1368,27 @@ export class BootstrapService implements OnModuleInit {
         });
 
         this.loggingService.log(
-          'Detached screen sessions cleaned up',
+          `Cleaned up ${deadSessions.length} dead screen sessions`,
           'INFO',
           'bootstrap',
         );
       } else {
         this.loggingService.log(
-          'No detached screen sessions found',
+          'No dead screen sessions found to clean up',
+          'INFO',
+          'bootstrap',
+        );
+      }
+
+      // Log remaining detached sessions but don't kill them
+      const detachedSessions = screenList
+        .split('\n')
+        .filter((line) => line.includes('Detached'))
+        .length;
+
+      if (detachedSessions > 0) {
+        this.loggingService.log(
+          `Found ${detachedSessions} detached screen sessions (leaving them running)`,
           'INFO',
           'bootstrap',
         );
