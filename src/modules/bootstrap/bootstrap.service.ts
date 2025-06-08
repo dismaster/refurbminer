@@ -568,6 +568,38 @@ export class BootstrapService implements OnModuleInit {
           'pkg update',
         ],
       },
+      {
+        name: 'Tsinghua Mirror (China)',
+        url: 'https://mirrors.tuna.tsinghua.edu.cn/termux/apt/termux-main',
+        commands: [
+          'sed -i "s@packages.termux.org@mirrors.tuna.tsinghua.edu.cn/termux@g" $PREFIX/etc/apt/sources.list',
+          'pkg update',
+        ],
+      },
+      {
+        name: 'USTC Mirror (China)',
+        url: 'https://mirrors.ustc.edu.cn/termux/apt/termux-main',
+        commands: [
+          'sed -i "s@packages.termux.org@mirrors.ustc.edu.cn/termux@g" $PREFIX/etc/apt/sources.list',
+          'pkg update',
+        ],
+      },
+      {
+        name: 'NJU Mirror (China)',
+        url: 'https://mirrors.nju.edu.cn/termux/apt/termux-main',
+        commands: [
+          'sed -i "s@packages.termux.org@mirrors.nju.edu.cn/termux@g" $PREFIX/etc/apt/sources.list',
+          'pkg update',
+        ],
+      },
+      {
+        name: 'Haruna Mirror (Japan)',
+        url: 'https://termux.haruna.dev/apt/termux-main',
+        commands: [
+          'sed -i "s@packages.termux.org@termux.haruna.dev@g" $PREFIX/etc/apt/sources.list',
+          'pkg update',
+        ],
+      },
     ];
 
     let repoWorking = false;
