@@ -27,7 +27,6 @@ export class MinerSummaryUtil {
       return null;
     }
   }
-
   /** ✅ Get CCMiner summary */
   private static getCcminerSummary(): any {
     try {
@@ -38,7 +37,8 @@ export class MinerSummaryUtil {
         name: 'ccminer',
         version: parsed.VER || 'unknown',
         algorithm: parsed.ALGO || 'unknown',
-        hashrate: parseFloat(parsed.KHS) || 0,
+        // Convert kilohash to hash by multiplying by 1000
+        hashrate: (parseFloat(parsed.KHS) || 0) * 1000,
         acceptedShares: parseInt(parsed.ACC) || 0,
         rejectedShares: parseInt(parsed.REJ) || 0,
         uptime: parseInt(parsed.UPTIME) || 0,
@@ -48,7 +48,7 @@ export class MinerSummaryUtil {
     } catch {
       return this.getDefaultSummary();
     }
-  }  
+  }
   
   /** ✅ Get XMRig summary */
   private static async getXmrigSummary(): Promise<any> {

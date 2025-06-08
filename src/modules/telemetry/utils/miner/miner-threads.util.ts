@@ -16,12 +16,11 @@ export class MinerThreadsUtil {
           : await this.getXmrigThreadStats();
           
         minerHashrates = threadStats.map(t => t.hashrate || 0);
-      }
-
-      // Combine CPU info with hashrates
+      }      // Combine CPU info with hashrates
       return cpuInfo.map((cpu, index) => ({
         ...cpu,
-        khs: minerHashrates[index] || 0
+        // Convert to consistent naming: hashrate in hash/s for both miners
+        hashrate: minerHashrates[index] || 0
       }));
     } catch (error) {
       console.error('Failed to get thread performance:', error);
@@ -130,10 +129,9 @@ export class MinerThreadsUtil {
 
       // Method 2: Try to get total hashrate from summary and distribute evenly
       try {
-        const summaryRaw = execSync(`echo 'summary' | nc -w 1 127.0.0.1 4068`, { encoding: 'utf8' });
-        const hashMatch = summaryRaw.match(/KHS=([\d.]+)/);
+        const summaryRaw = execSync(`echo 'summary' | nc -w 1 127.0.0.1 4068`, { encoding: 'utf8' });        const hashMatch = summaryRaw.match(/KHS=([\d.]+)/);
         if (hashMatch) {
-          const totalHashrate = parseFloat(hashMatch[1]);
+          const totalHashrate = parseFloat(hashMatch[1]) * 1000; // Convert kilohash to hash
           const cpuCount = os.cpus().length;
           const hashratePerThread = totalHashrate / cpuCount;
           
@@ -204,23 +202,21 @@ export class MinerThreadsUtil {
       if (output.includes('|')) {
         return output
           .split('|')
-          .filter(thread => thread.trim())
-          .map((thread, index) => {
+          .filter(thread => thread.trim())          .map((thread, index) => {
             const match = thread.match(/KHS=([\d.]+)/);
             return {
               coreId: index,
-              hashrate: match ? parseFloat(match[1]) : 0
+              hashrate: match ? parseFloat(match[1]) * 1000 : 0 // Convert kilohash to hash
             };
           });
       }
 
       // Try to parse line-separated format
-      const lines = output.split('\n').filter(line => line.trim());
-      return lines.map((line, index) => {
+      const lines = output.split('\n').filter(line => line.trim());      return lines.map((line, index) => {
         const match = line.match(/KHS=([\d.]+)/);
         return {
           coreId: index,
-          hashrate: match ? parseFloat(match[1]) : 0
+          hashrate: match ? parseFloat(match[1]) * 1000 : 0 // Convert kilohash to hash
         };
       });
     } catch (error) {

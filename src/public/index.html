@@ -53,7 +53,7 @@
                             <div class="col-sm-6 col-lg-3">
                                 <div class="info-box">
                                     <div class="info-box-title">Hashrate</div>
-                                    <div class="info-box-value"><span id="minerHashrate">0</span> kH/s</div>
+                                    <div class="info-box-value"><span id="minerHashrate">0</span> H/s</div>
                                 </div>
                             </div>
                             <div class="col-sm-6 col-lg-3">
@@ -331,7 +331,7 @@ function updateHashrateChart(historicalData) {
         data: {
             labels: labels,
             datasets: [{
-                label: 'Hashrate (kH/s)',
+                label: 'Hashrate (H/s)',
                 data: hashrates,
                 borderColor: getComputedStyle(document.documentElement).getPropertyValue('--primary-color'),
                 backgroundColor: 'rgba(46, 184, 92, 0.1)',
@@ -357,7 +357,7 @@ function updateHashrateChart(historicalData) {
                     intersect: false,
                     callbacks: {
                         label: function(context) {
-                            return `Hashrate: ${context.raw} kH/s`;
+                            return `Hashrate: ${context.raw} H/s`;
                         }
                     }
                 }
@@ -376,7 +376,7 @@ function updateHashrateChart(historicalData) {
                     display: true,
                     title: {
                         display: true,
-                        text: 'Hashrate (kH/s)'
+                        text: 'Hashrate (H/s)'
                     },
                     beginAtZero: true,
                     suggestedMin: function() {

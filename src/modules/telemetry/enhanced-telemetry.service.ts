@@ -184,15 +184,14 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
       // Update the CPU model info with hashrates from threads with error handling
       if (deviceInfo.cpuModel && deviceInfo.cpuModel.length > 0) {
         try {
-          deviceInfo.cpuModel = deviceInfo.cpuModel.map((cpu, index) => {
-            // Find matching thread data by coreId
+          deviceInfo.cpuModel = deviceInfo.cpuModel.map((cpu, index) => {            // Find matching thread data by coreId
             const threadData = threadPerformance.find(t => t.coreId === cpu.coreId) ||
                               threadPerformance[index] || 
-                              { khs: 0 };
+                              { hashrate: 0 };
             
             return {
               ...cpu,
-              khs: threadData.khs || 0
+              hashrate: threadData.hashrate || 0
             };
           });
         } catch (err) {
@@ -363,11 +362,10 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
     }
     return null;
   }
-  
-  private updateHistoricalHashrate(
-    previousHistory: Array<{ timestamp: number; khs: number }>,
+    private updateHistoricalHashrate(
+    previousHistory: Array<{ timestamp: number; hashrate: number }>,
     currentHashrate?: number
-  ): Array<{ timestamp: number; khs: number }> {
+  ): Array<{ timestamp: number; hashrate: number }> {
     if (!currentHashrate) return previousHistory;
   
     const now = Math.floor(Date.now() / 1000);
@@ -379,10 +377,10 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
         .filter(entry => entry.timestamp > sixtyMinutesAgo)
         .slice(-this.MAX_HISTORY_POINTS + 1); // +1 to make room for the new point
     
-      // Add new data point
+      // Add new data point (currentHashrate should already be in hash/s from CCMiner conversion)
       filteredHistory.push({
         timestamp: now,
-        khs: currentHashrate
+        hashrate: currentHashrate // hashrate is now in hash/s for both miners
       });
     
       // Ensure we don't exceed maximum points
@@ -427,7 +425,7 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async saveHistoricalData(data: Array<{ timestamp: number; khs: number }>) {
+  private async saveHistoricalData(data: Array<{ timestamp: number; hashrate: number }>) {
     try {
       // Ensure the data is an array
       if (!Array.isArray(data)) {

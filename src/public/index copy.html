@@ -54,7 +54,7 @@
             <p>Name: <span id="minerName"></span></p>
             <p>Version: <span id="minerVersion"></span></p>
             <p>Algorithm: <span id="minerAlgorithm"></span></p>
-            <p>Hashrate: <span id="minerHashrate"></span> kH/s</p>
+            <p>Hashrate: <span id="minerHashrate"></span> H/s</p>
             <p>Accepted Shares: <span id="minerAcceptedShares"></span></p>
             <p>Rejected Shares: <span id="minerRejectedShares"></span></p>
             <p>Uptime: <span id="minerUptime"></span></p>
@@ -133,9 +133,10 @@
         function updateHashrateChart(historicalData) {
             const labels = historicalData.map(item => {
                 const date = new Date(item.timestamp * 1000);
-                return date.toLocaleTimeString();
-            });
-            const hashrates = historicalData.map(item => item.khs);
+                return date.toLocaleTimeString();            });
+            const hashrates = historicalData.map(item => 
+                parseFloat(item.hashrate || item.khs || 0).toFixed(2)
+            );
 
             if (hashrateChart) {
                 hashrateChart.destroy();
@@ -147,7 +148,7 @@
                 data: {
                     labels: labels,
                     datasets: [{
-                        label: 'Hashrate (kH/s)',
+                        label: 'Hashrate (H/s)',
                         data: hashrates,
                         borderColor: '#4CAF50',
                         tension: 0.1
