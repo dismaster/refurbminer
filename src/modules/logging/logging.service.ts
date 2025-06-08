@@ -38,8 +38,9 @@ export class LoggingService {
     const levels = ['ERROR', 'WARN', 'INFO', 'DEBUG', 'VERBOSE'];
     const currentLevelIndex = levels.indexOf(this.logLevel);
     const messageLevelIndex = levels.indexOf(level.toUpperCase());
-
-    if (messageLevelIndex > currentLevelIndex) return; // Skip lower-level logs    const timestamp = new Date().toISOString();
+    if (messageLevelIndex > currentLevelIndex) return; // Skip lower-level logs
+    
+    const timestamp = new Date().toISOString();
     const logEntry = `${timestamp} [${level}] [${module}] ${message}`;
 
     // Write to file
