@@ -108,7 +108,7 @@ export class BootstrapService implements OnModuleInit {
     // Check if we're on Termux to run ADB optimizations
     const osType = this.deviceMonitoringService.getOS();
     if (osType === 'termux') {
-      this.setupAdbOptimizations();
+      await this.setupAdbOptimizations();
     }
 
     this.loggingService.log(
@@ -768,7 +768,7 @@ export class BootstrapService implements OnModuleInit {
   }
 
   /** ✅ Setup ADB optimizations for Termux */
-  private setupAdbOptimizations() {
+  private async setupAdbOptimizations() {
     try {
       this.loggingService.log(
         'Checking ADB availability on Termux...',
@@ -788,28 +788,41 @@ export class BootstrapService implements OnModuleInit {
         return;
       }
 
-      // Reset ADB server to ensure fresh connection
+      // Enhanced ADB cleanup - kill any stuck processes and clean up sockets
       try {
-        execSync('adb kill-server', { stdio: 'ignore' });
-        this.loggingService.log('ADB server killed', 'DEBUG', 'bootstrap');
+        execSync('pkill -f adb 2>/dev/null || true', { stdio: 'ignore' });
+        execSync('adb kill-server 2>/dev/null || true', { stdio: 'ignore' });
+        execSync('rm -f /tmp/adb.*.log 2>/dev/null || true', { stdio: 'ignore' });
+        this.loggingService.log('ADB cleanup completed', 'DEBUG', 'bootstrap');
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
         this.loggingService.log(
-          `Failed to kill ADB server: ${errorMessage}`,
+          `ADB cleanup had issues: ${errorMessage}`,
           'DEBUG',
           'bootstrap',
         );
       }
 
+      // Check for common ADB failure indicators
+      const adbDiagnostics = this.performAdbDiagnostics();
+      if (!adbDiagnostics.canProceed) {
+        this.loggingService.log(
+          `ADB compatibility issues detected: ${adbDiagnostics.reason}. Skipping optimizations.`,
+          'WARN',
+          'bootstrap',
+        );
+        return;
+      }
+
       // Start ADB and check if it can connect to the device
       let adbWorks = false;
+      let lastError = '';
 
-      // First attempt: Try ADB directly
+      // First attempt: Try ADB directly with enhanced error detection
       try {
-        // Try to get device state - this will start the server if needed
         const deviceOutput = execSync('adb get-state', {
           encoding: 'utf8',
-          timeout: 5000, // 5 second timeout
+          timeout: 6000,
           stdio: ['ignore', 'pipe', 'pipe'],
         }).trim();
 
@@ -823,82 +836,120 @@ export class BootstrapService implements OnModuleInit {
         }
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        this.loggingService.log(
-          `ADB not connected: ${errorMessage}`,
-          'DEBUG',
-          'bootstrap',
-        );
-
-        // Second attempt: Try to restart the server and establish connection
-        try {
-          // Explicitly kill and restart ADB server
-          execSync('adb kill-server', { stdio: 'ignore' });
+        lastError = errorMessage;
+        
+        // Check for specific error patterns
+        if (errorMessage.includes('libusb')) {
           this.loggingService.log(
-            'Restarting ADB server...',
+            'ADB hardware access (libusb) failed - device may not support USB debugging features',
             'DEBUG',
             'bootstrap',
           );
+        } else if (errorMessage.includes('Address already in use')) {
+          this.loggingService.log(
+            'ADB socket conflict detected - multiple daemon instances',
+            'DEBUG',
+            'bootstrap',
+          );
+        } else {
+          this.loggingService.log(
+            `ADB not connected: ${errorMessage}`,
+            'DEBUG',
+            'bootstrap',
+          );
+        }
 
-          // Start server and check for devices
-          // This specifically handles the "daemon not running; starting now" case
-          const result = execSync('adb shell echo success', {
-            encoding: 'utf8',
-            timeout: 8000, // Give it more time to initialize
-          }).trim();
-
-          if (result.includes('success')) {
-            adbWorks = true;
+        // Second attempt: More aggressive restart with better error handling
+        if (!errorMessage.includes('libusb') && !errorMessage.includes('LIBUSB_ERROR_IO')) {
+          try {
+            // More thorough cleanup
+            execSync('pkill -9 -f adb 2>/dev/null || true', { stdio: 'ignore' });
+            await new Promise(resolve => setTimeout(resolve, 1500));
+            
             this.loggingService.log(
-              'ADB connection established after restart',
-              'INFO',
+              'Attempting ADB server restart with clean slate...',
+              'DEBUG',
               'bootstrap',
             );
-          }
-        } catch (restartError) {
-          const restartErrorMessage = restartError instanceof Error ? restartError.message : String(restartError);
-          this.loggingService.log(
-            `ADB restart failed: ${restartErrorMessage}`,
-            'DEBUG',
-            'bootstrap',
-          );
 
-          // Third attempt: Check device list (sometimes works when the above fails)
-          try {
-            const devices = execSync('adb devices', {
+            // Try a simpler test command
+            const result = execSync('adb shell echo "test"', {
               encoding: 'utf8',
-              timeout: 5000,
-            });
+              timeout: 10000,
+            }).trim();
 
-            // Check if any device is connected (not just "List of devices attached")
-            if (devices.split('\n').length > 2 || devices.includes('device')) {
+            if (result.includes('test')) {
               adbWorks = true;
               this.loggingService.log(
-                'ADB devices detected',
+                'ADB connection established after aggressive restart',
                 'INFO',
                 'bootstrap',
               );
             }
-          } catch (devicesError) {
-            const devicesErrorMessage = devicesError instanceof Error ? devicesError.message : String(devicesError);
+          } catch (restartError) {
+            const restartErrorMessage = restartError instanceof Error ? restartError.message : String(restartError);
             this.loggingService.log(
-              `ADB devices check failed: ${devicesErrorMessage}`,
+              `ADB aggressive restart failed: ${restartErrorMessage}`,
               'DEBUG',
               'bootstrap',
             );
+
+            // Final attempt: Check if we can at least see the device in list
+            try {
+              const devices = execSync('adb devices', {
+                encoding: 'utf8',
+                timeout: 5000,
+              });
+
+              const deviceLines = devices.split('\n')
+                .filter(line => line.trim() && !line.includes('List of devices'))
+                .filter(line => line.includes('device') || line.includes('unauthorized'));
+
+              if (deviceLines.length > 0) {
+                adbWorks = true;
+                this.loggingService.log(
+                  `ADB devices detected: ${deviceLines.length} device(s) found`,
+                  'INFO',
+                  'bootstrap',
+                );
+              }
+            } catch (devicesError) {
+              const devicesErrorMessage = devicesError instanceof Error ? devicesError.message : String(devicesError);
+              this.loggingService.log(
+                `ADB devices check failed: ${devicesErrorMessage}`,
+                'DEBUG',
+                'bootstrap',
+              );
+            }
           }
         }
       }
 
       if (!adbWorks) {
-        this.loggingService.log(
-          'ADB is installed but no devices are connected, skipping optimizations',
-          'WARN',
-          'bootstrap',
-        );
+        // Provide more specific feedback based on the type of failure
+        if (lastError.includes('libusb') || lastError.includes('LIBUSB_ERROR_IO')) {
+          this.loggingService.log(
+            'ADB hardware access unavailable on this device (libusb initialization failed). This is common on some Android devices and can be safely ignored.',
+            'INFO',
+            'bootstrap',
+          );
+        } else if (lastError.includes('Address already in use')) {
+          this.loggingService.log(
+            'ADB daemon conflicts detected. Power optimizations skipped to avoid system instability.',
+            'WARN',
+            'bootstrap',
+          );
+        } else {
+          this.loggingService.log(
+            'ADB is installed but no devices are connected, skipping optimizations',
+            'WARN',
+            'bootstrap',
+          );
+        }
         return;
       }
 
-      // ADB is working - run optimization commands
+      // ADB is working - run optimization commands with better error categorization
       this.loggingService.log(
         'Applying power and performance optimizations via ADB...',
         'INFO',
@@ -906,44 +957,109 @@ export class BootstrapService implements OnModuleInit {
       );
 
       const adbCommands = [
-        'adb shell dumpsys battery set level 100',
-        'adb shell svc power stayon true',
-        'adb shell dumpsys deviceidle whitelist +com.termux.boot',
-        'adb shell dumpsys deviceidle whitelist +com.termux',
-        'adb shell dumpsys deviceidle whitelist +com.termux.api',
-        'adb shell settings put global system_capabilities 100',
-        'adb shell settings put global sem_enhanced_cpu_responsiveness 1',
-        'adb shell settings put global wifi_sleep_policy 2',
+        { cmd: 'adb shell dumpsys battery set level 100', desc: 'Battery level optimization' },
+        { cmd: 'adb shell svc power stayon true', desc: 'Keep screen/CPU active' },
+        { cmd: 'adb shell dumpsys deviceidle whitelist +com.termux.boot', desc: 'Termux boot whitelist' },
+        { cmd: 'adb shell dumpsys deviceidle whitelist +com.termux', desc: 'Termux app whitelist' },
+        { cmd: 'adb shell dumpsys deviceidle whitelist +com.termux.api', desc: 'Termux API whitelist' },
+        { cmd: 'adb shell settings put global wifi_sleep_policy 2', desc: 'WiFi sleep optimization' },
       ];
 
       let successCount = 0;
-      for (const cmd of adbCommands) {
+      let criticalFailures = 0;
+
+      for (const { cmd, desc } of adbCommands) {
         try {
-          execSync(cmd, { timeout: 3000 });
+          execSync(cmd, { timeout: 4000, stdio: ['ignore', 'ignore', 'pipe'] });
           successCount++;
+          this.loggingService.log(`✓ ${desc}`, 'DEBUG', 'bootstrap');
         } catch (cmdError) {
           const cmdErrorMessage = cmdError instanceof Error ? cmdError.message : String(cmdError);
-          this.loggingService.log(
-            `Failed to run "${cmd}": ${cmdErrorMessage}`,
-            'DEBUG',
-            'bootstrap',
-          );
+          
+          // Count critical failures (permission/system issues vs minor ones)
+          if (cmdErrorMessage.includes('permission') || cmdErrorMessage.includes('denied')) {
+            criticalFailures++;
+            this.loggingService.log(
+              `✗ ${desc}: Permission denied (requires root/system access)`,
+              'DEBUG',
+              'bootstrap',
+            );
+          } else {
+            this.loggingService.log(
+              `✗ ${desc}: ${cmdErrorMessage}`,
+              'DEBUG',
+              'bootstrap',
+            );
+          }
         }
       }
 
-      this.loggingService.log(
-        `Power optimizations applied: ${successCount}/${adbCommands.length} succeeded`,
-        'INFO',
-        'bootstrap',
-      );
+      if (successCount > 0) {
+        this.loggingService.log(
+          `✅ Power optimizations applied: ${successCount}/${adbCommands.length} succeeded`,
+          'INFO',
+          'bootstrap',
+        );
+      } else {
+        this.loggingService.log(
+          `⚠️ No power optimizations could be applied (${criticalFailures} permission issues)`,
+          'WARN',
+          'bootstrap',
+        );
+      }
+
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.loggingService.log(
-        `ADB optimization failed: ${errorMessage}`,
+        `ADB optimization process failed: ${errorMessage}`,
         'WARN',
         'bootstrap',
       );
       // Continue execution despite failures
+    }
+  }
+
+  /**
+   * Perform ADB diagnostics to detect common failure scenarios
+   */
+  private performAdbDiagnostics(): { canProceed: boolean; reason: string } {
+    try {
+      // Test 1: Check if we can run adb version (basic functionality)
+      try {
+        const versionOutput = execSync('adb version', { 
+          encoding: 'utf8', 
+          timeout: 3000,
+          stdio: ['ignore', 'pipe', 'pipe']
+        });
+        
+        if (!versionOutput.includes('Android Debug Bridge')) {
+          return { canProceed: false, reason: 'ADB version check failed' };
+        }
+      } catch (versionError) {
+        return { canProceed: false, reason: 'ADB binary is corrupted or incompatible' };
+      }
+
+      // Test 2: Quick daemon start test to detect immediate failures
+      try {
+        execSync('timeout 3 adb start-server 2>&1', { 
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe']
+        });
+      } catch (startError) {
+        const errorMsg = startError instanceof Error ? startError.message : String(startError);
+        
+        if (errorMsg.includes('libusb') || errorMsg.includes('LIBUSB_ERROR')) {
+          return { canProceed: false, reason: 'Hardware access (libusb) unavailable on this device' };
+        }
+        
+        if (errorMsg.includes('Address already in use')) {
+          return { canProceed: false, reason: 'ADB daemon conflicts detected' };
+        }
+      }
+
+      return { canProceed: true, reason: 'ADB appears functional' };
+    } catch (diagError) {
+      return { canProceed: false, reason: 'ADB diagnostics failed' };
     }
   }
 

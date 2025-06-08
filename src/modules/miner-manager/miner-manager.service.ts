@@ -436,15 +436,106 @@ export class MinerManagerService
                 'WARN',
                 'miner-manager',
               );
+              
+              // If screen command failed, try to remove the session file manually
+              this.cleanupOrphanedSessionFile(sessionId);
             }
           }
         }
       }
-    } catch (error) {
+    } catch {
       // No sessions found or other error - this is expected when no sessions exist
       this.loggingService.log(
         'No miner sessions found to clean up',
         'DEBUG',
+        'miner-manager',
+      );
+    }
+  }
+
+  /**
+   * Manually remove orphaned screen session files when screen command fails
+   */
+  private cleanupOrphanedSessionFile(sessionId: string): void {
+    try {
+      // Screen session files are typically stored in /tmp/uscreens/S-username/ or /var/run/screen/S-username/
+      // We'll try common locations
+      const username = process.env.USER || process.env.USERNAME || 'root';
+      const sessionFileName = `${sessionId}.${this.minerScreen}`;
+      
+      const possiblePaths = [
+        `/tmp/uscreens/S-${username}/${sessionFileName}`,
+        `/var/run/screen/S-${username}/${sessionFileName}`,
+        `/tmp/screens/S-${username}/${sessionFileName}`,
+        `/run/screen/S-${username}/${sessionFileName}`,
+      ];
+
+      let removed = false;
+      for (const sessionPath of possiblePaths) {
+        try {
+          if (fs.existsSync(sessionPath)) {
+            fs.unlinkSync(sessionPath);
+            this.loggingService.log(
+              `🗑️ Manually removed orphaned session file: ${sessionPath}`,
+              'INFO',
+              'miner-manager',
+            );
+            removed = true;
+            break;
+          }
+        } catch {
+          // Continue trying other paths
+          continue;
+        }
+      }
+
+      if (!removed) {
+        // If we couldn't find the file in common locations, try using find command
+        try {
+          const findResult = execSync(
+            `find /tmp /var/run /run -name "${sessionFileName}" 2>/dev/null || true`,
+            {
+              encoding: 'utf8',
+              timeout: 3000,
+            },
+          );
+
+          const foundPaths = findResult
+            .trim()
+            .split('\n')
+            .filter((path) => path.trim());
+          
+          for (const foundPath of foundPaths) {
+            try {
+              if (fs.existsSync(foundPath)) {
+                fs.unlinkSync(foundPath);
+                this.loggingService.log(
+                  `🗑️ Manually removed orphaned session file: ${foundPath}`,
+                  'INFO',
+                  'miner-manager',
+                );
+                removed = true;
+              }
+            } catch {
+              continue;
+            }
+          }
+        } catch {
+          // Find command failed, that's okay
+        }
+      }
+
+      if (!removed) {
+        this.loggingService.log(
+          `⚠️ Could not locate session file for cleanup: ${sessionFileName}`,
+          'WARN',
+          'miner-manager',
+        );
+      }
+    } catch (error) {
+      this.loggingService.log(
+        `❌ Error during manual session file cleanup: ${error instanceof Error ? error.message : String(error)}`,
+        'ERROR',
         'miner-manager',
       );
     }
