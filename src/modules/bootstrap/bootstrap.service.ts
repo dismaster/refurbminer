@@ -986,8 +986,13 @@ export class BootstrapService implements OnModuleInit {
         // Use the API's minerId and rigId
         config.minerId = response.minerId;
         config.rigId = response.rigId || '';
-        // Save the updated config
-        fs.writeFileSync(this.configPath, JSON.stringify(config, null, 2));
+        // Save the updated config using ConfigService to ensure cache is updated
+        this.configService.saveConfig(config);
+        this.loggingService.log(
+          `Registered minerId ${response.minerId} saved to config`,
+          'INFO',
+          'bootstrap'
+        );
         this.loggingService.log(
           `Miner registered with ID: ${response.minerId}`,
           'INFO',
