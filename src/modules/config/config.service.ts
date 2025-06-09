@@ -17,6 +17,28 @@ interface ScheduledRestart {
   days?: string[]; // Optional array of days
 }
 
+// Interface for API response to ensure type safety
+interface ApiConfigResponse {
+  minerId?: string;
+  rigId?: string;
+  name?: string;
+  minerSoftware?: string;
+  thresholds?: {
+    maxCpuTemp?: number;
+    maxBatteryTemp?: number;
+    maxStorageUsage?: number;
+    minHashrate?: number;
+    shareRatio?: number;
+  };
+  schedules?: {
+    scheduledMining?: {
+      enabled?: boolean;
+      periods?: SchedulePeriod[];
+    };
+    scheduledRestarts?: ScheduledRestart[];
+  };
+}
+
 // Match database structure where scheduledRestarts is array of objects
 interface Config {
   minerId: string;
@@ -46,10 +68,11 @@ export class ConfigService implements OnModuleInit {
   private apiUrl: string;
   private readonly MAX_BACKUPS = 5; // Maximum number of backup files to keep
   
-  // Cache to prevent excessive file reads
+  // Enhanced cache to prevent excessive file reads within the same minute
   private configCache: Config | null = null;
   private lastCacheTime: number = 0;
-  private readonly CACHE_TTL = 30000; // Cache TTL of 30 seconds
+  private readonly CACHE_TTL = 30000; // 30 seconds - short cache to ensure fresh data for minute-based operations
+  private isLoading: boolean = false; // Prevent multiple simultaneous reads
 
   constructor(
     private readonly loggingService: LoggingService,
@@ -112,12 +135,12 @@ export class ConfigService implements OnModuleInit {
   public async triggerConfigSyncAfterRegistration() {
     await this.syncConfigWithApi();
     if (!this.syncInterval) {
-      // Set up periodic sync every 5 minutes to avoid log flooding
+      // Set up periodic sync every minute as required for real-time config updates
       this.syncInterval = setInterval(
         () => {
-          this.syncConfigWithApi();
+          void this.syncConfigWithApi();
         },
-        5 * 60 * 1000, // 5 minutes - reduced frequency to minimize log noise
+        60 * 1000, // 1 minute - config must be fresh for minute-based schedule checks
       );
     }
   }
@@ -126,7 +149,8 @@ export class ConfigService implements OnModuleInit {
     try {
       // Check if cache is still valid
       const now = Date.now();
-      if (this.configCache && (now - this.lastCacheTime) < this.CACHE_TTL) {
+      if (this.configCache && now - this.lastCacheTime < this.CACHE_TTL) {
+        // Only log in DEBUG to reduce noise in logs
         this.loggingService.log(
           '📋 Using cached config data',
           'DEBUG',
@@ -135,6 +159,19 @@ export class ConfigService implements OnModuleInit {
         return this.configCache;
       }
 
+      // Prevent multiple simultaneous reads
+      if (this.isLoading) {
+        this.loggingService.log(
+          '⏳ Config read already in progress, returning cached version',
+          'DEBUG',
+          'config',
+        );
+        return this.configCache;
+      }
+
+      this.isLoading = true;
+
+      // Only log file reads in DEBUG to reduce noise
       this.loggingService.log(
         `📂 Reading config from: ${this.configPath}`,
         'DEBUG',
@@ -142,15 +179,20 @@ export class ConfigService implements OnModuleInit {
       );
 
       if (!fs.existsSync(this.configPath)) {
+        this.isLoading = false;
         throw new Error('Config file not found');
       }
 
-      const config = JSON.parse(fs.readFileSync(this.configPath, 'utf8'));
+      const config: Config = JSON.parse(
+        fs.readFileSync(this.configPath, 'utf8'),
+      );
       
       // Update cache
       this.configCache = config;
       this.lastCacheTime = now;
+      this.isLoading = false;
       
+      // Only log successful loads in DEBUG to reduce noise
       this.loggingService.log(
         '✅ Config loaded successfully and cached',
         'DEBUG',
@@ -158,8 +200,9 @@ export class ConfigService implements OnModuleInit {
       );
       return config;
     } catch (error) {
+      this.isLoading = false;
       this.loggingService.log(
-        `❌ Failed to load config: ${error.message}`,
+        `❌ Failed to load config: ${error instanceof Error ? error.message : String(error)}`,
         'ERROR',
         'config',
       );
@@ -184,9 +227,10 @@ export class ConfigService implements OnModuleInit {
       // Write new config
       fs.writeFileSync(this.configPath, JSON.stringify(config, null, 2));
       
-      // Invalidate cache after saving
-      this.configCache = null;
-      this.lastCacheTime = 0;
+      // Update cache with the new config instead of invalidating it
+      // This prevents unnecessary file reads right after saving
+      this.configCache = config;
+      this.lastCacheTime = Date.now();
       
       this.loggingService.log(
         '✅ Config saved successfully',
@@ -200,7 +244,7 @@ export class ConfigService implements OnModuleInit {
       return true;
     } catch (error) {
       this.loggingService.log(
-        `❌ Failed to save config: ${error.message}`,
+        `❌ Failed to save config: ${error instanceof Error ? error.message : String(error)}`,
         'ERROR',
         'config',
       );
@@ -273,7 +317,9 @@ export class ConfigService implements OnModuleInit {
       if (response.status !== 200) {
         throw new Error(`API returned ${response.status}`);
       }
-      const apiConfig = response.data;
+      
+      // Type-safe API response handling
+      const apiConfig = response.data as ApiConfigResponse;
       this.loggingService.log(
         `📥 Received config data: ${JSON.stringify(apiConfig)}`,
         'DEBUG',
@@ -281,7 +327,7 @@ export class ConfigService implements OnModuleInit {
       );
 
       // Only log minerSoftware changes, not every sync
-      if (apiConfig.minerSoftware !== currentConfig.minerSoftware) {
+      if (apiConfig.minerSoftware && apiConfig.minerSoftware !== currentConfig.minerSoftware) {
         this.loggingService.log(
           `🔄 Miner software changing: ${currentConfig.minerSoftware} → ${apiConfig.minerSoftware}`,
           'INFO',
@@ -337,7 +383,13 @@ export class ConfigService implements OnModuleInit {
             currentConfig.schedules.scheduledRestarts,
         },
       };
+      
       this.saveConfig(updatedConfig);
+      
+      // Update cache immediately with the new config to prevent unnecessary file reads
+      this.configCache = updatedConfig;
+      this.lastCacheTime = Date.now();
+      
       this.loggingService.log(
         '✅ Config synchronized with API successfully',
         'DEBUG',
@@ -345,14 +397,14 @@ export class ConfigService implements OnModuleInit {
       );
       // Only log the final config in DEBUG, not INFO
       this.loggingService.log(
-        `📄 Updated config: ${JSON.stringify(updatedConfig)}`,
+        `🎯 Final config: ${JSON.stringify(updatedConfig)}`,
         'DEBUG',
         'config',
       );
       return true;
     } catch (error) {
       this.loggingService.log(
-        `❌ Failed to sync config with API: ${error.message}`,
+        `❌ Failed to sync config with API: ${error instanceof Error ? error.message : String(error)}`,
         'ERROR',
         'config',
       );
@@ -428,7 +480,7 @@ export class ConfigService implements OnModuleInit {
       return saved;
     } catch (error) {
       this.loggingService.log(
-        `❌ Failed to clean config: ${error.message}`,
+        `❌ Failed to clean config: ${error instanceof Error ? error.message : String(error)}`,
         'ERROR',
         'config',
       );
@@ -522,7 +574,7 @@ export class ConfigService implements OnModuleInit {
       return true;
     } catch (error) {
       this.loggingService.log(
-        `❌ Failed to set miner software: ${error.message}`,
+        `❌ Failed to set miner software: ${error instanceof Error ? error.message : String(error)}`,
         'ERROR',
         'config',
       );

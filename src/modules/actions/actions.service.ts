@@ -321,6 +321,142 @@ export class ActionsService implements OnModuleInit {
     }
   }
 
+  /**
+   * Run system package updates as pre-steps before software update
+   */
+  private async runSystemPackageUpdates(): Promise<void> {
+    try {
+      const osType = await this.detectOSType();
+      this.loggingService.log(
+        `🔍 Detected OS type: ${osType}`,
+        'INFO',
+        'actions',
+      );
+
+      if (osType === 'termux') {
+        // Termux environment - use pkg
+        this.loggingService.log(
+          '📱 Running Termux package updates (pkg update && pkg upgrade)...',
+          'INFO',
+          'actions',
+        );
+        
+        await execAsync('pkg update -y && pkg upgrade -y', { timeout: 300000 }); // 5 minute timeout
+        
+        this.loggingService.log(
+          '✅ Termux packages updated successfully',
+          'INFO',
+          'actions',
+        );
+      } else if (osType && osType !== 'unknown') {
+        // Linux distributions - detect package manager
+        this.loggingService.log(
+          `🐧 Running Linux package updates for ${osType}...`,
+          'INFO',
+          'actions',
+        );
+
+        // Try different package managers based on availability
+        let updateCommand = '';
+        let upgradeCommand = '';
+
+        try {
+          // Check for apt (Debian/Ubuntu)
+          await execAsync('which apt-get');
+          updateCommand = 'sudo apt-get update -y';
+          upgradeCommand = 'sudo apt-get upgrade -y';
+          this.loggingService.log('📦 Using APT package manager', 'INFO', 'actions');
+        } catch {
+          try {
+            // Check for yum (RHEL/CentOS)
+            await execAsync('which yum');
+            updateCommand = 'sudo yum check-update';
+            upgradeCommand = 'sudo yum update -y';
+            this.loggingService.log('📦 Using YUM package manager', 'INFO', 'actions');
+          } catch {
+            try {
+              // Check for dnf (Fedora)
+              await execAsync('which dnf');
+              updateCommand = 'sudo dnf check-update';
+              upgradeCommand = 'sudo dnf upgrade -y';
+              this.loggingService.log('📦 Using DNF package manager', 'INFO', 'actions');
+            } catch {
+              try {
+                // Check for pacman (Arch Linux)
+                await execAsync('which pacman');
+                updateCommand = 'sudo pacman -Sy';
+                upgradeCommand = 'sudo pacman -Su --noconfirm';
+                this.loggingService.log('📦 Using Pacman package manager', 'INFO', 'actions');
+              } catch {
+                try {
+                  // Check for zypper (openSUSE)
+                  await execAsync('which zypper');
+                  updateCommand = 'sudo zypper refresh';
+                  upgradeCommand = 'sudo zypper update -y';
+                  this.loggingService.log('📦 Using Zypper package manager', 'INFO', 'actions');
+                } catch {
+                  this.loggingService.log(
+                    '⚠️ No supported package manager found, skipping system updates',
+                    'WARN',
+                    'actions',
+                  );
+                  return;
+                }
+              }
+            }
+          }
+        }
+
+        if (updateCommand && upgradeCommand) {
+          // Run update command
+          this.loggingService.log(`🔄 Running: ${updateCommand}`, 'INFO', 'actions');
+          try {
+            await execAsync(updateCommand, { timeout: 300000 }); // 5 minute timeout
+            this.loggingService.log('✅ Package index updated successfully', 'INFO', 'actions');
+          } catch (updateError) {
+            this.loggingService.log(
+              `⚠️ Package update command failed (continuing anyway): ${updateError instanceof Error ? updateError.message : String(updateError)}`,
+              'WARN',
+              'actions',
+            );
+          }
+
+          // Run upgrade command
+          this.loggingService.log(`⬆️ Running: ${upgradeCommand}`, 'INFO', 'actions');
+          try {
+            await execAsync(upgradeCommand, { timeout: 600000 }); // 10 minute timeout
+            this.loggingService.log('✅ System packages upgraded successfully', 'INFO', 'actions');
+          } catch (upgradeError) {
+            this.loggingService.log(
+              `⚠️ Package upgrade command failed: ${upgradeError instanceof Error ? upgradeError.message : String(upgradeError)}`,
+              'WARN',
+              'actions',
+            );
+            // Don't throw here - continue with software update even if system update fails
+          }
+        }
+      } else {
+        this.loggingService.log(
+          '⚠️ Unknown OS type, skipping system package updates',
+          'WARN',
+          'actions',
+        );
+      }
+    } catch (error) {
+      this.loggingService.log(
+        `❌ System package update failed: ${error instanceof Error ? error.message : String(error)}`,
+        'ERROR',
+        'actions',
+      );
+      // Don't throw - continue with software update even if system update fails
+      this.loggingService.log(
+        '🔄 Continuing with RefurbMiner update despite system update failure...',
+        'INFO',
+        'actions',
+      );
+    }
+  }
+
   async updateSoftware(): Promise<void> {
     this.loggingService.log(
       '⬆️ Executing update_software action',
@@ -329,6 +465,21 @@ export class ActionsService implements OnModuleInit {
     );
 
     try {
+      // STEP 1: Run system package updates as pre-steps
+      this.loggingService.log(
+        '🔄 Running system package updates before software update...',
+        'INFO',
+        'actions',
+      );
+      await this.runSystemPackageUpdates();
+
+      // STEP 2: Proceed with RefurbMiner software update
+      this.loggingService.log(
+        '📦 System packages updated, proceeding with RefurbMiner update...',
+        'INFO',
+        'actions',
+      );
+
       // Get the home directory properly
       const homeDir =
         process.env.HOME ||

@@ -21,6 +21,7 @@ export class MinerManagerService
   private configSyncInterval?: NodeJS.Timeout; // Config sync includes schedule data
   private scheduleCheckInterval?: NodeJS.Timeout; // Dedicated schedule checking
   private crashMonitorInterval?: NodeJS.Timeout;
+  private lastScheduleCheck: Date | null = null; // Track last schedule check to optimize frequency
   private crashCount = 0;
   private readonly MAX_CRASHES = 3;
   private lastCrashTime?: Date;
@@ -107,7 +108,7 @@ export class MinerManagerService
     }
   }
   private initializeMonitoring(): void {
-    // Set up polling interval for flightsheet updates - check every minute for faster response to user changes
+    // Set up polling interval for flightsheet updates - check every minute for real-time updates
     this.pollingInterval = setInterval(async () => {
       this.loggingService.log(
         '🔄 Checking for flightsheet updates...',
@@ -123,9 +124,9 @@ export class MinerManagerService
         await this.logMinerError('Flightsheet changed, restarting miner');
         void this.restartMiner();
       }
-    }, 60000); // Every minute for faster response to user changes
+    }, 60000); // Every 1 minute - flightsheet must be checked every minute per requirements
 
-    // Set up config sync interval every 5 minutes - includes schedule checking
+    // Set up config sync interval every minute - includes schedule checking
     this.configSyncInterval = setInterval(async () => {
       this.loggingService.log(
         '🔄 Syncing config from backend API...',
@@ -146,17 +147,17 @@ export class MinerManagerService
           'miner-manager',
         );
       }
-    }, 300000); // Every 5 minutes
+    }, 60000); // Every 1 minute - config must be synced every minute per requirements
 
     // Set up crash monitoring
     this.crashMonitorInterval = setInterval(() => {
       void this.checkMinerHealth();
     }, 30000);
 
-    // Set up dedicated schedule checking - more frequent than config sync for proper enforcement
+    // Set up dedicated schedule checking - check every minute for responsive schedule enforcement
     this.scheduleCheckInterval = setInterval(() => {
       this.checkSchedules();
-    }, 60000); // Every minute for responsive schedule enforcement
+    }, 60000); // Every 1 minute - schedules must be checked every minute per requirements
 
     // Run an initial schedule check and dump status
     // DO NOT sync with API here - this causes race condition before registration is complete
@@ -166,7 +167,7 @@ export class MinerManagerService
 
     // Log configuration for monitoring intervals
     this.loggingService.log(
-      '📋 Monitoring configured: Flightsheet check every minute, config sync every 5 minutes, schedule check every minute',
+      '📋 Monitoring configured: Flightsheet check every 1 minute, config sync every 1 minute, schedule check every 1 minute',
       'INFO',
       'miner-manager',
     );
@@ -760,6 +761,22 @@ export class MinerManagerService
   }
 
   private checkSchedules() {
+    // Optimize schedule checking by caching config and only checking when necessary
+    const now = new Date();
+    const currentTime = now.toTimeString().split(' ')[0].substring(0, 5);
+    
+    // Only check schedules if we haven't checked recently (unless it's a schedule boundary time)
+    if (this.lastScheduleCheck) {
+      const timeSinceLastCheck = now.getTime() - this.lastScheduleCheck.getTime();
+      const isScheduleBoundary = currentTime.endsWith(':00') || currentTime.endsWith(':30'); // Check on hour/half-hour boundaries
+      
+      if (timeSinceLastCheck < 60000 && !isScheduleBoundary) { // Less than 1 minute and not a boundary
+        return; // Skip this check to reduce config reads
+      }
+    }
+    
+    this.lastScheduleCheck = now;
+    
     const config = this.configService.getConfig();
     if (!config) {
       this.loggingService.log(
@@ -770,15 +787,13 @@ export class MinerManagerService
       return;
     }
 
-    const now = new Date();
     const currentDay = now
       .toLocaleString('en-US', { weekday: 'long' })
       .toLowerCase();
-    const currentTime = now.toTimeString().split(' ')[0].substring(0, 5);
 
-    // Check for multiple sessions and log warning
+    // Check for multiple sessions and log warning (only every 5 minutes to reduce noise)
     const sessionCount = this.getMinerSessionCount();
-    if (sessionCount > 1) {
+    if (sessionCount > 1 && currentTime.endsWith(':00')) { // Only log on hour boundaries
       this.loggingService.log(
         `⚠️ Multiple miner sessions detected (${sessionCount}). This may indicate session cleanup issues.`,
         'WARN',
@@ -786,11 +801,14 @@ export class MinerManagerService
       );
     }
 
-    this.loggingService.log(
-      `🕒 Checking schedules at ${currentTime} on ${currentDay} (${sessionCount} sessions)`,
-      'DEBUG',
-      'miner-manager',
-    );
+    // Only log detailed schedule checks in DEBUG and on boundary times to reduce log noise
+    if (currentTime.endsWith(':00') || currentTime.endsWith(':30')) {
+      this.loggingService.log(
+        `🕒 Checking schedules at ${currentTime} on ${currentDay} (${sessionCount} sessions)`,
+        'DEBUG',
+        'miner-manager',
+      );
+    }
 
     // Check scheduled mining periods
     if (config.schedules?.scheduledMining?.enabled) {

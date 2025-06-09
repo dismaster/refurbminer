@@ -73,50 +73,52 @@ export class BootstrapService implements OnModuleInit {
 
     // Now that registration is complete, trigger config sync to get schedules and other config data
     this.loggingService.log(
-      'Registration complete. Triggering config sync to fetch schedules and configuration...',
+      'Registration complete. Triggering optimized startup sequence...',
       'INFO',
       'bootstrap',
     );
     
     try {
+      // Step 1: Trigger config sync to get schedules and configuration
       await this.configService.triggerConfigSyncAfterRegistration();
       this.loggingService.log(
         '✅ Config sync triggered successfully after registration',
         'INFO',
         'bootstrap',
       );
+
+      // Step 2: Trigger initial flightsheet fetch and miner startup
+      this.loggingService.log(
+        'Triggering initial flightsheet fetch after successful registration...',
+        'INFO',
+        'bootstrap',
+      );
+      await this.minerManagerService.triggerInitialFlightsheetFetchAndStart();
+
+      // Step 3: Perform system checks and optimizations
+      this.checkCPUCompatibility();
+      await this.verifyDependencies();
+      this.ensureExecutables();
+
+      // Step 4: Check if we're on Termux to run ADB optimizations and cleanup
+      const osType = this.deviceMonitoringService.getOS();
+      if (osType === 'termux') {
+        this.cleanupScreenSessions();
+        await this.setupAdbOptimizations();
+      }
+
+      this.loggingService.log(
+        '🎉 Optimized bootstrap process completed successfully!',
+        'INFO',
+        'bootstrap',
+      );
     } catch (error) {
       this.loggingService.log(
-        `⚠️ Failed to trigger config sync after registration: ${error instanceof Error ? error.message : String(error)}`,
+        `⚠️ Error during startup sequence: ${error instanceof Error ? error.message : String(error)}`,
         'WARN',
         'bootstrap',
       );
     }
-
-    // Trigger initial flightsheet fetch now that registration is complete
-    this.loggingService.log(
-      'Triggering initial flightsheet fetch after successful registration...',
-      'INFO',
-      'bootstrap',
-    );
-    await this.minerManagerService.triggerInitialFlightsheetFetchAndStart();
-
-    this.checkCPUCompatibility();
-    await this.verifyDependencies();
-    this.ensureExecutables();
-
-    // Check if we're on Termux to run ADB optimizations
-    const osType = this.deviceMonitoringService.getOS();
-    if (osType === 'termux') {
-      this.cleanupScreenSessions();
-      await this.setupAdbOptimizations();
-    }
-
-    this.loggingService.log(
-      'Bootstrap process completed!',
-      'INFO',
-      'bootstrap',
-    );
   }
 
   /** ✅ Ensure local configuration file exists */
@@ -342,8 +344,8 @@ export class BootstrapService implements OnModuleInit {
     packageMap: Record<string, string[]>,
   ) {
     const sudoPrefix = hasSudo ? 'sudo ' : '';
-    // Extended timeout for compilation packages and slow networks/systems
-    const timeoutMs = osType === 'termux' ? 120000 : 60000; // 2 minutes for Termux, 1 minutes for others
+    // Increased timeout for slow networks/systems, especially Termux
+    const timeoutMs = osType === 'termux' ? 120000 : 60000; // 2 minutes for Termux, 1 minute for others
 
     // Setup package repositories first
     await this.setupPackageRepositories(packageManager, sudoPrefix, osType);
