@@ -983,16 +983,25 @@ export class BootstrapService implements OnModuleInit {
         typeof response.minerId === 'string' &&
         response.minerId.length > 0
       ) {
-        // Use the API's minerId and rigId
-        config.minerId = response.minerId;
-        config.rigId = response.rigId || '';
-        // Save the updated config using ConfigService to ensure cache is updated
-        this.configService.saveConfig(config);
-        this.loggingService.log(
-          `Registered minerId ${response.minerId} saved to config`,
-          'INFO',
-          'bootstrap'
-        );
+        // Get the full config from ConfigService and update it
+        const fullConfig = this.configService.getConfig();
+        if (fullConfig) {
+          fullConfig.minerId = response.minerId;
+          fullConfig.rigId = response.rigId || '';
+          // Save the updated config using ConfigService to ensure cache is updated
+          this.configService.saveConfig(fullConfig);
+          this.loggingService.log(
+            `Registered minerId ${response.minerId} saved to config`,
+            'INFO',
+            'bootstrap',
+          );
+        } else {
+          this.loggingService.log(
+            'Could not get full config to save minerId',
+            'ERROR',
+            'bootstrap',
+          );
+        }
         this.loggingService.log(
           `Miner registered with ID: ${response.minerId}`,
           'INFO',
