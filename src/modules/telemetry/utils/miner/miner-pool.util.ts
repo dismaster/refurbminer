@@ -37,9 +37,7 @@ export class MinerPoolUtil {
         return this.getDefaultPoolInfo();
       }
 
-      const parsed = this.parseCcminerOutput(poolRaw);
-
-      return {
+      const parsed = this.parseCcminerOutput(poolRaw);      return {
         name: parsed.POOL || 'unknown',
         url: parsed.URL || 'unknown',
         user: parsed.USER || 'unknown',
@@ -47,7 +45,9 @@ export class MinerPoolUtil {
         rejectedShares: parseInt(parsed.REJ) || 0,
         staleShares: parseInt(parsed.STALE) || 0, 
         ping: parseInt(parsed.PING) || 0,
-        uptime: parseInt(parsed.UPTIME) || 0
+        uptime: parseInt(parsed.UPTIME) || 0,
+        // Note: difficulty moved to minerSoftware section in telemetry service
+        difficulty: parseFloat(parsed.DIFF) || 0  // Keep for now as telemetry service still reads it
       };
     } catch (error) {
       // Instead of logging the error, handle it silently
@@ -55,8 +55,7 @@ export class MinerPoolUtil {
       if (process.env.DEBUG === 'true') {
         console.debug('CCMiner API not responsive:', error.message);
       }
-      
-      // Return default pool info with zeros for statistics
+        // Return default pool info with zeros for statistics
       return {
         name: 'RefurbMiner Verus Pool',  // Use default pool name
         url: 'stratum+tcp://pool.refurbminer.de:3956',  // Use default URL
@@ -65,7 +64,8 @@ export class MinerPoolUtil {
         rejectedShares: 0,
         staleShares: 0,
         ping: 0,
-        uptime: 0
+        uptime: 0,
+        difficulty: 0
       };
     }
   }  
@@ -80,8 +80,7 @@ export class MinerPoolUtil {
       });
       if (!response.ok) return this.getDefaultPoolInfo();
 
-      const json = await response.json();
-      return {
+      const json = await response.json();      return {
         name: json.connection?.pool || 'unknown',
         url: json.connection?.pool || 'unknown',
         user: 'unknown',
@@ -89,7 +88,8 @@ export class MinerPoolUtil {
         rejectedShares: parseInt(json.connection?.rejected || '0'),
         staleShares: 0,
         ping: parseInt(json.connection?.ping || '0'),
-        uptime: parseInt(json.connection?.uptime || '0')
+        uptime: parseInt(json.connection?.uptime || '0'),
+        difficulty: parseFloat(json.job?.diff || '0') || 0  // XMRig difficulty from job info
       };
     } catch {
       return this.getDefaultPoolInfo();
@@ -117,8 +117,7 @@ private static parseCcminerOutput(output: string): any {
   }
 }
 
-  /** ✅ Default pool info fallback */
-  private static getDefaultPoolInfo(): any {
+  /** ✅ Default pool info fallback */  private static getDefaultPoolInfo(): any {
     return {
       name: 'unknown',
       url: 'unknown',
@@ -127,7 +126,8 @@ private static parseCcminerOutput(output: string): any {
       rejectedShares: 0,
       staleShares: 0,
       ping: 0,
-      uptime: 0
+      uptime: 0,
+      difficulty: 0
     };
   }
 }

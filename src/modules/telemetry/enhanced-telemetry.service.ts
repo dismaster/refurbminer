@@ -227,26 +227,25 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
       );
         // Create API telemetry object
       const apiTelemetry = {
-        status: 'active', // App is running, so always 'active'
+        status: 'active',
         minerSoftware: {
           name: minerSummary.name,
           version: minerSummary.version,
           algorithm: minerSummary.algorithm,
-          // Reset hashrate to 0 when miner is not running
           hashrate: minerRunning ? minerSummary.hashrate : 0,
-          // Reset share counts when miner is not running
           acceptedShares: minerRunning ? minerSummary.acceptedShares : 0,
           rejectedShares: minerRunning ? minerSummary.rejectedShares : 0,
           uptime: minerRunning ? minerSummary.uptime : 0,
           solvedBlocks: minerRunning ? minerSummary.solvedBlocks : 0,
-          // Use more detailed status for mining
+          difficulty: minerRunning ? poolStats.difficulty : 0,
           miningStatus: isManuallyStoppedByUser 
             ? 'manually_stopped' 
             : (minerRunning ? 'active' : 'stopped'),
         },
         pool: {
-          ...poolStats,
-          // Reset pool statistics when miner is not running
+          name: poolStats.name,
+          url: poolStats.url,
+          user: poolStats.user,
           acceptedShares: minerRunning ? poolStats.acceptedShares : 0,
           rejectedShares: minerRunning ? poolStats.rejectedShares : 0,
           staleShares: minerRunning ? poolStats.staleShares : 0,
