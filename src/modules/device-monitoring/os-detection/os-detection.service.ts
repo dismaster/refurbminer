@@ -87,25 +87,52 @@ export class OsDetectionService {
     }
 
     try {
+      if (this.detectOS() === 'termux') {
+        // Prefer Android property for brand
+        const suspicious = /superuser|rooted|no\s*are/i;
+        let brand = '';
+        try {
+          brand = execSync('getprop ro.product.brand', { encoding: 'utf8' }).trim();
+        } catch {}
+        if (!brand && this.isSuAvailable()) {
+          try {
+            brand = execSync('su -c "getprop ro.product.brand"', { encoding: 'utf8' }).trim();
+          } catch {}
+        }
+        if (brand && !suspicious.test(brand)) {
+          this.cachedHardwareBrand = brand;
+          return this.cachedHardwareBrand;
+        }
+        // Fallback to manufacturer
+        let manufacturer = '';
+        try {
+          manufacturer = execSync('getprop ro.product.manufacturer', { encoding: 'utf8' }).trim();
+        } catch {}
+        if (!manufacturer && this.isSuAvailable()) {
+          try {
+            manufacturer = execSync('su -c "getprop ro.product.manufacturer"', { encoding: 'utf8' }).trim();
+          } catch {}
+        }
+        if (manufacturer && !suspicious.test(manufacturer)) {
+          this.cachedHardwareBrand = manufacturer;
+          return this.cachedHardwareBrand;
+        }
+        this.cachedHardwareBrand = 'android';
+        return this.cachedHardwareBrand;
+      }
       if (fs.existsSync('/sys/firmware/devicetree/base/model')) {
         try {
-          // Try with sudo first for permission issues
           this.cachedHardwareBrand = execSync(
             "sudo cat /sys/firmware/devicetree/base/model | awk '{print $1}'",
             { encoding: 'utf8' },
-          )
-            .trim()
-            .toUpperCase();
+          ).trim().toUpperCase();
           return this.cachedHardwareBrand;
         } catch (sudoError) {
-          // Fallback to normal access
           try {
             this.cachedHardwareBrand = execSync(
               "cat /sys/firmware/devicetree/base/model | awk '{print $1}'",
               { encoding: 'utf8' },
-            )
-              .trim()
-              .toUpperCase();
+            ).trim().toUpperCase();
             return this.cachedHardwareBrand;
           } catch (normalError) {
             this.loggingService.log(
@@ -116,43 +143,6 @@ export class OsDetectionService {
           }
         }
       }
-
-      if (this.detectOS() === 'termux') {
-        try {
-          // First try getprop without su (standard Android access)
-          const brand = execSync('getprop ro.product.brand', {
-            encoding: 'utf8',
-          }).trim();
-          if (brand) {
-            this.cachedHardwareBrand = brand.toLowerCase(); // Keep consistent casing with hardware-info util
-            return this.cachedHardwareBrand;
-          }
-        } catch (e) {
-          // Try with su if available
-          try {
-            if (this.isSuAvailable()) {
-              const brand = execSync('su -c "getprop ro.product.brand"', {
-                encoding: 'utf8',
-              }).trim();
-              if (brand) {
-                this.cachedHardwareBrand = brand.toLowerCase();
-                return this.cachedHardwareBrand;
-              }
-            }
-          } catch (suError) {
-            this.loggingService.log(
-              `Su brand lookup failed: ${suError.message}`,
-              'DEBUG',
-              'os-detection',
-            );
-          }
-        }
-
-        // Fallbacks as in hardware-info.util.ts
-        this.cachedHardwareBrand = 'android';
-        return this.cachedHardwareBrand;
-      }
-
       this.cachedHardwareBrand = execSync('lsb_release -si', {
         encoding: 'utf8',
       }).trim();
@@ -173,27 +163,74 @@ export class OsDetectionService {
     if (this.cachedHardwareModel !== null) {
       return this.cachedHardwareModel;
     }
-
     try {
+      if (this.detectOS() === 'termux') {
+        // Prefer Android property for model
+        const suspicious = /superuser|rooted|no\s*are/i;
+        let model = '';
+        try {
+          model = execSync('getprop ro.product.model', { encoding: 'utf8' }).trim();
+        } catch {}
+        if (!model && this.isSuAvailable()) {
+          try {
+            model = execSync('su -c "getprop ro.product.model"', { encoding: 'utf8' }).trim();
+          } catch {}
+        }
+        if (model && !suspicious.test(model)) {
+          this.cachedHardwareModel = model;
+          return this.cachedHardwareModel;
+        }
+        // Fallback to device
+        let device = '';
+        try {
+          device = execSync('getprop ro.product.device', { encoding: 'utf8' }).trim();
+        } catch {}
+        if (!device && this.isSuAvailable()) {
+          try {
+            device = execSync('su -c "getprop ro.product.device"', { encoding: 'utf8' }).trim();
+          } catch {}
+        }
+        if (device && !suspicious.test(device)) {
+          this.cachedHardwareModel = device;
+          return this.cachedHardwareModel;
+        }
+        // Fallback to product
+        let product = '';
+        try {
+          product = execSync('getprop ro.product.name', { encoding: 'utf8' }).trim();
+        } catch {}
+        if (!product && this.isSuAvailable()) {
+          try {
+            product = execSync('su -c "getprop ro.product.name"', { encoding: 'utf8' }).trim();
+          } catch {}
+        }
+        if (product && !suspicious.test(product)) {
+          this.cachedHardwareModel = product;
+          return this.cachedHardwareModel;
+        }
+        // Fallback to arch
+        try {
+          const arch = execSync('uname -m', { encoding: 'utf8' }).trim();
+          this.cachedHardwareModel = arch || os.arch();
+          return this.cachedHardwareModel;
+        } catch {
+          this.cachedHardwareModel = os.arch();
+          return this.cachedHardwareModel;
+        }
+      }
       if (fs.existsSync('/sys/firmware/devicetree/base/model')) {
         try {
-          // Try with sudo first for permission issues
           this.cachedHardwareModel = execSync(
             "sudo cat /sys/firmware/devicetree/base/model | awk '{print $2, $3}'",
             { encoding: 'utf8' },
-          )
-            .trim()
-            .toUpperCase();
+          ).trim().toUpperCase();
           return this.cachedHardwareModel;
         } catch (sudoError) {
-          // Fallback to normal access
           try {
             this.cachedHardwareModel = execSync(
               "cat /sys/firmware/devicetree/base/model | awk '{print $2, $3}'",
               { encoding: 'utf8' },
-            )
-              .trim()
-              .toUpperCase();
+            ).trim().toUpperCase();
             return this.cachedHardwareModel;
           } catch (normalError) {
             this.loggingService.log(
@@ -204,49 +241,6 @@ export class OsDetectionService {
           }
         }
       }
-
-      if (this.detectOS() === 'termux') {
-        try {
-          // First try standard Android property
-          const model = execSync('getprop ro.product.model', {
-            encoding: 'utf8',
-          }).trim();
-          if (model) {
-            this.cachedHardwareModel = model; // Keep original casing
-            return this.cachedHardwareModel;
-          }
-        } catch {
-          // Try with su if available
-          try {
-            if (this.isSuAvailable()) {
-              const model = execSync('su -c "getprop ro.product.model"', {
-                encoding: 'utf8',
-              }).trim();
-              if (model) {
-                this.cachedHardwareModel = model;
-                return this.cachedHardwareModel;
-              }
-            }
-          } catch (suError) {
-            this.loggingService.log(
-              `Su model lookup failed: ${suError.message}`,
-              'DEBUG',
-              'os-detection',
-            );
-          }
-        }
-
-        // If all else fails, return the CPU architecture
-        try {
-          const arch = execSync('uname -m', { encoding: 'utf8' }).trim();
-          this.cachedHardwareModel = arch || os.arch();
-          return this.cachedHardwareModel;
-        } catch {
-          this.cachedHardwareModel = os.arch();
-          return this.cachedHardwareModel;
-        }
-      }
-
       this.cachedHardwareModel = os.arch().toUpperCase();
       return this.cachedHardwareModel;
     } catch (error) {
