@@ -1223,6 +1223,8 @@ export class BootstrapService implements OnModuleInit {
         { cmd: 'adb shell dumpsys deviceidle whitelist +com.termux.boot', desc: 'Termux boot whitelist' },
         { cmd: 'adb shell dumpsys deviceidle whitelist +com.termux', desc: 'Termux app whitelist' },
         { cmd: 'adb shell dumpsys deviceidle whitelist +com.termux.api', desc: 'Termux API whitelist' },
+        { cmd: 'adb shell settings put global system_capabilities 100', desc: 'System capabilities optimization' },
+        { cmd: 'adb shell settings put global sem_enhanced_cpu_responsiveness 1', desc: 'Enhanced CPU responsiveness' },
         { cmd: 'adb shell settings put global wifi_sleep_policy 2', desc: 'WiFi sleep optimization' },
       ];
 
