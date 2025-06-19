@@ -341,40 +341,60 @@ export class HardwareInfoUtil {
   /** ✅ Termux: Robust CPU temperature detection (scan all thermal zones for CPU, avoid battery) */
   private static getTermuxCpuTemperature(): number {
     try {
-      // Try vcgencmd with root first
+      // Try vcgencmd with root first (for some rooted devices)
       if (this.isSuAvailable('termux') && fs.existsSync(this.VCGENCMD_PATH)) {
-        execSync(`chmod +x ${this.VCGENCMD_PATH}`);
-        const tempOutput = execSync(
-          `su -c "${this.VCGENCMD_PATH} measure_temp"`,
-          { encoding: 'utf8' },
-        );
-        const match = tempOutput.match(/temp=([\d.]+)/);
-        if (match) return parseFloat(match[1]);
+        try {
+          execSync(`chmod +x ${this.VCGENCMD_PATH}`);
+          const tempOutput = execSync(
+            `su -c "${this.VCGENCMD_PATH} measure_temp"`,
+            { encoding: 'utf8' },
+          );
+          const match = tempOutput.match(/temp=([\d.]+)/);
+          if (match) return parseFloat(match[1]);
+        } catch {
+          // Ignore and continue
+        }
       }
 
-      // Scan all thermal zones for CPU-related types
-      const thermalBase = '/sys/class/thermal';
-      if (fs.existsSync(thermalBase)) {
-        const zones = fs.readdirSync(thermalBase).filter((z) => z.startsWith('thermal_zone'));
+      // Scan all thermal zones for plausible CPU temps
+      const basePath = '/sys/class/thermal';
+      if (fs.existsSync(basePath)) {
+        const zones = fs.readdirSync(basePath).filter((z) => z.startsWith('thermal_zone'));
+        let cpuTemps: number[] = [];
+
         for (const zone of zones) {
-          const typePath = path.join(thermalBase, zone, 'type');
-          const tempPath = path.join(thermalBase, zone, 'temp');
+          const typePath = path.join(basePath, zone, 'type');
+          const tempPath = path.join(basePath, zone, 'temp');
           if (fs.existsSync(typePath) && fs.existsSync(tempPath)) {
             const type = fs.readFileSync(typePath, 'utf8').trim().toLowerCase();
-            // Only use CPU-related types, skip battery, gpu, etc.
+            // Skip non-CPU sensors
             if (
-              /cpu|soc|big|little|a53|a55|a72|a73|a75|a76|a78|prime|gold|silver/.test(
-                type,
-              ) &&
-              !/batt|battery|gpu|thermal|cooling/.test(type)
-            ) {
-              const tempRaw = fs.readFileSync(tempPath, 'utf8').trim();
-              const temp = parseInt(tempRaw) / 1000;
-              if (!isNaN(temp) && temp > 0 && temp < 150) {
-                return temp;
-              }
+              type.includes('bms') ||
+              type.includes('battery') ||
+              type.includes('chg') ||
+              type.includes('case') ||
+              type.includes('pmic') ||
+              type.includes('xo_therm') ||
+              type.includes('gpu')
+            ) continue;
+
+            const tempRaw = fs.readFileSync(tempPath, 'utf8').trim();
+            let temp = parseInt(tempRaw);
+
+            if (type.includes('tsens')) {
+              temp = temp / 10; // deci-degrees for tsens sensors (Xiaomi/Qualcomm)
+            } else if (temp > 1000) {
+              temp = temp / 1000; // milli-degrees for Samsung/Exynos
+            }
+
+            if (!isNaN(temp) && temp > 0 && temp < 150) {
+              cpuTemps.push(temp);
             }
           }
+        }
+
+        if (cpuTemps.length > 0) {
+          return Math.max(...cpuTemps);
         }
       }
 
