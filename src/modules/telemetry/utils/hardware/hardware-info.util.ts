@@ -338,7 +338,7 @@ export class HardwareInfoUtil {
     }
   }
 
-  /** ✅ Termux: Try to Use vcgencmd (if root), else fallback */
+  /** ✅ Termux: Robust CPU temperature detection (scan all thermal zones for CPU, avoid battery) */
   private static getTermuxCpuTemperature(): number {
     try {
       // Try vcgencmd with root first
@@ -352,20 +352,52 @@ export class HardwareInfoUtil {
         if (match) return parseFloat(match[1]);
       }
 
-      // Try thermal zone with root
-      if (this.isSuAvailable('termux')) {
-        const tempRaw = execSync(
-          'su -c "cat /sys/class/thermal/thermal_zone0/temp"',
-          { encoding: 'utf8' },
-        ).trim();
-        const temp = parseInt(tempRaw) / 1000;
-        if (!isNaN(temp)) return temp;
+      // Scan all thermal zones for CPU-related types
+      const thermalBase = '/sys/class/thermal';
+      if (fs.existsSync(thermalBase)) {
+        const zones = fs.readdirSync(thermalBase).filter((z) => z.startsWith('thermal_zone'));
+        for (const zone of zones) {
+          const typePath = path.join(thermalBase, zone, 'type');
+          const tempPath = path.join(thermalBase, zone, 'temp');
+          if (fs.existsSync(typePath) && fs.existsSync(tempPath)) {
+            const type = fs.readFileSync(typePath, 'utf8').trim().toLowerCase();
+            // Only use CPU-related types, skip battery, gpu, etc.
+            if (
+              /cpu|soc|big|little|a53|a55|a72|a73|a75|a76|a78|prime|gold|silver/.test(
+                type,
+              ) &&
+              !/batt|battery|gpu|thermal|cooling/.test(type)
+            ) {
+              const tempRaw = fs.readFileSync(tempPath, 'utf8').trim();
+              const temp = parseInt(tempRaw) / 1000;
+              if (!isNaN(temp) && temp > 0 && temp < 150) {
+                return temp;
+              }
+            }
+          }
+        }
       }
 
-      // Fallback to non-root thermal zone
+      // Try thermal zone 0 with root (legacy fallback)
+      if (this.isSuAvailable('termux')) {
+        try {
+          const tempRaw = execSync(
+            'su -c "cat /sys/class/thermal/thermal_zone0/temp"',
+            { encoding: 'utf8' },
+          ).trim();
+          const temp = parseInt(tempRaw) / 1000;
+          if (!isNaN(temp) && temp > 0 && temp < 150) return temp;
+        } catch {
+          // Could not read with su, continue
+        }
+      }
+
+      // Fallback to Linux method
       return this.getLinuxCpuTemperature();
     } catch (error) {
-      console.error(`❌ Failed to get Termux temperature: ${error.message}`);
+      console.error(
+        `❌ Failed to get Termux temperature: ${error instanceof Error ? error.message : String(error)}`,
+      );
       return 0;
     }
   }
@@ -392,7 +424,7 @@ export class HardwareInfoUtil {
           }
         } catch (thermalError) {
           console.log(
-            `⚠️ [DEBUG] Thermal zone 0 failed: ${thermalError.message}`,
+            `⚠️ [DEBUG] Thermal zone 0 failed: ${thermalError instanceof Error ? thermalError.message : String(thermalError)}`,
           );
         }
       }
@@ -540,7 +572,7 @@ export class HardwareInfoUtil {
         console.log('⚠️ [DEBUG] No valid temperature found in sensors output');
       } catch (sensorsError) {
         console.log(
-          `⚠️ [DEBUG] Sensors command failed: ${sensorsError.message}`,
+          `⚠️ [DEBUG] Sensors command failed: ${sensorsError instanceof Error ? sensorsError.message : String(sensorsError)}`,
         );
       }
 
@@ -595,14 +627,14 @@ export class HardwareInfoUtil {
             }
           } catch (hwmonError) {
             console.log(
-              `⚠️ [DEBUG] Hwmon error for ${hwmonDir}: ${hwmonError.message}`,
+              `⚠️ [DEBUG] Hwmon error for ${hwmonDir}: ${hwmonError instanceof Error ? hwmonError.message : String(hwmonError)}`,
             );
             continue;
           }
         }
       } catch (hwmonListError) {
         console.log(
-          `⚠️ [DEBUG] Failed to list hwmon directories: ${hwmonListError.message}`,
+          `⚠️ [DEBUG] Failed to list hwmon directories: ${hwmonListError instanceof Error ? hwmonListError.message : String(hwmonListError)}`,
         );
       }
 
@@ -624,7 +656,9 @@ export class HardwareInfoUtil {
           }
         }
       } catch (acpiError) {
-        console.log(`⚠️ [DEBUG] ACPI failed: ${acpiError.message}`);
+        console.log(
+          `⚠️ [DEBUG] ACPI failed: ${acpiError instanceof Error ? acpiError.message : String(acpiError)}`,
+        );
       }
 
       // Method 6: Try /proc/acpi/thermal_zone
@@ -658,7 +692,7 @@ export class HardwareInfoUtil {
         }
       } catch (procAcpiError) {
         console.log(
-          `⚠️ [DEBUG] /proc/acpi/thermal_zone failed: ${procAcpiError.message}`,
+          `⚠️ [DEBUG] /proc/acpi/thermal_zone failed: ${procAcpiError instanceof Error ? procAcpiError.message : String(procAcpiError)}`,
         );
       }
 
@@ -688,7 +722,7 @@ export class HardwareInfoUtil {
         }
       } catch (directAmdError) {
         console.log(
-          `⚠️ [DEBUG] Direct AMD reading failed: ${directAmdError.message}`,
+          `⚠️ [DEBUG] Direct AMD reading failed: ${directAmdError instanceof Error ? directAmdError.message : String(directAmdError)}`,
         );
       }
 
@@ -699,7 +733,7 @@ export class HardwareInfoUtil {
       return 0;
     } catch (error) {
       console.error(
-        `❌ [DEBUG] Failed to get Linux temperature: ${error.message}`,
+        `❌ [DEBUG] Failed to get Linux temperature: ${error instanceof Error ? error.message : String(error)}`,
       );
       return 0;
     }
@@ -719,7 +753,7 @@ export class HardwareInfoUtil {
       return devices.length > 0;
     } catch (error) {
       // If adb command fails, it means ADB is not available
-      console.error(`❌ Failed to check ADB status: ${error.message}`);
+      console.error(`❌ Failed to check ADB status: ${error instanceof Error ? error.message : String(error)}`);
       return false;
     }
   }
