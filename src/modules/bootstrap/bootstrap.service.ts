@@ -1466,6 +1466,83 @@ export class BootstrapService implements OnModuleInit {
         );
       }
 
+      // ✅ ADD THIS: Clean up all dead socket files with screen -wipe
+      try {
+        execSync('screen -wipe', { stdio: 'ignore' });
+        this.loggingService.log(
+          'Cleaned up dead screen socket files with screen -wipe',
+          'DEBUG',
+          'bootstrap',
+        );
+      } catch (error) {
+        // screen -wipe can fail if no sockets to clean, that's fine
+        this.loggingService.log(
+          'No dead screen sockets to clean up with screen -wipe',
+          'DEBUG',
+          'bootstrap',
+        );
+      }
+
+      // ✅ ADD THIS: Force remove stubborn socket files directly
+      try {
+        const screenDir = `${process.env.HOME}/.screen`;
+        if (fs.existsSync(screenDir)) {
+          // Get current screen list after wipe to see what's still there
+          const remainingList = execSync('screen -list 2>/dev/null || true', {
+            encoding: 'utf8',
+            stdio: 'pipe',
+          }).trim();
+
+          // Find socket files that correspond to "Remote or dead" sessions
+          const deadSocketsToRemove = remainingList
+            .split('\n')
+            .filter((line) => line.includes('Dead') || line.includes('Remote or dead'))
+            .map((line) => {
+              const match = line.match(/^\s*(\d+\.\S+)/);
+              return match ? match[1] : null;
+            })
+            .filter((sessionId) => sessionId !== null);
+
+          if (deadSocketsToRemove.length > 0) {
+            let removedCount = 0;
+            deadSocketsToRemove.forEach((sessionId) => {
+              const socketPath = `${screenDir}/${sessionId}`;
+              try {
+                if (fs.existsSync(socketPath)) {
+                  fs.unlinkSync(socketPath);
+                  removedCount++;
+                  this.loggingService.log(
+                    `Force removed dead socket: ${sessionId}`,
+                    'DEBUG',
+                    'bootstrap',
+                  );
+                }
+              } catch (removeError) {
+                this.loggingService.log(
+                  `Could not remove socket ${sessionId}: ${removeError instanceof Error ? removeError.message : String(removeError)}`,
+                  'DEBUG',
+                  'bootstrap',
+                );
+              }
+            });
+
+            if (removedCount > 0) {
+              this.loggingService.log(
+                `Force removed ${removedCount} stubborn socket files`,
+                'INFO',
+                'bootstrap',
+              );
+            }
+          }
+        }
+      } catch (forceError) {
+        this.loggingService.log(
+          `Force socket cleanup failed: ${forceError instanceof Error ? forceError.message : String(forceError)}`,
+          'DEBUG',
+          'bootstrap',
+        );
+      }
+
       // Log remaining detached sessions but don't kill them
       const detachedSessions = screenList
         .split('\n')
