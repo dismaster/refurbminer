@@ -27,6 +27,7 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
   private readonly MAX_HISTORY_POINTS = 60;
   // Added backup limits for telemetry
   private readonly MAX_BACKUPS = 5;
+  private readonly appVersion: string;
 
   constructor(
     private readonly loggingService: LoggingService,
@@ -37,6 +38,9 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
     this.telemetryFilePath = path.join(process.cwd(), 'storage', 'telemetry.json');
     this.historyFilePath = path.join(process.cwd(), 'storage', 'hashrate-history.json');
     this.ensureStorageExists();
+    
+    // Load app version from package.json
+    this.appVersion = this.getAppVersion();
   }
 
   async onModuleInit() {
@@ -225,9 +229,10 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
         'battery info retrieval',
         this.loggingService.log.bind(this.loggingService)
       );
-        // Create API telemetry object
+      // Create API telemetry object
       const apiTelemetry = {
         status: 'active',
+        appVersion: this.appVersion,
         minerSoftware: {
           name: minerSummary.name,
           version: minerSummary.version,
@@ -563,5 +568,28 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
       );
       return { mining: { enabled: false, periods: [] }, restarts: [] };
     }
+  }
+
+  private getAppVersion(): string {
+    try {
+      const packageJsonPath = path.join(process.cwd(), 'package.json');
+      if (fs.existsSync(packageJsonPath)) {
+        const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+        return packageJson.version || '0.0.0';
+      }
+    } catch (error) {
+      this.loggingService.log(
+        `⚠️ Failed to read app version: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'WARN',
+        'telemetry'
+      );
+    }
+    return '0.0.0';
+  }
+
+  getAppInfo() {
+    return {
+      version: this.appVersion
+    };
   }
 }

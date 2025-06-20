@@ -14,4 +14,9 @@ export class TelemetryController {
   async getHistory() {
     return this.telemetryService.getHistoricalData();
   }
+
+  @Get('version')
+  getVersion() {
+    return this.telemetryService.getAppInfo();
+  }
 }
