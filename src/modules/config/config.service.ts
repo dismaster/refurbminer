@@ -87,27 +87,15 @@ export class ConfigService implements OnModuleInit {
       fs.mkdirSync(configDir, { recursive: true });
     }
 
-    // Create default config if it doesn't exist
-    if (!fs.existsSync(this.configPath)) {
-      this.saveConfig({
-        minerId: '',
-        rigId: '',
-        name: 'Unnamed Rig',
-        minerSoftware: undefined, // Will be synced from backend API after registration
-        thresholds: {
-          maxCpuTemp: 85,
-          maxBatteryTemp: 45,
-          maxStorageUsage: 90,
-          minHashrate: 0,
-          shareRatio: 0.5,
-        },
-        schedules: {
-          scheduledMining: { enabled: false, periods: [] },
-          scheduledRestarts: [],
-        },
-      });
-    } else {
-      await this.cleanupConfig();
+    // Check if config exists and is valid, restore from backup if needed
+    const configValid = await this.ensureValidConfig();
+    
+    if (!configValid) {
+      this.loggingService.log(
+        'Failed to ensure valid config even after backup restoration attempts',
+        'ERROR',
+        'config',
+      );
     }
 
     // IMPORTANT: Do NOT sync with API during module initialization
@@ -593,5 +581,304 @@ export class ConfigService implements OnModuleInit {
       'DEBUG',
       'config',
     );
+  }
+
+  /**
+   * Ensure config file exists and is valid, restore from backup if necessary
+   */
+  private async ensureValidConfig(): Promise<boolean> {
+    try {
+      // First, check if config file exists
+      if (!fs.existsSync(this.configPath)) {
+        this.loggingService.log(
+          'Config file not found, attempting to restore from backup...',
+          'WARN',
+          'config',
+        );
+        
+        if (await this.restoreFromLatestBackup()) {
+          this.loggingService.log(
+            'Successfully restored config from backup',
+            'INFO',
+            'config',
+          );
+          return true;
+        } else {
+          this.loggingService.log(
+            'No valid backup found, creating default config',
+            'WARN',
+            'config',
+          );
+          return this.createDefaultConfig();
+        }
+      }
+
+      // Config file exists, check if it's valid
+      try {
+        const configContent = fs.readFileSync(this.configPath, 'utf8').trim();
+        
+        // Check if file is empty
+        if (!configContent) {
+          this.loggingService.log(
+            'Config file is empty, attempting to restore from backup...',
+            'WARN',
+            'config',
+          );
+          
+          if (await this.restoreFromLatestBackup()) {
+            this.loggingService.log(
+              'Successfully restored empty config from backup',
+              'INFO',
+              'config',
+            );
+            return true;
+          } else {
+            this.loggingService.log(
+              'No valid backup found for empty config, creating default config',
+              'WARN',
+              'config',
+            );
+            return this.createDefaultConfig();
+          }
+        }
+
+        // Try to parse the config
+        const config = JSON.parse(configContent);
+        
+        // Basic validation - ensure it has the required structure
+        if (!config || typeof config !== 'object') {
+          throw new Error('Config is not a valid object');
+        }
+
+        // Check for critical properties (at minimum we need the structure)
+        if (!config.hasOwnProperty('minerId') || !config.hasOwnProperty('thresholds') || !config.hasOwnProperty('schedules')) {
+          throw new Error('Config missing critical properties');
+        }
+
+        this.loggingService.log(
+          'Existing config file is valid',
+          'DEBUG',
+          'config',
+        );
+        
+        // Clean up the config to ensure consistent structure
+        await this.cleanupConfig();
+        return true;
+
+      } catch (parseError) {
+        this.loggingService.log(
+          `Config file is corrupted: ${parseError instanceof Error ? parseError.message : String(parseError)}`,
+          'WARN',
+          'config',
+        );
+        
+        // Backup the corrupted file
+        const timestamp = Date.now();
+        const corruptedBackupPath = `${this.configPath}.corrupted.${timestamp}.bak`;
+        try {
+          fs.copyFileSync(this.configPath, corruptedBackupPath);
+          this.loggingService.log(
+            `Corrupted config backed up to: ${corruptedBackupPath}`,
+            'INFO',
+            'config',
+          );
+        } catch (backupError) {
+          this.loggingService.log(
+            `Failed to backup corrupted config: ${backupError instanceof Error ? backupError.message : String(backupError)}`,
+            'WARN',
+            'config',
+          );
+        }
+        
+        // Try to restore from backup
+        if (await this.restoreFromLatestBackup()) {
+          this.loggingService.log(
+            'Successfully restored corrupted config from backup',
+            'INFO',
+            'config',
+          );
+          return true;
+        } else {
+          this.loggingService.log(
+            'No valid backup found for corrupted config, creating default config',
+            'WARN',
+            'config',
+          );
+          return this.createDefaultConfig();
+        }
+      }
+
+    } catch (error) {
+      this.loggingService.log(
+        `Failed to ensure valid config: ${error instanceof Error ? error.message : String(error)}`,
+        'ERROR',
+        'config',
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Restore config from the latest valid backup
+   */
+  private async restoreFromLatestBackup(): Promise<boolean> {
+    try {
+      const dirPath = path.dirname(this.configPath);
+      const fileName = path.basename(this.configPath);
+
+      // Get all backup files
+      const files = fs.readdirSync(dirPath);
+      const backupFiles = files
+        .filter((file) => file.startsWith(`${fileName}.`) && file.endsWith('.bak'))
+        .filter((file) => !file.includes('corrupted')) // Exclude corrupted backups
+        .map((file) => ({
+          name: file,
+          path: path.join(dirPath, file),
+          timestamp: parseInt(file.replace(`${fileName}.`, '').replace('.bak', ''), 10) || 0,
+        }))
+        .sort((a, b) => b.timestamp - a.timestamp); // Sort newest first
+
+      this.loggingService.log(
+        `Found ${backupFiles.length} backup files to check`,
+        'DEBUG',
+        'config',
+      );
+
+      // Try each backup file until we find a valid one
+      for (const backupFile of backupFiles) {
+        try {
+          this.loggingService.log(
+            `Attempting to restore from backup: ${backupFile.name}`,
+            'DEBUG',
+            'config',
+          );
+
+          const backupContent = fs.readFileSync(backupFile.path, 'utf8').trim();
+          
+          // Skip empty backups
+          if (!backupContent) {
+            this.loggingService.log(
+              `Backup ${backupFile.name} is empty, trying next...`,
+              'DEBUG',
+              'config',
+            );
+            continue;
+          }
+
+          // Try to parse the backup
+          const backupConfig = JSON.parse(backupContent);
+          
+          // Basic validation
+          if (!backupConfig || typeof backupConfig !== 'object') {
+            this.loggingService.log(
+              `Backup ${backupFile.name} is not a valid object, trying next...`,
+              'DEBUG',
+              'config',
+            );
+            continue;
+          }
+
+          // Check for critical properties
+          if (!backupConfig.hasOwnProperty('minerId') || !backupConfig.hasOwnProperty('thresholds') || !backupConfig.hasOwnProperty('schedules')) {
+            this.loggingService.log(
+              `Backup ${backupFile.name} missing critical properties, trying next...`,
+              'DEBUG',
+              'config',
+            );
+            continue;
+          }
+
+          // This backup looks valid, restore it
+          fs.copyFileSync(backupFile.path, this.configPath);
+          
+          // Clear cache to force reload
+          this.configCache = null;
+          this.lastCacheTime = 0;
+          
+          this.loggingService.log(
+            `Successfully restored config from backup: ${backupFile.name}`,
+            'INFO',
+            'config',
+          );
+          
+          // Verify the restored config
+          const restoredConfig = this.getConfig();
+          if (restoredConfig && restoredConfig.minerId) {
+            this.loggingService.log(
+              `Restored config contains minerId: ${restoredConfig.minerId}`,
+              'INFO',
+              'config',
+            );
+          }
+          
+          return true;
+
+        } catch (backupError) {
+          this.loggingService.log(
+            `Backup ${backupFile.name} is corrupted: ${backupError instanceof Error ? backupError.message : String(backupError)}`,
+            'DEBUG',
+            'config',
+          );
+          continue; // Try next backup
+        }
+      }
+
+      this.loggingService.log(
+        'No valid backups found for restoration',
+        'WARN',
+        'config',
+      );
+      return false;
+
+    } catch (error) {
+      this.loggingService.log(
+        `Failed to restore from backup: ${error instanceof Error ? error.message : String(error)}`,
+        'ERROR',
+        'config',
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Create a default config file
+   */
+  private createDefaultConfig(): boolean {
+    try {
+      const defaultConfig: Config = {
+        minerId: '',
+        rigId: '',
+        name: 'Unnamed Rig',
+        minerSoftware: undefined, // Will be synced from backend API after registration
+        thresholds: {
+          maxCpuTemp: 85,
+          maxBatteryTemp: 45,
+          maxStorageUsage: 90,
+          minHashrate: 0,
+          shareRatio: 0.5,
+        },
+        schedules: {
+          scheduledMining: { enabled: false, periods: [] },
+          scheduledRestarts: [],
+        },
+      };
+
+      this.saveConfig(defaultConfig);
+      
+      this.loggingService.log(
+        'Created default config file',
+        'INFO',
+        'config',
+      );
+      
+      return true;
+    } catch (error) {
+      this.loggingService.log(
+        `Failed to create default config: ${error instanceof Error ? error.message : String(error)}`,
+        'ERROR',
+        'config',
+      );
+      return false;
+    }
   }
 }
