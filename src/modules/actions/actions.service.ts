@@ -587,7 +587,7 @@ echo "=== RefurbMiner Update Started at $(date) ===" > ${logPath}
 
 # Function to log with timestamp
 log_message() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] \$1" | tee -a ${logPath}
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a ${logPath}
 }
 
 log_message "Starting RefurbMiner update process in Termux..."
@@ -595,58 +595,27 @@ log_message "Starting RefurbMiner update process in Termux..."
 # Execute the update script with full bash environment and save output
 log_message "Executing update script: ${updateScriptPath}"
 bash "${updateScriptPath}" >> ${logPath} 2>&1
-UPDATE_EXIT_CODE=\$?
+UPDATE_EXIT_CODE=$?
 
-log_message "Update script completed with exit code: \$UPDATE_EXIT_CODE"
+log_message "Update script completed with exit code: $UPDATE_EXIT_CODE"
 
-# Handle service restart based on update result
-if [ \$UPDATE_EXIT_CODE -eq 0 ]; then
-    log_message "Update completed successfully, restarting RefurbMiner..."
+# The update script handles everything (stopping/starting services, dependencies, notifications)
+# We just need to verify the result and send a final status notification
+if [ $UPDATE_EXIT_CODE -eq 0 ]; then
+    log_message "✅ Update completed successfully!"
     
-    # Stop existing RefurbMiner processes
-    if pgrep -f "node.*refurbminer" > /dev/null; then
-        log_message "Stopping existing RefurbMiner processes..."
-        pkill -f "node.*refurbminer"
-        sleep 3
-    fi
-    
-    # Stop any existing refurbminer screen session
+    # Verify that RefurbMiner is running in screen session
+    sleep 3
     if screen -list 2>/dev/null | grep -q "refurbminer"; then
-        log_message "Stopping existing RefurbMiner screen session..."
-        screen -S refurbminer -X quit 2>/dev/null || true
-        sleep 1
-    fi
-    
-    # Navigate to refurbminer directory and start in screen session
-    if [ -d "${homeDir}/refurbminer" ]; then
-        log_message "Starting RefurbMiner in screen session..."
-        cd "${homeDir}/refurbminer"
-        
-        # Make sure we have the latest dependencies
-        log_message "Installing/updating dependencies..."
-        npm install >> ${logPath} 2>&1
-        
-        # Start in screen session
-        screen -dmS refurbminer npm start
-        
-        # Wait a moment and check if it started
-        sleep 5
-        if screen -list 2>/dev/null | grep -q "refurbminer"; then
-            log_message "RefurbMiner started successfully in screen session 'refurbminer'"
-            
-            # Send success notification
-            termux-notification --title "RefurbMiner Update" --content "Update completed successfully and restarted" || true
-        else
-            log_message "Failed to start RefurbMiner in screen session"
-            termux-notification --title "RefurbMiner Update" --content "Update completed but failed to restart service" || true
-        fi
+        log_message "✅ RefurbMiner is running in screen session 'refurbminer'"
+        termux-notification --title "RefurbMiner Update Complete" --content "Update successful - RefurbMiner is running" || true
     else
-        log_message "RefurbMiner directory not found at ${homeDir}/refurbminer"
-        termux-notification --title "RefurbMiner Update" --content "Update completed but directory not found" || true
+        log_message "⚠️ RefurbMiner screen session not found after update"
+        termux-notification --title "RefurbMiner Update" --content "Update completed but screen session verification failed" || true
     fi
 else
-    log_message "Update failed with exit code \$UPDATE_EXIT_CODE"
-    termux-notification --title "RefurbMiner Update" --content "Update failed with exit code \$UPDATE_EXIT_CODE" || true
+    log_message "❌ Update failed with exit code $UPDATE_EXIT_CODE"
+    termux-notification --title "RefurbMiner Update Failed" --content "Update script failed with exit code $UPDATE_EXIT_CODE" || true
 fi
 
 log_message "=== RefurbMiner Update Process Completed ==="
