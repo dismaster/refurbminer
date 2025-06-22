@@ -14,7 +14,7 @@ export class HardwareInfoUtil {
   );
 
   /** ✅ Get full hardware info */
-  static getDeviceInfo(systemType: string): any {
+  static getDeviceInfo(systemType: string, logger?: (message: string, level: string, category: string) => void): any {
     const totalMemory = MemoryInfoUtil.getTotalMemory();
     const freeMemory = MemoryInfoUtil.getFreeMemory();
     const totalStorage = StorageInfoUtil.getTotalStorage();
@@ -27,7 +27,7 @@ export class HardwareInfoUtil {
       os: this.getOsVersion(),
       cpuCount: this.getCpuCount(),
       cpuModel: this.getCpuThreads(),
-      cpuTemperature: this.getCpuTemperature(systemType),
+      cpuTemperature: this.getCpuTemperature(systemType, logger),
       // Add system uptime
       systemUptime: this.getSystemUptime(systemType),
       // Add raw values
@@ -89,7 +89,7 @@ export class HardwareInfoUtil {
       // If all methods fail, return Node's uptime or 0
       return Math.floor(nodeUptime) || 0;
     } catch (error) {
-      console.error(`❌ Failed to get system uptime: ${error.message}`);
+      console.error(`❌ Failed to get system uptime: ${error instanceof Error ? error.message : String(error)}`);
       // Fallback to Node.js uptime
       return Math.floor(os.uptime()) || 0;
     }
@@ -289,37 +289,33 @@ export class HardwareInfoUtil {
   }
 
   /** ✅ Get CPU Temperature Based on OS */
-  static getCpuTemperature(systemType: string): number {
-    console.log(
-      `🔍 [DEBUG] Getting CPU temperature for system type: ${systemType}`,
-    );
+  static getCpuTemperature(systemType: string, logger?: (message: string, level: string, category: string) => void): number {
+    const log = logger || (() => {}); // No-op if no logger provided
+    
+    log(`Getting CPU temperature for system type: ${systemType}`, 'DEBUG', 'hardware');
     try {
       switch (systemType) {
         case 'raspberry-pi':
-          console.log('🔍 [DEBUG] Using Raspberry Pi temperature method');
-          return this.getVcgencmdTemperature();
+          log('Using Raspberry Pi temperature method', 'DEBUG', 'hardware');
+          return this.getVcgencmdTemperature(log);
         case 'termux':
-          console.log('🔍 [DEBUG] Using Termux temperature method');
-          return this.getTermuxCpuTemperature();
+          log('Using Termux temperature method', 'DEBUG', 'hardware');
+          return this.getTermuxCpuTemperature(log);
         case 'linux':
-          console.log('🔍 [DEBUG] Using Linux temperature method');
-          return this.getLinuxCpuTemperature();
+          log('Using Linux temperature method', 'DEBUG', 'hardware');
+          return this.getLinuxCpuTemperature(log);
         default:
-          console.log(
-            `🔍 [DEBUG] Unknown system type: ${systemType}, returning 0`,
-          );
+          log(`Unknown system type: ${systemType}, returning 0`, 'DEBUG', 'hardware');
           return 0;
       }
     } catch (error) {
-      console.error(
-        `❌ [DEBUG] Failed to get CPU temperature: ${error.message}`,
-      );
+      log(`Failed to get CPU temperature: ${error instanceof Error ? error.message : String(error)}`, 'ERROR', 'hardware');
       return 0;
     }
   }
 
   /** ✅ Raspberry Pi: Get CPU Temp via vcgencmd */
-  private static getVcgencmdTemperature(): number {
+  private static getVcgencmdTemperature(log: (message: string, level: string, category: string) => void): number {
     try {
       if (fs.existsSync(this.VCGENCMD_PATH)) {
         execSync(`chmod +x ${this.VCGENCMD_PATH}`);
@@ -329,24 +325,26 @@ export class HardwareInfoUtil {
         const match = tempOutput.match(/temp=([\d.]+)/);
         if (match) return parseFloat(match[1]);
       }
-      return this.getLinuxCpuTemperature();
+      return this.getLinuxCpuTemperature(log);
     } catch (error) {
-      console.error(
-        `❌ Failed to get Raspberry Pi temperature: ${error.message}`,
+      log(
+        `Failed to get Raspberry Pi temperature: ${error instanceof Error ? error.message : String(error)}`,
+        'ERROR',
+        'hardware',
       );
-      return this.getLinuxCpuTemperature();
+      return this.getLinuxCpuTemperature(log);
     }
   }
 
   /** ✅ Termux: Robust CPU temperature detection (with proper permission handling) */
-  private static getTermuxCpuTemperature(): number {
-    console.log('🔍 [DEBUG] Starting Termux temperature detection...');
+  private static getTermuxCpuTemperature(log: (message: string, level: string, category: string) => void): number {
+    log('Starting Termux temperature detection...', 'DEBUG', 'hardware');
     
     try {
       // Method 1: Try vcgencmd with root first (for some rooted devices)
       if (this.isSuAvailable('termux') && fs.existsSync(this.VCGENCMD_PATH)) {
         try {
-          console.log('🔍 [DEBUG] Trying vcgencmd with root...');
+          log('Trying vcgencmd with root...', 'DEBUG', 'hardware');
           execSync(`chmod +x ${this.VCGENCMD_PATH}`);
           const tempOutput = execSync(
             `su -c "${this.VCGENCMD_PATH} measure_temp"`,
@@ -355,32 +353,46 @@ export class HardwareInfoUtil {
           const match = tempOutput.match(/temp=([\d.]+)/);
           if (match) {
             const temp = parseFloat(match[1]);
-            console.log(`✅ [DEBUG] vcgencmd temperature: ${temp}°C`);
+            log(`vcgencmd temperature: ${temp}°C`, 'DEBUG', 'hardware');
             return temp;
           }
         } catch (vcgencmdError) {
-          console.log(`⚠️ [DEBUG] vcgencmd failed: ${vcgencmdError instanceof Error ? vcgencmdError.message : String(vcgencmdError)}`);
+          log(`vcgencmd failed: ${vcgencmdError instanceof Error ? vcgencmdError.message : String(vcgencmdError)}`, 'WARN', 'hardware');
         }
       }
 
       // Method 2: Try reading thermal zones with root access first
       if (this.isSuAvailable('termux')) {
         try {
-          console.log('🔍 [DEBUG] Trying thermal zones with root access...');
+          log('Trying thermal zones with root access...', 'DEBUG', 'hardware');
           
           // Try to list thermal zones with root
-          const zonesOutput = execSync('su -c "ls /sys/class/thermal/ 2>/dev/null | grep thermal_zone"', { encoding: 'utf8' }).trim();
+          const zonesOutput = execSync(
+            'su -c "ls /sys/class/thermal/ 2>/dev/null | grep thermal_zone"',
+            { encoding: 'utf8' },
+          ).trim();
           if (zonesOutput) {
-            const zones = zonesOutput.split('\n').filter(z => z.startsWith('thermal_zone'));
-            console.log(`🔍 [DEBUG] Found ${zones.length} thermal zones with root: ${zones.join(', ')}`);
+            const zones = zonesOutput
+              .split('\n')
+              .filter((z) => z.startsWith('thermal_zone'));
+            log(
+              `Found ${zones.length} thermal zones with root: ${zones.join(', ')}`,
+              'DEBUG',
+              'hardware',
+            );
             
-            let cpuTemps: number[] = [];
+            const cpuTemps: number[] = [];
             
             for (const zone of zones) {
               try {
                 // Try to read type and temperature with root
-                const typeOutput = execSync(`su -c "cat /sys/class/thermal/${zone}/type 2>/dev/null"`, { encoding: 'utf8' }).trim().toLowerCase();
-                console.log(`🔍 [DEBUG] Zone ${zone} type: ${typeOutput}`);
+                const typeOutput = execSync(
+                  `su -c "cat /sys/class/thermal/${zone}/type 2>/dev/null"`,
+                  { encoding: 'utf8' },
+                )
+                  .trim()
+                  .toLowerCase();
+                log(`Zone ${zone} type: ${typeOutput}`, 'DEBUG', 'hardware');
                 
                 // Skip non-CPU sensors
                 if (
@@ -392,11 +404,18 @@ export class HardwareInfoUtil {
                   typeOutput.includes('xo_therm') ||
                   typeOutput.includes('gpu')
                 ) {
-                  console.log(`🔍 [DEBUG] Skipping non-CPU sensor: ${typeOutput}`);
+                  log(
+                    `Skipping non-CPU sensor: ${typeOutput}`,
+                    'DEBUG',
+                    'hardware',
+                  );
                   continue;
                 }
 
-                const tempRaw = execSync(`su -c "cat /sys/class/thermal/${zone}/temp 2>/dev/null"`, { encoding: 'utf8' }).trim();
+                const tempRaw = execSync(
+                  `su -c "cat /sys/class/thermal/${zone}/temp 2>/dev/null"`,
+                  { encoding: 'utf8' },
+                ).trim();
                 let temp = parseInt(tempRaw);
 
                 if (typeOutput.includes('tsens')) {
@@ -405,38 +424,54 @@ export class HardwareInfoUtil {
                   temp = temp / 1000; // milli-degrees for Samsung/Exynos
                 }
 
-                console.log(`🔍 [DEBUG] Zone ${zone} (${typeOutput}): ${temp}°C`);
+                log(
+                  `Zone ${zone} (${typeOutput}): ${temp}°C`,
+                  'DEBUG',
+                  'hardware',
+                );
                 
                 if (!isNaN(temp) && temp > 0 && temp < 150) {
                   cpuTemps.push(temp);
                 }
               } catch (zoneError) {
-                console.log(`⚠️ [DEBUG] Failed to read zone ${zone}: ${zoneError instanceof Error ? zoneError.message : String(zoneError)}`);
+                log(
+                  `Failed to read zone ${zone}: ${zoneError instanceof Error ? zoneError.message : String(zoneError)}`,
+                  'WARN',
+                  'hardware',
+                );
                 continue;
               }
             }
 
             if (cpuTemps.length > 0) {
               const maxTemp = Math.max(...cpuTemps);
-              console.log(`✅ [DEBUG] Using max CPU temperature from thermal zones: ${maxTemp}°C`);
+              log(
+                `Using max CPU temperature from thermal zones: ${maxTemp}°C`,
+                'INFO',
+                'hardware',
+              );
               return maxTemp;
             }
           }
         } catch (rootThermalError) {
-          console.log(`⚠️ [DEBUG] Root thermal access failed: ${rootThermalError instanceof Error ? rootThermalError.message : String(rootThermalError)}`);
+          log(
+            `Root thermal access failed: ${rootThermalError instanceof Error ? rootThermalError.message : String(rootThermalError)}`,
+            'WARN',
+            'hardware',
+          );
         }
       }
 
       // Method 3: Try reading thermal zones without root (limited access)
       try {
-        console.log('🔍 [DEBUG] Trying thermal zones without root...');
+        log('Trying thermal zones without root...', 'DEBUG', 'hardware');
         const basePath = '/sys/class/thermal';
         
         // Check if we can access the directory at all
         if (fs.existsSync(basePath)) {
           try {
             const zones = fs.readdirSync(basePath).filter((z) => z.startsWith('thermal_zone'));
-            console.log(`🔍 [DEBUG] Found ${zones.length} thermal zones without root: ${zones.join(', ')}`);
+            log(`Found ${zones.length} thermal zones without root: ${zones.join(', ')}`, 'DEBUG', 'hardware');
             
             let cpuTemps: number[] = [];
 
@@ -447,7 +482,7 @@ export class HardwareInfoUtil {
                 
                 if (fs.existsSync(typePath) && fs.existsSync(tempPath)) {
                   const type = fs.readFileSync(typePath, 'utf8').trim().toLowerCase();
-                  console.log(`🔍 [DEBUG] Zone ${zone} type (no-root): ${type}`);
+                  log(`Zone ${zone} type (no-root): ${type}`, 'DEBUG', 'hardware');
                   
                   // Skip non-CPU sensors
                   if (
@@ -459,7 +494,7 @@ export class HardwareInfoUtil {
                     type.includes('xo_therm') ||
                     type.includes('gpu')
                   ) {
-                    console.log(`🔍 [DEBUG] Skipping non-CPU sensor: ${type}`);
+                    log(`Skipping non-CPU sensor: ${type}`, 'DEBUG', 'hardware');
                     continue;
                   }
 
@@ -472,34 +507,34 @@ export class HardwareInfoUtil {
                     temp = temp / 1000; // milli-degrees for Samsung/Exynos
                   }
 
-                  console.log(`🔍 [DEBUG] Zone ${zone} (${type}): ${temp}°C`);
+                  log(`Zone ${zone} (${type}): ${temp}°C`, 'DEBUG', 'hardware');
 
                   if (!isNaN(temp) && temp > 0 && temp < 150) {
                     cpuTemps.push(temp);
                   }
                 }
               } catch (zoneReadError) {
-                console.log(`⚠️ [DEBUG] Failed to read zone ${zone}: ${zoneReadError instanceof Error ? zoneReadError.message : String(zoneReadError)}`);
+                log(`Failed to read zone ${zone}: ${zoneReadError instanceof Error ? zoneReadError.message : String(zoneReadError)}`, 'WARN', 'hardware');
                 continue;
               }
             }
 
             if (cpuTemps.length > 0) {
               const maxTemp = Math.max(...cpuTemps);
-              console.log(`✅ [DEBUG] Using max CPU temperature from thermal zones (no-root): ${maxTemp}°C`);
+              log(`Using max CPU temperature from thermal zones (no-root): ${maxTemp}°C`, 'INFO', 'hardware');
               return maxTemp;
             }
           } catch (thermalScanError) {
-            console.log(`⚠️ [DEBUG] Failed to scan thermal directory: ${thermalScanError instanceof Error ? thermalScanError.message : String(thermalScanError)}`);
+            log(`Failed to scan thermal directory: ${thermalScanError instanceof Error ? thermalScanError.message : String(thermalScanError)}`, 'WARN', 'hardware');
           }
         }
       } catch (thermalAccessError) {
-        console.log(`⚠️ [DEBUG] Cannot access thermal zones: ${thermalAccessError instanceof Error ? thermalAccessError.message : String(thermalAccessError)}`);
+        log(`Cannot access thermal zones: ${thermalAccessError instanceof Error ? thermalAccessError.message : String(thermalAccessError)}`, 'WARN', 'hardware');
       }
 
       // Method 4: Try individual thermal zone files with root (fallback)
       if (this.isSuAvailable('termux')) {
-        console.log('🔍 [DEBUG] Trying individual thermal zone files with root...');
+        log('Trying individual thermal zone files with root...', 'DEBUG', 'hardware');
         for (let i = 0; i < 10; i++) {
           try {
             const tempRaw = execSync(
@@ -511,10 +546,10 @@ export class HardwareInfoUtil {
               let temp = parseInt(tempRaw);
               if (temp > 1000) temp = temp / 1000; // Convert from millidegrees
               
-              console.log(`🔍 [DEBUG] Thermal zone ${i}: ${temp}°C`);
+              log(`Thermal zone ${i}: ${temp}°C`, 'DEBUG', 'hardware');
               
               if (!isNaN(temp) && temp > 0 && temp < 150) {
-                console.log(`✅ [DEBUG] Using thermal zone ${i} temperature: ${temp}°C`);
+                log(`Using thermal zone ${i} temperature: ${temp}°C`, 'INFO', 'hardware');
                 return temp;
               }
             }
@@ -526,21 +561,23 @@ export class HardwareInfoUtil {
       }
 
       // Method 5: Fallback to Linux method (might work on some Termux setups)
-      console.log('🔍 [DEBUG] Falling back to Linux temperature detection...');
-      return this.getLinuxCpuTemperature();
+      log('Falling back to Linux temperature detection...', 'DEBUG', 'hardware');
+      return this.getLinuxCpuTemperature(log);
       
     } catch (error) {
-      console.error(
-        `❌ [DEBUG] Failed to get Termux temperature: ${error instanceof Error ? error.message : String(error)}`,
+      log(
+        `Failed to get Termux temperature: ${error instanceof Error ? error.message : String(error)}`,
+        'ERROR',
+        'hardware',
       );
       return 0;
     }
   }
 
   /** ✅ Linux: Default Method for CPU Temperature with better fallbacks and debugging */
-  private static getLinuxCpuTemperature(): number {
+  private static getLinuxCpuTemperature(log: (message: string, level: string, category: string) => void): number {
     try {
-      console.log('🔍 [DEBUG] Starting Linux CPU temperature detection...');
+      log('Starting Linux CPU temperature detection...', 'DEBUG', 'hardware');
 
       // Method 1: Try thermal zone (most reliable for most systems)
       if (fs.existsSync('/sys/class/thermal/thermal_zone0/temp')) {
@@ -550,16 +587,20 @@ export class HardwareInfoUtil {
             { encoding: 'utf8' },
           ).trim();
           const temp = parseInt(tempRaw) / 1000;
-          console.log(`🔍 [DEBUG] Thermal zone 0: ${temp}°C`);
+          log(`Thermal zone 0: ${temp}°C`, 'DEBUG', 'hardware');
           if (!isNaN(temp) && temp > 0 && temp < 150) {
-            console.log(
-              `✅ [DEBUG] Using thermal zone 0 temperature: ${temp}°C`,
+            log(
+              `Using thermal zone 0 temperature: ${temp}°C`,
+              'INFO',
+              'hardware',
             );
             return temp;
           }
         } catch (thermalError) {
-          console.log(
-            `⚠️ [DEBUG] Thermal zone 0 failed: ${thermalError instanceof Error ? thermalError.message : String(thermalError)}`,
+          log(
+            `Thermal zone 0 failed: ${thermalError instanceof Error ? thermalError.message : String(thermalError)}`,
+            'WARN',
+            'hardware',
           );
         }
       }
@@ -573,10 +614,12 @@ export class HardwareInfoUtil {
               encoding: 'utf8',
             }).trim();
             const temp = parseInt(tempRaw) / 1000;
-            console.log(`🔍 [DEBUG] Thermal zone ${i}: ${temp}°C`);
+            log(`Thermal zone ${i}: ${temp}°C`, 'DEBUG', 'hardware');
             if (!isNaN(temp) && temp > 0 && temp < 150) {
-              console.log(
-                `✅ [DEBUG] Using thermal zone ${i} temperature: ${temp}°C`,
+              log(
+                `Using thermal zone ${i} temperature: ${temp}°C`,
+                'INFO',
+                'hardware',
               );
               return temp;
             }
@@ -588,19 +631,21 @@ export class HardwareInfoUtil {
 
       // Method 3: Try sensors command (lm-sensors package) - Enhanced parsing with debugging
       try {
-        console.log('🔍 [DEBUG] Trying sensors command...');
+        log('Trying sensors command...', 'DEBUG', 'hardware');
         const sensorsOutput = execSync('sensors', { encoding: 'utf8' }).trim();
-        console.log(
-          `🔍 [DEBUG] Sensors output length: ${sensorsOutput.length} characters`,
+        log(
+          `Sensors output length: ${sensorsOutput.length} characters`,
+          'DEBUG',
+          'hardware',
         );
 
         // Priority 1: AMD k10temp Tctl (most accurate for AMD CPUs)
         const tctlMatch = sensorsOutput.match(/Tctl:\s*\+?(\d+\.\d+)°C/);
         if (tctlMatch && tctlMatch[1]) {
           const temp = parseFloat(tctlMatch[1]);
-          console.log(`🔍 [DEBUG] Found AMD Tctl: ${temp}°C`);
+          log(`Found AMD Tctl: ${temp}°C`, 'DEBUG', 'hardware');
           if (temp > 0 && temp < 150) {
-            console.log(`✅ [DEBUG] Using AMD Tctl temperature: ${temp}°C`);
+            log(`Using AMD Tctl temperature: ${temp}°C`, 'INFO', 'hardware');
             return temp;
           }
         }
@@ -611,10 +656,12 @@ export class HardwareInfoUtil {
         );
         if (packageMatch && packageMatch[1]) {
           const temp = parseFloat(packageMatch[1]);
-          console.log(`🔍 [DEBUG] Found Intel Package: ${temp}°C`);
+          log(`Found Intel Package: ${temp}°C`, 'DEBUG', 'hardware');
           if (temp > 0 && temp < 150) {
-            console.log(
-              `✅ [DEBUG] Using Intel Package temperature: ${temp}°C`,
+            log(
+              `Using Intel Package temperature: ${temp}°C`,
+              'INFO',
+              'hardware',
             );
             return temp;
           }
@@ -624,9 +671,9 @@ export class HardwareInfoUtil {
         const tsi0Match = sensorsOutput.match(/TSI0_TEMP:\s*\+?(\d+\.\d+)°C/);
         if (tsi0Match && tsi0Match[1]) {
           const temp = parseFloat(tsi0Match[1]);
-          console.log(`🔍 [DEBUG] Found TSI0_TEMP: ${temp}°C`);
+          log(`Found TSI0_TEMP: ${temp}°C`, 'DEBUG', 'hardware');
           if (temp > 0 && temp < 150) {
-            console.log(`✅ [DEBUG] Using TSI0_TEMP temperature: ${temp}°C`);
+            log(`Using TSI0_TEMP temperature: ${temp}°C`, 'INFO', 'hardware');
             return temp;
           }
         }
@@ -635,9 +682,9 @@ export class HardwareInfoUtil {
         const cputinMatch = sensorsOutput.match(/CPUTIN:\s*\+?(\d+\.\d+)°C/);
         if (cputinMatch && cputinMatch[1]) {
           const temp = parseFloat(cputinMatch[1]);
-          console.log(`🔍 [DEBUG] Found CPUTIN: ${temp}°C`);
+          log(`Found CPUTIN: ${temp}°C`, 'DEBUG', 'hardware');
           if (temp > 0 && temp < 150) {
-            console.log(`✅ [DEBUG] Using CPUTIN temperature: ${temp}°C`);
+            log(`Using CPUTIN temperature: ${temp}°C`, 'INFO', 'hardware');
             return temp;
           }
         }
@@ -646,9 +693,9 @@ export class HardwareInfoUtil {
         const coreMatch = sensorsOutput.match(/Core \d+:\s*\+?(\d+\.\d+)°C/);
         if (coreMatch && coreMatch[1]) {
           const temp = parseFloat(coreMatch[1]);
-          console.log(`🔍 [DEBUG] Found Core temp: ${temp}°C`);
+          log(`Found Core temp: ${temp}°C`, 'DEBUG', 'hardware');
           if (temp > 0 && temp < 150) {
-            console.log(`✅ [DEBUG] Using Core temperature: ${temp}°C`);
+            log(`Using Core temperature: ${temp}°C`, 'INFO', 'hardware');
             return temp;
           }
         }
@@ -659,23 +706,25 @@ export class HardwareInfoUtil {
         );
         if (cpuTempMatch && cpuTempMatch[1]) {
           const temp = parseFloat(cpuTempMatch[1]);
-          console.log(`🔍 [DEBUG] Found CPU temp: ${temp}°C`);
+          log(`Found CPU temp: ${temp}°C`, 'DEBUG', 'hardware');
           if (temp > 0 && temp < 150) {
-            console.log(`✅ [DEBUG] Using CPU temperature: ${temp}°C`);
+            log(`Using CPU temperature: ${temp}°C`, 'INFO', 'hardware');
             return temp;
           }
         }
 
         // Debug: Show what patterns we're looking for vs what we found
-        console.log(
-          '🔍 [DEBUG] Searching for temperature patterns in sensors output...',
+        log(
+          'Searching for temperature patterns in sensors output...',
+          'DEBUG',
+          'hardware',
         );
         const tempLines = sensorsOutput
           .split('\n')
           .filter((line) => line.includes('°C'));
-        console.log(`🔍 [DEBUG] Found ${tempLines.length} temperature lines:`);
+        log(`Found ${tempLines.length} temperature lines:`, 'DEBUG', 'hardware');
         tempLines.forEach((line, index) => {
-          console.log(`🔍 [DEBUG] Temp line ${index + 1}: ${line.trim()}`);
+          log(`Temp line ${index + 1}: ${line.trim()}`, 'DEBUG', 'hardware');
         });
 
         // Priority 7: Processor temperature
@@ -684,9 +733,9 @@ export class HardwareInfoUtil {
         );
         if (processorMatch && processorMatch[1]) {
           const temp = parseFloat(processorMatch[1]);
-          console.log(`🔍 [DEBUG] Found Processor temp: ${temp}°C`);
+          log(`Found Processor temp: ${temp}°C`, 'DEBUG', 'hardware');
           if (temp > 0 && temp < 150) {
-            console.log(`✅ [DEBUG] Using Processor temperature: ${temp}°C`);
+            log(`Using Processor temperature: ${temp}°C`, 'INFO', 'hardware');
             return temp;
           }
         }
@@ -697,28 +746,32 @@ export class HardwareInfoUtil {
         );
         if (anyTempMatch && anyTempMatch[1]) {
           const temp = parseFloat(anyTempMatch[1]);
-          console.log(`🔍 [DEBUG] Found any temp: ${temp}°C`);
+          log(`Found any temp: ${temp}°C`, 'DEBUG', 'hardware');
           if (temp > 20 && temp < 150) {
-            console.log(`✅ [DEBUG] Using fallback temperature: ${temp}°C`);
+            log(`Using fallback temperature: ${temp}°C`, 'INFO', 'hardware');
             return temp;
           }
         }
 
-        console.log('⚠️ [DEBUG] No valid temperature found in sensors output');
+        log('No valid temperature found in sensors output', 'WARN', 'hardware');
       } catch (sensorsError) {
-        console.log(
-          `⚠️ [DEBUG] Sensors command failed: ${sensorsError instanceof Error ? sensorsError.message : String(sensorsError)}`,
+        log(
+          `Sensors command failed: ${sensorsError instanceof Error ? sensorsError.message : String(sensorsError)}`,
+          'WARN',
+          'hardware',
         );
       }
 
       // Method 4: Try /sys/class/hwmon approach (alternative to sensors)
       try {
-        console.log('🔍 [DEBUG] Trying hwmon approach...');
+        log('Trying hwmon approach...', 'DEBUG', 'hardware');
         const hwmonDirs = execSync('ls /sys/class/hwmon/', { encoding: 'utf8' })
           .trim()
           .split('\n');
-        console.log(
-          `🔍 [DEBUG] Found ${hwmonDirs.length} hwmon directories: ${hwmonDirs.join(', ')}`,
+        log(
+          `Found ${hwmonDirs.length} hwmon directories: ${hwmonDirs.join(', ')}`,
+          'DEBUG',
+          'hardware',
         );
 
         for (const hwmonDir of hwmonDirs) {
@@ -732,7 +785,7 @@ export class HardwareInfoUtil {
                 .readFileSync(nameFile, 'utf8')
                 .trim()
                 .toLowerCase();
-              console.log(`🔍 [DEBUG] Checking hwmon sensor: ${sensorName}`);
+              log(`Checking hwmon sensor: ${sensorName}`, 'DEBUG', 'hardware');
 
               // Look for CPU-related sensor names
               if (
@@ -741,19 +794,23 @@ export class HardwareInfoUtil {
                 sensorName.includes('cpu') ||
                 sensorName.includes('tctl')
               ) {
-                console.log(`🔍 [DEBUG] Found CPU sensor: ${sensorName}`);
+                log(`Found CPU sensor: ${sensorName}`, 'DEBUG', 'hardware');
 
                 // Try to read temp1_input (main temperature)
                 const tempFile = `${hwmonPath}/temp1_input`;
                 if (fs.existsSync(tempFile)) {
                   const tempRaw = fs.readFileSync(tempFile, 'utf8').trim();
                   const temp = parseInt(tempRaw) / 1000;
-                  console.log(
-                    `🔍 [DEBUG] ${sensorName} temp1_input: ${temp}°C`,
+                  log(
+                    `${sensorName} temp1_input: ${temp}°C`,
+                    'DEBUG',
+                    'hardware',
                   );
                   if (!isNaN(temp) && temp > 0 && temp < 150) {
-                    console.log(
-                      `✅ [DEBUG] Using ${sensorName} temperature: ${temp}°C`,
+                    log(
+                      `Using ${sensorName} temperature: ${temp}°C`,
+                      'INFO',
+                      'hardware',
                     );
                     return temp;
                   }
@@ -761,64 +818,72 @@ export class HardwareInfoUtil {
               }
             }
           } catch (hwmonError) {
-            console.log(
-              `⚠️ [DEBUG] Hwmon error for ${hwmonDir}: ${hwmonError instanceof Error ? hwmonError.message : String(hwmonError)}`,
+            log(
+              `Hwmon error for ${hwmonDir}: ${hwmonError instanceof Error ? hwmonError.message : String(hwmonError)}`,
+              'WARN',
+              'hardware',
             );
             continue;
           }
         }
       } catch (hwmonListError) {
-        console.log(
-          `⚠️ [DEBUG] Failed to list hwmon directories: ${hwmonListError instanceof Error ? hwmonListError.message : String(hwmonListError)}`,
+        log(
+          `Failed to list hwmon directories: ${hwmonListError instanceof Error ? hwmonListError.message : String(hwmonListError)}`,
+          'WARN',
+          'hardware',
         );
       }
 
       // Method 5: Try acpi as fallback (only if we have it installed)
       try {
-        console.log('🔍 [DEBUG] Trying ACPI approach...');
+        log('Trying ACPI approach...', 'DEBUG', 'hardware');
         // Check if acpi exists before trying to use it
         execSync('command -v acpi > /dev/null 2>&1');
 
         const tempOutput = execSync('acpi -t', { encoding: 'utf8' });
-        console.log(`🔍 [DEBUG] ACPI output: ${tempOutput.trim()}`);
+        log(`ACPI output: ${tempOutput.trim()}`, 'DEBUG', 'hardware');
         const match = tempOutput.match(/(\d+\.\d+)/);
         if (match) {
           const temp = parseFloat(match[0]);
-          console.log(`🔍 [DEBUG] ACPI temperature: ${temp}°C`);
+          log(`ACPI temperature: ${temp}°C`, 'DEBUG', 'hardware');
           if (temp > 0 && temp < 150) {
-            console.log(`✅ [DEBUG] Using ACPI temperature: ${temp}°C`);
+            log(`Using ACPI temperature: ${temp}°C`, 'INFO', 'hardware');
             return temp;
           }
         }
       } catch (acpiError) {
-        console.log(
-          `⚠️ [DEBUG] ACPI failed: ${acpiError instanceof Error ? acpiError.message : String(acpiError)}`,
+        log(
+          `ACPI failed: ${acpiError instanceof Error ? acpiError.message : String(acpiError)}`,
+          'WARN',
+          'hardware',
         );
       }
 
       // Method 6: Try /proc/acpi/thermal_zone
       try {
-        console.log('🔍 [DEBUG] Trying /proc/acpi/thermal_zone...');
+        log('Trying /proc/acpi/thermal_zone...', 'DEBUG', 'hardware');
         if (fs.existsSync('/proc/acpi/thermal_zone')) {
           const zones = execSync('ls /proc/acpi/thermal_zone', {
             encoding: 'utf8',
           })
             .trim()
             .split('\n');
-          console.log(`🔍 [DEBUG] Found thermal zones: ${zones.join(', ')}`);
+          log(`Found thermal zones: ${zones.join(', ')}`, 'DEBUG', 'hardware');
           if (zones.length > 0) {
             const tempOutput = execSync(
               `cat /proc/acpi/thermal_zone/${zones[0]}/temperature`,
               { encoding: 'utf8' },
             );
-            console.log(`🔍 [DEBUG] Thermal zone output: ${tempOutput.trim()}`);
+            log(`Thermal zone output: ${tempOutput.trim()}`, 'DEBUG', 'hardware');
             const match = tempOutput.match(/(\d+)/);
             if (match) {
               const temp = parseInt(match[0]);
-              console.log(`🔍 [DEBUG] Thermal zone temperature: ${temp}°C`);
+              log(`Thermal zone temperature: ${temp}°C`, 'DEBUG', 'hardware');
               if (temp > 0 && temp < 150) {
-                console.log(
-                  `✅ [DEBUG] Using thermal zone temperature: ${temp}°C`,
+                log(
+                  `Using thermal zone temperature: ${temp}°C`,
+                  'INFO',
+                  'hardware',
                 );
                 return temp;
               }
@@ -826,29 +891,31 @@ export class HardwareInfoUtil {
           }
         }
       } catch (procAcpiError) {
-        console.log(
-          `⚠️ [DEBUG] /proc/acpi/thermal_zone failed: ${procAcpiError instanceof Error ? procAcpiError.message : String(procAcpiError)}`,
+        log(
+          `/proc/acpi/thermal_zone failed: ${procAcpiError instanceof Error ? procAcpiError.message : String(procAcpiError)}`,
+          'WARN',
+          'hardware',
         );
       }
 
       // Method 7: Try direct AMD temperature reading (for systems without sensors package)
       try {
-        console.log('🔍 [DEBUG] Trying direct AMD k10temp reading...');
+        log('Trying direct AMD k10temp reading...', 'DEBUG', 'hardware');
         // Look for AMD k10temp in hwmon
         const hwmonDirs = fs.readdirSync('/sys/class/hwmon/');
         for (const dir of hwmonDirs) {
           const namePath = `/sys/class/hwmon/${dir}/name`;
           if (fs.existsSync(namePath)) {
             const name = fs.readFileSync(namePath, 'utf8').trim();
-            console.log(`🔍 [DEBUG] Checking direct sensor: ${name}`);
+            log(`Checking direct sensor: ${name}`, 'DEBUG', 'hardware');
             if (name === 'k10temp') {
               const tempPath = `/sys/class/hwmon/${dir}/temp1_input`;
               if (fs.existsSync(tempPath)) {
                 const tempRaw = fs.readFileSync(tempPath, 'utf8').trim();
                 const temp = parseInt(tempRaw) / 1000;
-                console.log(`🔍 [DEBUG] Direct k10temp: ${temp}°C`);
+                log(`Direct k10temp: ${temp}°C`, 'DEBUG', 'hardware');
                 if (!isNaN(temp) && temp > 0 && temp < 150) {
-                  console.log(`✅ [DEBUG] Using direct k10temp: ${temp}°C`);
+                  log(`Using direct k10temp: ${temp}°C`, 'INFO', 'hardware');
                   return temp;
                 }
               }
@@ -856,19 +923,25 @@ export class HardwareInfoUtil {
           }
         }
       } catch (directAmdError) {
-        console.log(
-          `⚠️ [DEBUG] Direct AMD reading failed: ${directAmdError instanceof Error ? directAmdError.message : String(directAmdError)}`,
+        log(
+          `Direct AMD reading failed: ${directAmdError instanceof Error ? directAmdError.message : String(directAmdError)}`,
+          'WARN',
+          'hardware',
         );
       }
 
       // No temperature data available
-      console.log(
-        '❌ [DEBUG] No CPU temperature sensors detected or accessible',
+      log(
+        'No CPU temperature sensors detected or accessible',
+        'ERROR',
+        'hardware',
       );
       return 0;
     } catch (error) {
-      console.error(
-        `❌ [DEBUG] Failed to get Linux temperature: ${error instanceof Error ? error.message : String(error)}`,
+      log(
+        `Failed to get Linux temperature: ${error instanceof Error ? error.message : String(error)}`,
+        'ERROR',
+        'hardware',
       );
       return 0;
     }
@@ -886,9 +959,9 @@ export class HardwareInfoUtil {
         .map((line) => line.trim().split('\t')[0]);
 
       return devices.length > 0;
-    } catch (error) {
+    } catch {
       // If adb command fails, it means ADB is not available
-      console.error(`❌ Failed to check ADB status: ${error instanceof Error ? error.message : String(error)}`);
+      // Note: This method doesn't have access to logger, but ADB status is not critical
       return false;
     }
   }

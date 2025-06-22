@@ -154,7 +154,7 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
       
       // Get device info with system uptime using safe execution
       const deviceInfo = safeExecute(
-        () => HardwareInfoUtil.getDeviceInfo(systemType),
+        () => HardwareInfoUtil.getDeviceInfo(systemType, this.loggingService.log.bind(this.loggingService)),
         {
           cpuModel: [],
           cpuUsage: 0,
