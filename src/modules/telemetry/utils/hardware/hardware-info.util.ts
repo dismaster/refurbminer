@@ -338,85 +338,200 @@ export class HardwareInfoUtil {
     }
   }
 
-  /** ✅ Termux: Robust CPU temperature detection (scan all thermal zones for CPU, avoid battery) */
+  /** ✅ Termux: Robust CPU temperature detection (with proper permission handling) */
   private static getTermuxCpuTemperature(): number {
+    console.log('🔍 [DEBUG] Starting Termux temperature detection...');
+    
     try {
-      // Try vcgencmd with root first (for some rooted devices)
+      // Method 1: Try vcgencmd with root first (for some rooted devices)
       if (this.isSuAvailable('termux') && fs.existsSync(this.VCGENCMD_PATH)) {
         try {
+          console.log('🔍 [DEBUG] Trying vcgencmd with root...');
           execSync(`chmod +x ${this.VCGENCMD_PATH}`);
           const tempOutput = execSync(
             `su -c "${this.VCGENCMD_PATH} measure_temp"`,
             { encoding: 'utf8' },
           );
           const match = tempOutput.match(/temp=([\d.]+)/);
-          if (match) return parseFloat(match[1]);
-        } catch {
-          // Ignore and continue
-        }
-      }
-
-      // Scan all thermal zones for plausible CPU temps
-      const basePath = '/sys/class/thermal';
-      if (fs.existsSync(basePath)) {
-        const zones = fs.readdirSync(basePath).filter((z) => z.startsWith('thermal_zone'));
-        let cpuTemps: number[] = [];
-
-        for (const zone of zones) {
-          const typePath = path.join(basePath, zone, 'type');
-          const tempPath = path.join(basePath, zone, 'temp');
-          if (fs.existsSync(typePath) && fs.existsSync(tempPath)) {
-            const type = fs.readFileSync(typePath, 'utf8').trim().toLowerCase();
-            // Skip non-CPU sensors
-            if (
-              type.includes('bms') ||
-              type.includes('battery') ||
-              type.includes('chg') ||
-              type.includes('case') ||
-              type.includes('pmic') ||
-              type.includes('xo_therm') ||
-              type.includes('gpu')
-            ) continue;
-
-            const tempRaw = fs.readFileSync(tempPath, 'utf8').trim();
-            let temp = parseInt(tempRaw);
-
-            if (type.includes('tsens')) {
-              temp = temp / 10; // deci-degrees for tsens sensors (Xiaomi/Qualcomm)
-            } else if (temp > 1000) {
-              temp = temp / 1000; // milli-degrees for Samsung/Exynos
-            }
-
-            if (!isNaN(temp) && temp > 0 && temp < 150) {
-              cpuTemps.push(temp);
-            }
+          if (match) {
+            const temp = parseFloat(match[1]);
+            console.log(`✅ [DEBUG] vcgencmd temperature: ${temp}°C`);
+            return temp;
           }
-        }
-
-        if (cpuTemps.length > 0) {
-          return Math.max(...cpuTemps);
+        } catch (vcgencmdError) {
+          console.log(`⚠️ [DEBUG] vcgencmd failed: ${vcgencmdError instanceof Error ? vcgencmdError.message : String(vcgencmdError)}`);
         }
       }
 
-      // Try thermal zone 0 with root (legacy fallback)
+      // Method 2: Try reading thermal zones with root access first
       if (this.isSuAvailable('termux')) {
         try {
-          const tempRaw = execSync(
-            'su -c "cat /sys/class/thermal/thermal_zone0/temp"',
-            { encoding: 'utf8' },
-          ).trim();
-          const temp = parseInt(tempRaw) / 1000;
-          if (!isNaN(temp) && temp > 0 && temp < 150) return temp;
-        } catch {
-          // Could not read with su, continue
+          console.log('🔍 [DEBUG] Trying thermal zones with root access...');
+          
+          // Try to list thermal zones with root
+          const zonesOutput = execSync('su -c "ls /sys/class/thermal/ 2>/dev/null | grep thermal_zone"', { encoding: 'utf8' }).trim();
+          if (zonesOutput) {
+            const zones = zonesOutput.split('\n').filter(z => z.startsWith('thermal_zone'));
+            console.log(`🔍 [DEBUG] Found ${zones.length} thermal zones with root: ${zones.join(', ')}`);
+            
+            let cpuTemps: number[] = [];
+            
+            for (const zone of zones) {
+              try {
+                // Try to read type and temperature with root
+                const typeOutput = execSync(`su -c "cat /sys/class/thermal/${zone}/type 2>/dev/null"`, { encoding: 'utf8' }).trim().toLowerCase();
+                console.log(`🔍 [DEBUG] Zone ${zone} type: ${typeOutput}`);
+                
+                // Skip non-CPU sensors
+                if (
+                  typeOutput.includes('bms') ||
+                  typeOutput.includes('battery') ||
+                  typeOutput.includes('chg') ||
+                  typeOutput.includes('case') ||
+                  typeOutput.includes('pmic') ||
+                  typeOutput.includes('xo_therm') ||
+                  typeOutput.includes('gpu')
+                ) {
+                  console.log(`🔍 [DEBUG] Skipping non-CPU sensor: ${typeOutput}`);
+                  continue;
+                }
+
+                const tempRaw = execSync(`su -c "cat /sys/class/thermal/${zone}/temp 2>/dev/null"`, { encoding: 'utf8' }).trim();
+                let temp = parseInt(tempRaw);
+
+                if (typeOutput.includes('tsens')) {
+                  temp = temp / 10; // deci-degrees for tsens sensors (Xiaomi/Qualcomm)
+                } else if (temp > 1000) {
+                  temp = temp / 1000; // milli-degrees for Samsung/Exynos
+                }
+
+                console.log(`🔍 [DEBUG] Zone ${zone} (${typeOutput}): ${temp}°C`);
+                
+                if (!isNaN(temp) && temp > 0 && temp < 150) {
+                  cpuTemps.push(temp);
+                }
+              } catch (zoneError) {
+                console.log(`⚠️ [DEBUG] Failed to read zone ${zone}: ${zoneError instanceof Error ? zoneError.message : String(zoneError)}`);
+                continue;
+              }
+            }
+
+            if (cpuTemps.length > 0) {
+              const maxTemp = Math.max(...cpuTemps);
+              console.log(`✅ [DEBUG] Using max CPU temperature from thermal zones: ${maxTemp}°C`);
+              return maxTemp;
+            }
+          }
+        } catch (rootThermalError) {
+          console.log(`⚠️ [DEBUG] Root thermal access failed: ${rootThermalError instanceof Error ? rootThermalError.message : String(rootThermalError)}`);
         }
       }
 
-      // Fallback to Linux method
+      // Method 3: Try reading thermal zones without root (limited access)
+      try {
+        console.log('🔍 [DEBUG] Trying thermal zones without root...');
+        const basePath = '/sys/class/thermal';
+        
+        // Check if we can access the directory at all
+        if (fs.existsSync(basePath)) {
+          try {
+            const zones = fs.readdirSync(basePath).filter((z) => z.startsWith('thermal_zone'));
+            console.log(`🔍 [DEBUG] Found ${zones.length} thermal zones without root: ${zones.join(', ')}`);
+            
+            let cpuTemps: number[] = [];
+
+            for (const zone of zones) {
+              try {
+                const typePath = path.join(basePath, zone, 'type');
+                const tempPath = path.join(basePath, zone, 'temp');
+                
+                if (fs.existsSync(typePath) && fs.existsSync(tempPath)) {
+                  const type = fs.readFileSync(typePath, 'utf8').trim().toLowerCase();
+                  console.log(`🔍 [DEBUG] Zone ${zone} type (no-root): ${type}`);
+                  
+                  // Skip non-CPU sensors
+                  if (
+                    type.includes('bms') ||
+                    type.includes('battery') ||
+                    type.includes('chg') ||
+                    type.includes('case') ||
+                    type.includes('pmic') ||
+                    type.includes('xo_therm') ||
+                    type.includes('gpu')
+                  ) {
+                    console.log(`🔍 [DEBUG] Skipping non-CPU sensor: ${type}`);
+                    continue;
+                  }
+
+                  const tempRaw = fs.readFileSync(tempPath, 'utf8').trim();
+                  let temp = parseInt(tempRaw);
+
+                  if (type.includes('tsens')) {
+                    temp = temp / 10; // deci-degrees for tsens sensors (Xiaomi/Qualcomm)
+                  } else if (temp > 1000) {
+                    temp = temp / 1000; // milli-degrees for Samsung/Exynos
+                  }
+
+                  console.log(`🔍 [DEBUG] Zone ${zone} (${type}): ${temp}°C`);
+
+                  if (!isNaN(temp) && temp > 0 && temp < 150) {
+                    cpuTemps.push(temp);
+                  }
+                }
+              } catch (zoneReadError) {
+                console.log(`⚠️ [DEBUG] Failed to read zone ${zone}: ${zoneReadError instanceof Error ? zoneReadError.message : String(zoneReadError)}`);
+                continue;
+              }
+            }
+
+            if (cpuTemps.length > 0) {
+              const maxTemp = Math.max(...cpuTemps);
+              console.log(`✅ [DEBUG] Using max CPU temperature from thermal zones (no-root): ${maxTemp}°C`);
+              return maxTemp;
+            }
+          } catch (thermalScanError) {
+            console.log(`⚠️ [DEBUG] Failed to scan thermal directory: ${thermalScanError instanceof Error ? thermalScanError.message : String(thermalScanError)}`);
+          }
+        }
+      } catch (thermalAccessError) {
+        console.log(`⚠️ [DEBUG] Cannot access thermal zones: ${thermalAccessError instanceof Error ? thermalAccessError.message : String(thermalAccessError)}`);
+      }
+
+      // Method 4: Try individual thermal zone files with root (fallback)
+      if (this.isSuAvailable('termux')) {
+        console.log('🔍 [DEBUG] Trying individual thermal zone files with root...');
+        for (let i = 0; i < 10; i++) {
+          try {
+            const tempRaw = execSync(
+              `su -c "cat /sys/class/thermal/thermal_zone${i}/temp 2>/dev/null"`,
+              { encoding: 'utf8' },
+            ).trim();
+            
+            if (tempRaw) {
+              let temp = parseInt(tempRaw);
+              if (temp > 1000) temp = temp / 1000; // Convert from millidegrees
+              
+              console.log(`🔍 [DEBUG] Thermal zone ${i}: ${temp}°C`);
+              
+              if (!isNaN(temp) && temp > 0 && temp < 150) {
+                console.log(`✅ [DEBUG] Using thermal zone ${i} temperature: ${temp}°C`);
+                return temp;
+              }
+            }
+          } catch {
+            // Continue to next zone
+            continue;
+          }
+        }
+      }
+
+      // Method 5: Fallback to Linux method (might work on some Termux setups)
+      console.log('🔍 [DEBUG] Falling back to Linux temperature detection...');
       return this.getLinuxCpuTemperature();
+      
     } catch (error) {
       console.error(
-        `❌ Failed to get Termux temperature: ${error instanceof Error ? error.message : String(error)}`,
+        `❌ [DEBUG] Failed to get Termux temperature: ${error instanceof Error ? error.message : String(error)}`,
       );
       return 0;
     }
