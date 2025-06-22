@@ -566,65 +566,172 @@ export class ActionsService implements OnModuleInit {
       if (osType === 'termux') {
         // On Termux, use a different approach that's more reliable
         this.loggingService.log(
-          '📱 Detected Termux environment, using simplified execution method',
+          '📱 Detected Termux environment, using robust wrapper script execution',
           'INFO',
           'actions',
         );
 
-        // Create a simpler wrapper script that just runs the update script
+        // Create a comprehensive wrapper script that handles the entire update process
         const wrapperPath = `${homeDir}/update_wrapper.sh`;
-        const wrapperContent = `#!/bin/bash
+        const logPath = `${homeDir}/update_log.txt`;
+        
+        const wrapperContent = `#!/data/data/com.termux/files/usr/bin/bash
+# RefurbMiner Termux Update Wrapper Script
+# Generated at $(date)
+
 # Wait a bit for the current process to exit
 sleep 5
-# Execute the update script with full bash environment and save output
-bash "${updateScriptPath}" > ${homeDir}/update_log.txt 2>&1
-UPDATE_EXIT_CODE=$?
 
-# Send notification when complete
-if [ $UPDATE_EXIT_CODE -eq 0 ]; then
-  # Try to restart the service in proper screen session
-  if pgrep -f "node.*refurbminer" > /dev/null; then
-    pkill -f "node.*refurbminer"
-    sleep 2
-  fi
-  
-  # Stop any existing refurbminer screen session
-  if screen -list | grep -q "refurbminer"; then
-    screen -S refurbminer -X quit
-    sleep 1
-  fi
-  
-  # Start RefurbMiner in proper screen session
-  cd ${homeDir}/refurbminer && screen -dmS refurbminer npm start
-  
-  termux-notification --title "RefurbMiner Update" --content "Update completed successfully and restarted in screen session" || true
+# Create log file with timestamp
+echo "=== RefurbMiner Update Started at $(date) ===" > ${logPath}
+
+# Function to log with timestamp
+log_message() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] \$1" | tee -a ${logPath}
+}
+
+log_message "Starting RefurbMiner update process in Termux..."
+
+# Execute the update script with full bash environment and save output
+log_message "Executing update script: ${updateScriptPath}"
+bash "${updateScriptPath}" >> ${logPath} 2>&1
+UPDATE_EXIT_CODE=\$?
+
+log_message "Update script completed with exit code: \$UPDATE_EXIT_CODE"
+
+# Handle service restart based on update result
+if [ \$UPDATE_EXIT_CODE -eq 0 ]; then
+    log_message "Update completed successfully, restarting RefurbMiner..."
+    
+    # Stop existing RefurbMiner processes
+    if pgrep -f "node.*refurbminer" > /dev/null; then
+        log_message "Stopping existing RefurbMiner processes..."
+        pkill -f "node.*refurbminer"
+        sleep 3
+    fi
+    
+    # Stop any existing refurbminer screen session
+    if screen -list 2>/dev/null | grep -q "refurbminer"; then
+        log_message "Stopping existing RefurbMiner screen session..."
+        screen -S refurbminer -X quit 2>/dev/null || true
+        sleep 1
+    fi
+    
+    # Navigate to refurbminer directory and start in screen session
+    if [ -d "${homeDir}/refurbminer" ]; then
+        log_message "Starting RefurbMiner in screen session..."
+        cd "${homeDir}/refurbminer"
+        
+        # Make sure we have the latest dependencies
+        log_message "Installing/updating dependencies..."
+        npm install >> ${logPath} 2>&1
+        
+        # Start in screen session
+        screen -dmS refurbminer npm start
+        
+        # Wait a moment and check if it started
+        sleep 5
+        if screen -list 2>/dev/null | grep -q "refurbminer"; then
+            log_message "RefurbMiner started successfully in screen session 'refurbminer'"
+            
+            # Send success notification
+            termux-notification --title "RefurbMiner Update" --content "Update completed successfully and restarted" || true
+        else
+            log_message "Failed to start RefurbMiner in screen session"
+            termux-notification --title "RefurbMiner Update" --content "Update completed but failed to restart service" || true
+        fi
+    else
+        log_message "RefurbMiner directory not found at ${homeDir}/refurbminer"
+        termux-notification --title "RefurbMiner Update" --content "Update completed but directory not found" || true
+    fi
 else
-  termux-notification --title "RefurbMiner Update" --content "Update failed with exit code $UPDATE_EXIT_CODE" || true
-fi`;
+    log_message "Update failed with exit code \$UPDATE_EXIT_CODE"
+    termux-notification --title "RefurbMiner Update" --content "Update failed with exit code \$UPDATE_EXIT_CODE" || true
+fi
+
+log_message "=== RefurbMiner Update Process Completed ==="
+
+# Make log readable
+chmod 644 ${logPath} 2>/dev/null || true
+
+# Clean up wrapper script
+rm -f ${wrapperPath} 2>/dev/null || true
+`;
 
         // Write wrapper script
-        fs.writeFileSync(wrapperPath, wrapperContent);
-        await execAsync(`chmod +x ${wrapperPath}`);
-
-        // Launch wrapper with nohup to keep it running after our process exits
-        this.loggingService.log(
-          '📋 Creating update log at ~/update_log.txt',
-          'INFO',
-          'actions',
-        );
+        try {
+          fs.writeFileSync(wrapperPath, wrapperContent);
+          await execAsync(`chmod +x ${wrapperPath}`);
+          
+          this.loggingService.log(
+            `📝 Created wrapper script at: ${wrapperPath}`,
+            'DEBUG',
+            'actions',
+          );
+        } catch (writeError) {
+          this.loggingService.log(
+            `❌ Failed to create wrapper script: ${writeError.message}`,
+            'ERROR',
+            'actions',
+          );
+          throw writeError;
+        }
 
         // Create a visual indicator for the user that update is happening
         try {
-          await execAsync('termux-toast "Update in progress, please wait..."');
+          await execAsync('termux-toast "RefurbMiner update starting, please wait..." 2>/dev/null || true');
         } catch {
           // Toast might not be available, continue anyway
         }
 
         // Execute the wrapper using nohup to ensure it continues after we exit
-        await execAsync(`nohup ${wrapperPath} >/dev/null 2>&1 &`);
+        try {
+          this.loggingService.log(
+            `🚀 Launching update wrapper: ${wrapperPath}`,
+            'INFO',
+            'actions',
+          );
+          
+          // Use a more robust execution method for Termux
+          await execAsync(`nohup bash ${wrapperPath} </dev/null >/dev/null 2>&1 &`);
+          
+          this.loggingService.log(
+            '✅ Update wrapper launched successfully',
+            'INFO',
+            'actions',
+          );
+        } catch (execError) {
+          this.loggingService.log(
+            `❌ Failed to launch wrapper: ${execError.message}`,
+            'ERROR',
+            'actions',
+          );
+          
+          // Fallback: try direct execution
+          try {
+            this.loggingService.log(
+              '🔄 Trying fallback execution method...',
+              'INFO',
+              'actions',
+            );
+            await execAsync(`bash ${wrapperPath} &`);
+            this.loggingService.log(
+              '✅ Wrapper launched with fallback method',
+              'INFO',
+              'actions',
+            );
+          } catch (fallbackError) {
+            this.loggingService.log(
+              `❌ Fallback execution also failed: ${fallbackError.message}`,
+              'ERROR',
+              'actions',
+            );
+            throw fallbackError;
+          }
+        }
 
         this.loggingService.log(
-          '🚀 Update will continue in background with output logged to update_log.txt',
+          '🚀 Update will continue in background with output logged to ~/update_log.txt',
           'INFO',
           'actions',
         );
