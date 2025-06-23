@@ -702,12 +702,74 @@ export class MinerSoftwareService {
         cmakeOptions = '';
       }
       
-      execSync(`cd "${buildPath}" && cmake ${cmakeOptions} ..`, { stdio: 'pipe' });
-
-      // Step 5: Compile with make
+      execSync(`cd "${buildPath}" && cmake ${cmakeOptions} ..`, { stdio: 'pipe' });      // Step 5: Compile with make
       this.loggingService.log('Compiling XMRig (this may take several minutes)...', 'INFO', 'miner-software');
-      const nproc = execSync('nproc', { encoding: 'utf8' }).trim();
-      execSync(`cd "${buildPath}" && make -j${nproc}`, { stdio: 'pipe', timeout: 900000 }); // 15 min timeout      // Step 6: Find and copy the compiled binary with fallback paths
+      
+      // Get CPU count with multiple detection methods for better accuracy
+      let cpuCount = 1; // Default fallback
+      try {
+        // Method 1: Try nproc first
+        const nprocResult = execSync('nproc', { encoding: 'utf8' }).trim();
+        cpuCount = parseInt(nprocResult) || 1;
+        this.loggingService.log(`nproc detected: ${cpuCount} CPUs`, 'DEBUG', 'miner-software');
+        
+        // Method 2: Cross-check with /proc/cpuinfo for validation
+        try {
+          const cpuInfoContent = execSync('cat /proc/cpuinfo', { encoding: 'utf8' });
+          const processorMatches = cpuInfoContent.match(/^processor\s*:/gm);
+          const procInfoCpuCount = processorMatches ? processorMatches.length : 0;
+          
+          this.loggingService.log(`/proc/cpuinfo detected: ${procInfoCpuCount} CPUs`, 'DEBUG', 'miner-software');
+          
+          // Use the higher count if there's a discrepancy (common on big.LITTLE architectures)
+          if (procInfoCpuCount > cpuCount) {
+            this.loggingService.log(
+              `Using /proc/cpuinfo count (${procInfoCpuCount}) as it's higher than nproc (${cpuCount})`, 
+              'INFO', 
+              'miner-software'
+            );
+            cpuCount = procInfoCpuCount;
+          }
+        } catch (procError) {
+          this.loggingService.log(`Failed to read /proc/cpuinfo: ${procError.message}`, 'WARN', 'miner-software');
+        }
+        
+        // Method 3: Try lscpu as another validation method
+        try {
+          const lscpuResult = execSync('lscpu | grep "^CPU(s):" | awk \'{print $2}\'', { encoding: 'utf8' }).trim();
+          const lscpuCpuCount = parseInt(lscpuResult) || 0;
+          
+          if (lscpuCpuCount > 0) {
+            this.loggingService.log(`lscpu detected: ${lscpuCpuCount} CPUs`, 'DEBUG', 'miner-software');
+            
+            // Use the highest count for maximum utilization
+            if (lscpuCpuCount > cpuCount) {
+              this.loggingService.log(
+                `Using lscpu count (${lscpuCpuCount}) as it's higher than previous detection (${cpuCount})`, 
+                'INFO', 
+                'miner-software'
+              );
+              cpuCount = lscpuCpuCount;
+            }
+          }
+        } catch (lscpuError) {
+          this.loggingService.log(`Failed to run lscpu: ${lscpuError.message}`, 'WARN', 'miner-software');
+        }
+        
+        // Ensure reasonable bounds (1-32 cores)
+        if (cpuCount < 1 || cpuCount > 32) {
+          this.loggingService.log(`Detected CPU count ${cpuCount} seems unreasonable, using 4 as fallback`, 'WARN', 'miner-software');
+          cpuCount = 4;
+        }
+        
+      } catch (error) {
+        this.loggingService.log(`Failed to detect CPU count: ${error.message}, using fallback of 4`, 'WARN', 'miner-software');
+        cpuCount = 4;
+      }
+      
+      this.loggingService.log(`Final CPU count for compilation: ${cpuCount}`, 'INFO', 'miner-software');
+      
+      execSync(`cd "${buildPath}" && make -j${cpuCount}`, { stdio: 'pipe', timeout: 900000 }); // 15 min timeout// Step 6: Find and copy the compiled binary with fallback paths
       this.loggingService.log('Locating compiled XMRig binary...', 'INFO', 'miner-software');
       
       // Multiple possible locations for the compiled binary
