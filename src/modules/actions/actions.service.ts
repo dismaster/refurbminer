@@ -252,7 +252,7 @@ export class ActionsService implements OnModuleInit {
               return; // If successful, exit early
             } catch (suError) {
               this.loggingService.log(
-                'Su reboot failed, trying next method',
+                'Su reboot failed (device likely not rooted), trying ADB method',
                 'DEBUG',
                 'actions',
               );
@@ -260,24 +260,73 @@ export class ActionsService implements OnModuleInit {
 
             // Next try with ADB if available
             try {
+              // First check if ADB is available and connected
               this.loggingService.log(
-                'Attempting reboot with ADB',
+                'Checking ADB availability and device connection',
                 'DEBUG',
                 'actions',
               );
-              await execAsync('adb shell reboot');
+              
+              // Check if adb command exists
+              await execAsync('command -v adb');
+              
+              // Check if device is connected to ADB
+              const adbDevices = await execAsync('adb devices');
+              const deviceLines = adbDevices.stdout.split('\n').filter(line => 
+                line.trim() && !line.includes('List of devices') && line.includes('device')
+              );
+              
+              if (deviceLines.length === 0) {
+                throw new Error('No ADB devices connected');
+              }
+              
+              this.loggingService.log(
+                `Found ${deviceLines.length} ADB device(s) connected, attempting reboot`,
+                'INFO',
+                'actions',
+              );
+              
+              // Try adb reboot (more direct than adb shell reboot)
+              await execAsync('adb reboot');
+              this.loggingService.log(
+                '✅ ADB reboot command sent successfully',
+                'INFO',
+                'actions',
+              );
               return; // If successful, exit early
             } catch (adbError) {
               this.loggingService.log(
-                'ADB reboot failed, trying next method',
+                `ADB reboot failed: ${adbError.message}`,
                 'DEBUG',
                 'actions',
               );
+              
+              // Fallback: try adb shell reboot as secondary method
+              try {
+                this.loggingService.log(
+                  'Trying ADB shell reboot as fallback',
+                  'DEBUG',
+                  'actions',
+                );
+                await execAsync('adb shell reboot');
+                this.loggingService.log(
+                  '✅ ADB shell reboot command sent successfully',
+                  'INFO',
+                  'actions',
+                );
+                return;
+              } catch (adbShellError) {
+                this.loggingService.log(
+                  `ADB shell reboot also failed: ${adbShellError.message}`,
+                  'DEBUG',
+                  'actions',
+                );
+              }
             }
 
             // Fallback to Android broadcast method
             this.loggingService.log(
-              'Using Android broadcast reboot command',
+              'All root/ADB methods failed, using Android broadcast reboot command',
               'DEBUG',
               'actions',
             );
