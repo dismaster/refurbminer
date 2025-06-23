@@ -535,59 +535,73 @@ export class ActionsService implements OnModuleInit {
         process.env.USERPROFILE ||
         '/data/data/com.termux/files/home';
 
-      // Create an array of possible script paths to check
-      const possibleScriptPaths = [
-        `${homeDir}/update_refurbminer.sh`, // In home directory
-        `${homeDir}/refurbminer/update_refurbminer.sh`, // In refurbminer sub-directory
-        `${process.cwd()}/update_refurbminer.sh`, // In current working directory
-        '/data/data/com.termux/files/home/update_refurbminer.sh', // Hardcoded Termux path
-      ];
+      // Always download the latest update script from GitHub
+      const updateScriptPath = `${homeDir}/update_refurbminer.sh`;
+      const scriptUrl = 'https://raw.githubusercontent.com/dismaster/refurbminer_tools/refs/heads/main/update_refurbminer.sh';
+      
+      this.loggingService.log(
+        '⬇️ Downloading latest update script from GitHub...',
+        'INFO',
+        'actions',
+      );
 
-      // Find the first script path that exists
-      let updateScriptPath: string | null = null;
-      for (const path of possibleScriptPaths) {
-        try {
-          await promisify(fs.access)(path, fs.constants.F_OK);
-          updateScriptPath = path;
+      // Remove existing script if it exists to ensure we get the latest version
+      try {
+        if (fs.existsSync(updateScriptPath)) {
+          fs.unlinkSync(updateScriptPath);
           this.loggingService.log(
-            `✅ Found update script at: ${updateScriptPath}`,
-            'INFO',
+            '🗑️ Removed existing update script to ensure latest version',
+            'DEBUG',
             'actions',
           );
-          break;
-        } catch (err) {
-          // Continue checking other paths
         }
-      }
-
-      // If no script found, try to create one
-      if (!updateScriptPath) {
+      } catch (removeError) {
         this.loggingService.log(
-          '⚠️ No update script found, attempting to download...',
+          `⚠️ Could not remove existing script: ${removeError.message}`,
           'WARN',
           'actions',
         );
+      }
 
-        // Create default path
-        updateScriptPath = `${homeDir}/update_refurbminer.sh`;
-
-        // Try to download the script from the repository
+      // Download the latest script from the repository
+      try {
+        await execAsync(
+          `wget -q -O ${updateScriptPath} "${scriptUrl}"`,
+        );
+        this.loggingService.log(
+          '✅ Downloaded latest update script successfully',
+          'INFO',
+          'actions',
+        );
+      } catch (downloadError) {
+        this.loggingService.log(
+          `❌ Failed to download update script: ${downloadError.message}`,
+          'ERROR',
+          'actions',
+        );
+        
+        // Try curl as fallback
         try {
+          this.loggingService.log(
+            '🔄 Trying curl as fallback download method...',
+            'DEBUG',
+            'actions',
+          );
           await execAsync(
-            `wget -q -O ${updateScriptPath} https://raw.githubusercontent.com/dismaster/refurbminer/refs/heads/master/update_refurbminer.sh`,
+            `curl -s -o ${updateScriptPath} "${scriptUrl}"`,
           );
           this.loggingService.log(
-            '✅ Downloaded update script successfully',
+            '✅ Downloaded update script using curl',
             'INFO',
             'actions',
           );
-        } catch (downloadError) {
+        } catch (curlError) {
           this.loggingService.log(
-            `❌ Failed to download update script: ${downloadError.message}`,
+            `❌ Failed to download with curl: ${curlError.message}`,
             'ERROR',
             'actions',
           );
-          throw new Error('Could not find or download update script');
+          throw new Error('Could not download update script with wget or curl');
         }
       }
 
