@@ -624,7 +624,7 @@ export class ActionsService implements OnModuleInit {
         const wrapperPath = `${homeDir}/update_wrapper.sh`;
         const logPath = `${homeDir}/update_log.txt`;
         
-        const wrapperContent = `#!/data/data/com.termux/files/usr/bin/bash
+const wrapperContent = `#!/data/data/com.termux/files/usr/bin/bash
 # RefurbMiner Termux Update Wrapper Script
 # Generated at $(date)
 
@@ -641,6 +641,19 @@ log_message() {
 
 log_message "Starting RefurbMiner update process in Termux..."
 
+# Set environment variables for better Termux compatibility
+export npm_config_target_platform=android
+export npm_config_target_arch=arm64
+export npm_config_cache=/data/data/com.termux/files/home/.npm
+export npm_config_prefer_offline=true
+
+# Pre-install known problematic packages with Termux-specific handling
+log_message "Preparing Termux environment for update..."
+
+# Clear npm cache to avoid potential conflicts
+log_message "Clearing npm cache..."
+npm cache clean --force >> ${logPath} 2>&1 || true
+
 # Execute the update script with full bash environment and save output
 log_message "Executing update script: ${updateScriptPath}"
 bash "${updateScriptPath}" >> ${logPath} 2>&1
@@ -653,6 +666,28 @@ log_message "Update script completed with exit code: $UPDATE_EXIT_CODE"
 if [ $UPDATE_EXIT_CODE -eq 0 ]; then
     log_message "✅ Update completed successfully!"
     
+    # Additional Termux-specific post-update steps
+    log_message "Running post-update Termux optimizations..."
+    
+    # Navigate to the refurbminer directory for post-update steps
+    cd /data/data/com.termux/files/home/refurbminer 2>/dev/null || cd ~/refurbminer 2>/dev/null || true
+    
+    if [ -d "node_modules/@swc/core" ] && [ ! -f "node_modules/@swc/core/.termux-fixed" ]; then
+        log_message "Applying Termux compatibility fixes for @swc/core..."
+        
+        # Try to install the wasm fallback explicitly if native bindings failed
+        npm install @swc/wasm --save-optional >> ${logPath} 2>&1 || true
+        
+        # Mark as fixed to avoid repeating this
+        touch "node_modules/@swc/core/.termux-fixed" 2>/dev/null || true
+        
+        log_message "Applied @swc/core compatibility fixes"
+    fi
+    
+    # Run a quick dependency audit and fix if possible
+    log_message "Running npm audit fix (non-breaking changes only)..."
+    npm audit fix --only=prod >> ${logPath} 2>&1 || true
+    
     # Verify that RefurbMiner is running in screen session
     sleep 3
     if screen -list 2>/dev/null | grep -q "refurbminer"; then
@@ -664,6 +699,12 @@ if [ $UPDATE_EXIT_CODE -eq 0 ]; then
     fi
 else
     log_message "❌ Update failed with exit code $UPDATE_EXIT_CODE"
+    
+    # Try to provide helpful error information
+    if grep -q "@swc/core" ${logPath}; then
+        log_message "Note: @swc/core warnings are normal on Termux and don't prevent operation"
+    fi
+    
     termux-notification --title "RefurbMiner Update Failed" --content "Update script failed with exit code $UPDATE_EXIT_CODE" || true
 fi
 
