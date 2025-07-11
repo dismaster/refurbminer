@@ -1,135 +1,374 @@
 {
   "status": "active",
+  "appVersion": "1.1.0",
   "minerSoftware": {
     "name": "ccminer",
     "version": "3.8.3",
     "algorithm": "verus",
-    "hashrate": 6275.98,
-    "acceptedShares": 245,
-    "rejectedShares": 4,
-    "uptime": 5763,
-    "averageShareRate": 2.551,
-    "solvedBlocks": 0
+    "hashrate": 3644780,
+    "acceptedShares": 11,
+    "rejectedShares": 0,
+    "uptime": 360,
+    "solvedBlocks": 0,
+    "difficulty": 524280,
+    "miningStatus": "active"
   },
   "pool": {
-    "name": "RG3D Pool",
-    "url": "stratum+tcp://pool.rg3d.eu:3956",
-    "user": "RRV4nWAxg9dVLY1vavmpGKq3s3N8wMHqZy.DONATION",
-    "acceptedShares": 245,
-    "rejectedShares": 4,
+    "name": "RefurbMiner Verus Pool",
+    "url": "stratum+tcp://pool.refurbminer.de:3956",
+    "user": "REEwkwQfTvNZb3f8r7Hj9rTFXt3qu6svA9.Donation",
+    "acceptedShares": 11,
+    "rejectedShares": 0,
     "staleShares": 0,
-    "ping": 10,
-    "uptime": 5527
+    "ping": 11,
+    "uptime": 266
   },
   "deviceInfo": {
-    "hwBrand": "RASPBERRY",
-    "hwModel": "PI 5",
+    "hwBrand": "samsung",
+    "hwModel": "SM-G960F",
     "architecture": "arm64",
-    "os": "Debian GNU/Linux 12 (bookworm)",
-    "cpuCount": 4,
+    "os": "Android 12 (API 32)",
+    "cpuCount": 8,
     "cpuModel": [
       {
-        "model": "Cortex-A76",
+        "model": "Cortex-A55",
         "coreId": 0,
-        "maxMHz": 3100,
-        "minMHz": 1500,
-        "khs": 184.36752905599042
+        "maxMHz": 1794,
+        "minMHz": 455,
+        "hashrate": 0
       },
       {
-        "model": "Cortex-A76",
+        "model": "Cortex-A55",
         "coreId": 1,
-        "maxMHz": 3100,
-        "minMHz": 1500,
-        "khs": 361.9393165055382
+        "maxMHz": 1794,
+        "minMHz": 455,
+        "hashrate": 575260
       },
       {
-        "model": "Cortex-A76",
+        "model": "Cortex-A55",
         "coreId": 2,
-        "maxMHz": 3100,
-        "minMHz": 1500,
-        "khs": 113.61920020982397
+        "maxMHz": 1794,
+        "minMHz": 455,
+        "hashrate": 572150
       },
       {
-        "model": "Cortex-A76",
+        "model": "Cortex-A55",
         "coreId": 3,
-        "maxMHz": 3100,
-        "minMHz": 1500,
-        "khs": 387.0924276533737
+        "maxMHz": 1794,
+        "minMHz": 455,
+        "hashrate": 331850
+      },
+      {
+        "model": "exynos-m3",
+        "coreId": 4,
+        "maxMHz": 2704,
+        "minMHz": 650,
+        "hashrate": 490690
+      },
+      {
+        "model": "exynos-m3",
+        "coreId": 5,
+        "maxMHz": 2704,
+        "minMHz": 650,
+        "hashrate": 0
+      },
+      {
+        "model": "exynos-m3",
+        "coreId": 6,
+        "maxMHz": 2704,
+        "minMHz": 650,
+        "hashrate": 656420
+      },
+      {
+        "model": "exynos-m3",
+        "coreId": 7,
+        "maxMHz": 2704,
+        "minMHz": 650,
+        "hashrate": 667440
       }
     ],
-    "cpuTemperature": 52.9,
-    "totalMemory": 4241637376,
-    "freeMemory": 3691790336,
-    "totalStorage": 15071420416,
-    "freeStorage": 1983115264,
-    "adbEnabled": false,
-    "suAvailable": false
+    "cpuTemperature": 81,
+    "systemUptime": 948008,
+    "totalMemory": 3789295616,
+    "freeMemory": 1509539840,
+    "totalStorage": 4489658368,
+    "freeStorage": 2899976192,
+    "adbEnabled": true,
+    "suAvailable": true
   },
   "network": {
-    "primaryIp": "10.0.10.148",
-    "externalIp": "94.31.113.153",
-    "gateway": "10.0.10.1\n10.0.30.1",
+    "primaryIp": "10.0.10.150",
+    "externalIp": "94.31.113.171",
+    "gateway": "10.0.10.1",
     "interfaces": [
-      "eth0",
-      "lo",
-      "wlan0"
-    ]
+      "eth0"
+    ],
+    "ping": {
+      "refurbminer": 9.194
+    },
+    "traffic": {
+      "rxBytes": 887197304,
+      "txBytes": 481874086,
+      "rxSpeed": 721,
+      "txSpeed": 596,
+      "timestamp": 1752246490777
+    }
   },
   "battery": {
     "health": "GOOD",
     "percentage": 100,
-    "plugged": "AC",
-    "status": "CHARGING",
-    "temperature": 0,
-    "current": 0
+    "plugged": "UNPLUGGED",
+    "status": "DISCHARGING",
+    "temperature": -20,
+    "current": -1086
   },
   "schedules": {
     "mining": {
-      "start": null,
-      "stop": null
+      "enabled": false,
+      "periods": []
     },
     "restarts": []
   },
   "historicalHashrate": [
     {
-      "timestamp": 1739532376,
-      "khs": 6276.57
+      "timestamp": 1752244566,
+      "hashrate": 4321240
     },
     {
-      "timestamp": 1739532423,
-      "khs": 6276.4
+      "timestamp": 1752244603,
+      "hashrate": 4321100
     },
     {
-      "timestamp": 1739532436,
-      "khs": 6276.64
+      "timestamp": 1752244626,
+      "hashrate": 4321100
     },
     {
-      "timestamp": 1739532483,
-      "khs": 6276.91
+      "timestamp": 1752244663,
+      "hashrate": 4322050
     },
     {
-      "timestamp": 1739532496,
-      "khs": 6276.91
+      "timestamp": 1752244686,
+      "hashrate": 4330400
     },
     {
-      "timestamp": 1739532543,
-      "khs": 6276.24
+      "timestamp": 1752244716,
+      "hashrate": 4334300
     },
     {
-      "timestamp": 1739532556,
-      "khs": 6276.24
+      "timestamp": 1752244748,
+      "hashrate": 4334380
     },
     {
-      "timestamp": 1739532588,
-      "khs": 6275.98
+      "timestamp": 1752244776,
+      "hashrate": 4334380
     },
     {
-      "timestamp": 1739532589,
-      "khs": 6275.98
+      "timestamp": 1752244806,
+      "hashrate": 4334380
     },
     {
-      "timestamp": 1739532603,
-      "khs": 6275.98
+      "timestamp": 1752244843,
+      "hashrate": 4333960
+    },
+    {
+      "timestamp": 1752244866,
+      "hashrate": 4333960
+    },
+    {
+      "timestamp": 1752244896,
+      "hashrate": 4336650
+    },
+    {
+      "timestamp": 1752244934,
+      "hashrate": 4336650
+    },
+    {
+      "timestamp": 1752244956,
+      "hashrate": 4336650
+    },
+    {
+      "timestamp": 1752244986,
+      "hashrate": 4323390
+    },
+    {
+      "timestamp": 1752245023,
+      "hashrate": 4315530
+    },
+    {
+      "timestamp": 1752245046,
+      "hashrate": 4313860
+    },
+    {
+      "timestamp": 1752245083,
+      "hashrate": 4313860
+    },
+    {
+      "timestamp": 1752245106,
+      "hashrate": 4313860
+    },
+    {
+      "timestamp": 1752245143,
+      "hashrate": 4317910
+    },
+    {
+      "timestamp": 1752245166,
+      "hashrate": 4317910
+    },
+    {
+      "timestamp": 1752245196,
+      "hashrate": 4298880
+    },
+    {
+      "timestamp": 1752245234,
+      "hashrate": 4298880
+    },
+    {
+      "timestamp": 1752245256,
+      "hashrate": 4319510
+    },
+    {
+      "timestamp": 1752245287,
+      "hashrate": 4319790
+    },
+    {
+      "timestamp": 1752245318,
+      "hashrate": 4322340
+    },
+    {
+      "timestamp": 1752245346,
+      "hashrate": 4322800
+    },
+    {
+      "timestamp": 1752245384,
+      "hashrate": 4322730
+    },
+    {
+      "timestamp": 1752245406,
+      "hashrate": 4338170
+    },
+    {
+      "timestamp": 1752245439,
+      "hashrate": 4337310
+    },
+    {
+      "timestamp": 1752245466,
+      "hashrate": 4337310
+    },
+    {
+      "timestamp": 1752245497,
+      "hashrate": 4342790
+    },
+    {
+      "timestamp": 1752245534,
+      "hashrate": 4342790
+    },
+    {
+      "timestamp": 1752245556,
+      "hashrate": 4343560
+    },
+    {
+      "timestamp": 1752245586,
+      "hashrate": 4343560
+    },
+    {
+      "timestamp": 1752245619,
+      "hashrate": 4343340
+    },
+    {
+      "timestamp": 1752245737,
+      "hashrate": 710670
+    },
+    {
+      "timestamp": 1752245753,
+      "hashrate": 710670
+    },
+    {
+      "timestamp": 1752245789,
+      "hashrate": 710670
+    },
+    {
+      "timestamp": 1752245820,
+      "hashrate": 710670
+    },
+    {
+      "timestamp": 1752245849,
+      "hashrate": 710670
+    },
+    {
+      "timestamp": 1752245880,
+      "hashrate": 710670
+    },
+    {
+      "timestamp": 1752245909,
+      "hashrate": 1257900
+    },
+    {
+      "timestamp": 1752245933,
+      "hashrate": 1922190
+    },
+    {
+      "timestamp": 1752245976,
+      "hashrate": 1922190
+    },
+    {
+      "timestamp": 1752245993,
+      "hashrate": 1812100
+    },
+    {
+      "timestamp": 1752246036,
+      "hashrate": 1812100
+    },
+    {
+      "timestamp": 1752246053,
+      "hashrate": 1789200
+    },
+    {
+      "timestamp": 1752246089,
+      "hashrate": 1791900
+    },
+    {
+      "timestamp": 1752246199,
+      "hashrate": 350970
+    },
+    {
+      "timestamp": 1752246210,
+      "hashrate": 350970
+    },
+    {
+      "timestamp": 1752246251,
+      "hashrate": 350970
+    },
+    {
+      "timestamp": 1752246277,
+      "hashrate": 350970
+    },
+    {
+      "timestamp": 1752246311,
+      "hashrate": 1580960
+    },
+    {
+      "timestamp": 1752246329,
+      "hashrate": 2232490
+    },
+    {
+      "timestamp": 1752246378,
+      "hashrate": 3139060
+    },
+    {
+      "timestamp": 1752246389,
+      "hashrate": 3139060
+    },
+    {
+      "timestamp": 1752246431,
+      "hashrate": 3808430
+    },
+    {
+      "timestamp": 1752246457,
+      "hashrate": 3805620
+    },
+    {
+      "timestamp": 1752246491,
+      "hashrate": 3644780
     }
   ]
 }
