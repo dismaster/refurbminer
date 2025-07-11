@@ -1,0 +1,131 @@
+/* Button Styles */
+
+/* Gradient text effects */
+.gradient-text {
+  background: linear-gradient(135deg, #98e05f, #0de3ac);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.text-neon {
+  background: linear-gradient(135deg, #98e05f, #0de3ac);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  text-shadow: 0px 0px 10px rgba(13, 227, 172, 0.3);
+}
+
+.gradient-icon {
+  color: transparent;
+  background: linear-gradient(135deg, #98e05f, #0de3ac);
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+
+/* Hover Effects */
+.gradient-hover {
+  background: var(--neutral-bg);
+  position: relative;
+  transition: all 0.3s ease;
+  box-shadow: 4px 4px 8px var(--shadow-color),
+              -4px -4px 8px var(--highlight-color);
+}
+
+.gradient-hover:hover {
+  background: var(--hover-bg);
+  box-shadow: inset 4px 4px 8px var(--shadow-color),
+              inset -4px -4px 8px var(--highlight-color);
+}
+
+/* Social Button Styles */
+.Btn,
+.Btncults,
+.Btntwit,
+.Btninsta,
+.Btntwitter,
+.Btndiscord {
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background-color: transparent;
+  position: relative;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: all 0.3s;
+  overflow: visible;
+  z-index: 1;
+}
+
+.svgContainer,
+.svgContainercults,
+.svgContainertwit,
+.svgContainerinsta,
+.svgContainertwitter,
+.svgContainerdiscord {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: transparent;
+  backdrop-filter: blur(0px);
+  letter-spacing: 0.8px;
+  border-radius: 10px;
+  transition: all 0.3s;
+  border: 1px solid rgba(156, 156, 156, 0.466);
+  position: relative;
+  z-index: 2;
+}
+
+/* Update hover effects to include Twitter */
+.Btn:hover .BG,
+.Btncults:hover .BGcults,
+.Btntwit:hover .BGtwit,
+.Btninsta:hover .BGinsta,
+.Btntwitter:hover .BGtwitter,
+.Btndiscord:hover .BGdiscord {
+  transform: rotate(35deg);
+}
+
+.Btn:hover .svgContainer,
+.Btncults:hover .svgContainercults,
+.Btntwit:hover .svgContainertwit,
+.Btninsta:hover .svgContainerinsta,
+.Btntwitter:hover .svgContainertwitter,
+.Btndiscord:hover .svgContainerdiscord {
+  background-color: rgba(156, 156, 156, 0.466);
+  backdrop-filter: blur(4px);
+  border-color: rgba(226, 226, 226, 0.466);
+}
+
+.BG,
+.BGcults,
+.BGtwit,
+.BGinsta,
+.BGtwitter,
+.BGdiscord {
+  position: absolute;
+  content: "";
+  width: 100%;
+  height: 100%;
+  background: #24a1de;
+  z-index: 0;
+  border-radius: 10px;
+  pointer-events: none;
+  transition: transform 0.3s ease;
+  transform-origin: bottom;
+}
+
+.BGtwit { background: #181818; }
+
+.BGdiscord { background: #7289da; }
+
+.BGinsta { background: linear-gradient(45deg, #f09433 0%, #e6683c 25%, #dc2743 50%, #cc2366 75%, #bc1888 100%); }
+
+.BGtwitter { background: #000000; }
+
+.BGcults { background: #822ef5; }

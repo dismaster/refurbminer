@@ -1,0 +1,181 @@
+/* Theme Variables */
+:root {
+  --background: #ffffff;
+  --text-primary: #575859;
+  --text-secondary: #4b5563;
+  --hover-bg: #f3f4f6;
+  --border-color: #e5e7eb;
+  --accent: #98e05f;
+  --shadow-color: rgba(0, 0, 0, 0.1);
+  --highlight-color: rgba(255, 255, 255, 0.8);
+  --neutral-bg: #ffffff;
+  --text-gray-400: #9ca3af;
+  --text-gray-200: #e5e7eb;
+  --card-bg: #f8fafc;
+  /* Add RGB values separately for glassmorphism */
+  --card-bg-r: 248;
+  --card-bg-g: 250;
+  --card-bg-b: 252;
+  
+  /* Glassmorphic effect variables - preserve existing borders */
+  --glass-bg-opacity: 0.7;
+  --glass-blur: 10px;
+  --glass-shadow-intensity: 0.1;
+  --glass-tint-opacity: 0.08;
+  
+  --neutral-bg: #f1f5f9;
+  --border-color: #e2e8f0;
+  --loader-border: #e2e8f0;
+  --loader-bg: #f8fafc;
+  --loader-inner: #ffffff;
+  --loader-shadow-light: rgba(255, 255, 255, 0.8);
+  --loader-shadow-dark: rgba(0, 0, 0, 0.1);
+  --loader-gradient-start: #ff7402;
+  --loader-gradient-mid: #ffe700;
+  --loader-gradient-end: #fff55e;
+  --header-bg: #f8fafc;
+  --row-hover-bg: #f5f6f7;
+  --scrollbar-gradient-end: #0de3ac;
+  --scrollbar-highlight: rgba(255, 255, 255, 0.2);
+  --scrollbar-shadow: rgba(0, 0, 0, 0.2);
+  --input-bg: #ffffff;
+  --dropdown-bg: #ffffff;
+  
+  /* QR code styling variables */
+  --qrcode-bg: #ffffff;
+  --qrcode-fg: #000000;
+  --qrcode-padding: 16px;
+}
+
+/* Dark Mode Theme */
+:root[class~="dark"] {
+  --background: #12131a;
+  --text-primary: #ffffff;
+  --text-secondary: #ececec;
+  --card-bg: #1E1F29;
+  /* Add RGB values separately for glassmorphism */
+  --card-bg-r: 30;
+  --card-bg-g: 31;
+  --card-bg-b: 41;
+  
+  /* Glassmorphic effect variables for dark mode */
+  --glass-bg-opacity: 0.2;
+  --glass-blur: 12px;
+  --glass-shadow-intensity: 0.3;
+  --glass-tint-opacity: 0.12;
+  
+  --accent: #98e05f;
+  --hover-bg: #12131a;
+  --border-color: #374151;
+  --shadow-color: rgba(0, 0, 0, 0.5);
+  --highlight-color: rgba(255, 255, 255, 0.05);
+  --neutral-bg: #1E1F29;
+  --text-gray-400: #9ca3af;
+  --text-gray-200: #e5e7eb;
+  --loader-border: #282828;
+  --loader-bg: #212121;
+  --loader-inner: #1E1F29;
+  --loader-shadow-light: rgba(255, 255, 255, 0.1);
+  --loader-shadow-dark: rgba(0, 0, 0, 0.4);
+  --loader-gradient-start: #ff7402;
+  --loader-gradient-mid: #ffe700;
+  --loader-gradient-end: #fff55e;
+  --header-bg: #1a1b23;
+  --row-hover-bg: #12131a;
+  --scrollbar-gradient-end: #0de3ac;
+  --scrollbar-highlight: rgba(255, 255, 255, 0.1);
+  --scrollbar-shadow: rgba(0, 0, 0, 0.3);
+  --input-bg: #12131a;
+  --dropdown-bg: #12131a;
+  
+  /* QR code styling stays the same for dark mode - we need it to be visible */
+  --qrcode-bg: #ffffff;
+  --qrcode-fg: #000000;
+}
+
+/* Mood-based themes */
+:root[data-mood="chill"] {
+  --accent: #98e05f;
+  --scrollbar-gradient-end: #0de3ac;
+  --accent-r: 152;
+  --accent-g: 224;
+  --accent-b: 95;
+}
+
+:root[data-mood="focus"] {
+  --accent: #86F3FF;
+  --scrollbar-gradient-end: #4ED2E6;
+  --accent-r: 134;
+  --accent-g: 243;
+  --accent-b: 255;
+}
+
+:root[data-mood="energetic"] {
+  --accent: #FF5B5B;
+  --scrollbar-gradient-end: #FFA500;
+  --accent-r: 255;
+  --accent-g: 91;
+  --accent-b: 91;
+}
+
+:root[data-mood="night-owl"] {
+  --accent: #A259FF;
+  --scrollbar-gradient-end: #6D28D9;
+  --accent-r: 162;
+  --accent-g: 89;
+  --accent-b: 255;
+}
+
+/* Glassmorphic styles - with preserved border colors */
+.glassmorphic {
+  background-color: rgba(var(--card-bg-r), var(--card-bg-g), var(--card-bg-b), var(--glass-bg-opacity)) !important;
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  /* Don't override border properties to preserve gradient borders */
+  box-shadow: 0 8px 32px rgba(0, 0, 0, var(--glass-shadow-intensity));
+  position: relative;
+  overflow: hidden;
+}
+
+/* Add tinted overlay based on mood */
+.glassmorphic::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(var(--accent-r, 152), var(--accent-g, 224), var(--accent-b, 95), var(--glass-tint-opacity));
+  z-index: -1;
+  pointer-events: none;
+}
+
+/* For more vibrant effect */
+.glassmorphic.vibrant {
+  --glass-tint-opacity: 0.15;
+  /* Don't override border color */
+}
+
+/* Apply glassmorphism to elements with bg-[var(--card-bg)] */
+[class*="bg-[var(--card-bg)]"] {
+  background-color: rgba(var(--card-bg-r), var(--card-bg-g), var(--card-bg-b), var(--glass-bg-opacity)) !important;
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  /* Don't modify borders to preserve gradient effects */
+  box-shadow: 0 8px 32px rgba(0, 0, 0, var(--glass-shadow-intensity));
+  position: relative;
+  overflow: hidden;
+}
+
+/* Add tinted overlay based on mood for bg-[var(--card-bg)] elements */
+[class*="bg-[var(--card-bg)]"]::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(var(--accent-r, 152), var(--accent-g, 224), var(--accent-b, 95), var(--glass-tint-opacity));
+  z-index: -1;
+  pointer-events: none;
+}

@@ -17,6 +17,9 @@ interface ScheduledRestart {
   days?: string[]; // Optional array of days
 }
 
+// Support both string format (from config file) and object format (from API)
+type ScheduledRestartEntry = string | ScheduledRestart;
+
 // Interface for API response to ensure type safety
 interface ApiConfigResponse {
   minerId?: string;
@@ -35,7 +38,7 @@ interface ApiConfigResponse {
       enabled?: boolean;
       periods?: SchedulePeriod[];
     };
-    scheduledRestarts?: ScheduledRestart[];
+    scheduledRestarts?: ScheduledRestartEntry[];
   };
 }
 
@@ -57,7 +60,7 @@ interface Config {
       enabled: boolean;
       periods: SchedulePeriod[];
     };
-    scheduledRestarts: ScheduledRestart[]; // Array of objects like [{time: "16:00", days: ["monday"]}]
+    scheduledRestarts: ScheduledRestartEntry[]; // Array of strings like ["03:00"] or objects like [{time: "16:00", days: ["monday"]}]
   };
 }
 
@@ -200,19 +203,7 @@ export class ConfigService implements OnModuleInit {
 
   saveConfig(config: Config): boolean {
     try {
-      // Create a backup of the current config file if it exists
-      if (fs.existsSync(this.configPath)) {
-        const timestamp = Date.now();
-        const backupPath = `${this.configPath}.${timestamp}.bak`;
-        fs.copyFileSync(this.configPath, backupPath);
-        this.loggingService.log(
-          `📦 Config backup created: ${backupPath}`,
-          'DEBUG',
-          'config',
-        );
-      }
-      
-      // Write new config
+      // Write new config first
       fs.writeFileSync(this.configPath, JSON.stringify(config, null, 2));
       
       // Update cache with the new config instead of invalidating it
@@ -220,14 +211,14 @@ export class ConfigService implements OnModuleInit {
       this.configCache = config;
       this.lastCacheTime = Date.now();
       
+      // Only create backup if not too recent
+      this.createBackupIfNeeded();
+      
       this.loggingService.log(
         '✅ Config saved successfully',
         'DEBUG',
         'config',
       );
-      
-      // Clean up old backups
-      this.cleanupConfigBackups();
       
       return true;
     } catch (error) {
@@ -479,52 +470,119 @@ export class ConfigService implements OnModuleInit {
   /**
    * Cleans up old backup files, keeping only the most recent ones
    */
-  private cleanupConfigBackups(): void {
+  private async cleanupConfigBackups(): Promise<void> {
     try {
       const dirPath = path.dirname(this.configPath);
       const fileName = path.basename(this.configPath);
 
-      // Get all files in the directory
-      const files = fs.readdirSync(dirPath);
+      // Check if directory exists first
+      if (!fs.existsSync(dirPath)) {
+        this.loggingService.log(`Directory does not exist: ${dirPath}`, 'DEBUG', 'config');
+        return;
+      }
 
-      // Filter for backup files matching our pattern
+      // Get all files in the directory with timeout protection
+      const files = await Promise.race([
+        fs.promises.readdir(dirPath),
+        new Promise<string[]>((_, reject) => 
+          setTimeout(() => reject(new Error('Directory read timeout')), 5000)
+        )
+      ]);
+
+      // Filter for backup files matching our pattern with better validation
       const backupFiles = files
-        .filter((file) => file.startsWith(`${fileName}.`) && file.endsWith('.bak'))
-        .map((file) => ({
-          name: file,
-          path: path.join(dirPath, file),
-          // Extract timestamp from filename
-          timestamp:
-            parseInt(file.replace(`${fileName}.`, '').replace('.bak', ''), 10) ||
-            0,
-        }))
+        .filter(file => {
+          // More strict pattern matching
+          const pattern = new RegExp(`^${fileName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.\\d+\\.bak$`);
+          return pattern.test(file);
+        })
+        .map(file => {
+          // Extract timestamp more safely
+          const timestampMatch = file.match(/\.(\d+)\.bak$/);
+          const timestamp = timestampMatch ? parseInt(timestampMatch[1], 10) : 0;
+          
+          // Validate timestamp (should be reasonable Unix timestamp)
+          const isValidTimestamp = timestamp > 1000000000 && timestamp < Date.now() + 86400000;
+          
+          return {
+            name: file,
+            path: path.join(dirPath, file),
+            timestamp: isValidTimestamp ? timestamp : 0,
+            isValid: isValidTimestamp
+          };
+        })
+        .filter(file => file.isValid) // Only keep files with valid timestamps
         .sort((a, b) => b.timestamp - a.timestamp); // Sort newest first
+
+      this.loggingService.log(
+        `Found ${backupFiles.length} valid config backup files`,
+        'DEBUG',
+        'config',
+      );
 
       // Remove older backups if we have more than MAX_BACKUPS
       if (backupFiles.length > this.MAX_BACKUPS) {
-        backupFiles.slice(this.MAX_BACKUPS).forEach((file) => {
+        const filesToDelete = backupFiles.slice(this.MAX_BACKUPS);
+        
+        // Delete files in parallel with individual error handling
+        const deletePromises = filesToDelete.map(async (file) => {
           try {
-            fs.unlinkSync(file.path);
+            // Check if file still exists before attempting to delete
+            if (fs.existsSync(file.path)) {
+              await fs.promises.unlink(file.path);
+              this.loggingService.log(
+                `🗑️ Removed old config backup: ${file.name}`,
+                'DEBUG',
+                'config',
+              );
+              return { success: true, file: file.name };
+            } else {
+              this.loggingService.log(
+                `Config backup file already removed: ${file.name}`,
+                'DEBUG',
+                'config',
+              );
+              return { success: true, file: file.name, skipped: true };
+            }
+          } catch (error) {
             this.loggingService.log(
-              `🗑️ Removed old config backup: ${file.name}`,
-              'DEBUG',
-              'config',
-            );
-          } catch (error: any) {
-            this.loggingService.log(
-              `Failed to delete backup ${file.name}: ${error.message}`,
+              `Failed to delete config backup ${file.name}: ${error instanceof Error ? error.message : 'Unknown error'}`,
               'WARN',
               'config',
             );
+            return { success: false, file: file.name, error };
           }
         });
+        
+        // Wait for all deletions with timeout protection
+        const results = await Promise.allSettled(
+          deletePromises.map(p => 
+            Promise.race([
+              p,
+              new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('Delete timeout')), 10000)
+              )
+            ])
+          )
+        );
+        
+        // Log summary of cleanup results
+        const successful = results.filter(r => r.status === 'fulfilled').length;
+        const failed = results.filter(r => r.status === 'rejected').length;
+        
+        this.loggingService.log(
+          `Config backup cleanup completed: ${successful} successful, ${failed} failed`,
+          failed > 0 ? 'WARN' : 'DEBUG',
+          'config',
+        );
       }
-    } catch (error: any) {
+    } catch (error) {
       this.loggingService.log(
-        `❌ Failed to clean up config backups: ${error.message}`,
+        `❌ Failed to clean up config backups: ${error instanceof Error ? error.message : 'Unknown error'}`,
         'ERROR',
         'config',
       );
+      // Don't throw error to prevent blocking the main config process
     }
   }
 
@@ -879,6 +937,61 @@ export class ConfigService implements OnModuleInit {
         'config',
       );
       return false;
+    }
+  }
+
+  /**
+   * Create a backup if it hasn't been created recently
+   */
+  private createBackupIfNeeded(): void {
+    try {
+      if (!fs.existsSync(this.configPath)) {
+        return;
+      }
+
+      // Check if we created a backup in the last 5 minutes
+      const fiveMinutesAgo = Date.now() - (5 * 60 * 1000);
+      const dirPath = path.dirname(this.configPath);
+      const fileName = path.basename(this.configPath);
+      
+      const files = fs.readdirSync(dirPath);
+      const recentBackups = files.filter(file => {
+        if (!file.startsWith(`${fileName}.`) || !file.endsWith('.bak')) return false;
+        
+        const timestampMatch = file.match(/\.(\d+)\.bak$/);
+        if (!timestampMatch) return false;
+        
+        const timestamp = parseInt(timestampMatch[1], 10);
+        return timestamp > fiveMinutesAgo;
+      });
+
+      if (recentBackups.length === 0) {
+        const timestamp = Date.now();
+        const backupPath = `${this.configPath}.${timestamp}.bak`;
+        fs.copyFileSync(this.configPath, backupPath);
+        this.loggingService.log(
+          `📦 Config backup created: ${backupPath}`,
+          'DEBUG',
+          'config',
+        );
+
+        // Clean up old backups asynchronously to prevent blocking
+        setImmediate(() => {
+          this.cleanupConfigBackups().catch(error => {
+            this.loggingService.log(
+              `Background config backup cleanup failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+              'WARN',
+              'config',
+            );
+          });
+        });
+      }
+    } catch (error) {
+      this.loggingService.log(
+        `Failed to create config backup: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'WARN',
+        'config',
+      );
     }
   }
 }

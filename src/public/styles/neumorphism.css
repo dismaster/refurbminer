@@ -1,0 +1,286 @@
+/* Neumorphic UI Styles */
+
+/* Neumorphic Soft UI Effect */
+.soft-glow {
+  /* Background is now optional */
+  border-radius: 15px;
+  padding: 20px;
+  box-shadow: 8px 8px 15px var(--shadow-color),
+              -8px -8px 15px var(--highlight-color);
+  transition: all 0.3s ease-in-out;
+}
+
+/* Apply background only if not combined with a gradient class */
+.soft-glow:not([class*="stat-gradient-"]):not([class*="pool-gradient-"]) {
+  background: var(--card-bg);
+}
+
+.soft-glow:hover {
+  box-shadow: 12px 12px 20px var(--shadow-color),
+              -12px -12px 20px var(--highlight-color);
+}
+
+/* Neumorphic Button */
+.neu-button {
+  background: var(--neutral-bg);
+  border-radius: 10px;
+  padding: 12px;
+  box-shadow: 5px 5px 10px var(--shadow-color),
+              -5px -5px 10px var(--highlight-color);
+  transition: all 0.2s ease-in-out;
+}
+
+.neu-button:active {
+  box-shadow: inset 5px 5px 10px var(--shadow-color),
+              inset -5px -5px 10px var(--highlight-color);
+}
+
+/* Neumorphic Border */
+.gradient-border {
+  border: none;
+  box-shadow: 5px 0 10px rgba(0, 0, 0, 0.5),
+              -5px 0 10px rgba(255, 255, 255, 0.05);
+}
+
+/* Neumorphic Input */
+.neu-input {
+  background: var(--neutral-bg);
+  border-radius: 10px;
+  padding: 12px;
+  box-shadow: inset 4px 4px 8px var(--shadow-color),
+              inset -4px -4px 8px var(--highlight-color);
+}
+
+/* Active State */
+.neu-active {
+  background: var(--neutral-bg);
+  box-shadow: inset 4px 4px 8px var(--shadow-color),
+              inset -4px -4px 8px var(--highlight-color),
+              0 0 15px var(--accent);
+  position: relative;
+}
+
+.neu-active::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 4px;
+  height: 70%;
+  background: linear-gradient(135deg, #98e05f, #0de3ac);
+  border-radius: 0 4px 4px 0;
+}
+
+/* Base card style without gradient border */
+.card-base {
+  background-color: var(--card-bg);
+  position: relative;
+  border-radius: 1rem;
+}
+
+/* Gradient Border - only for outer cards */
+.gradient-border-glow {
+  border: 0.5px solid transparent;
+  background-color: var(--card-bg);
+  position: relative;
+  z-index: 1;
+}
+
+.gradient-border-glow::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  padding: 0.4px;
+  border-radius: 1rem;
+  background: linear-gradient(135deg, var(--accent), #0de3ac);
+  -webkit-mask: 
+    linear-gradient(#fff 0 0) content-box, 
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  z-index: -1;
+  pointer-events: none;
+}
+
+/* Inner card style */
+.inner-card {
+  background-color: var(--neutral-bg);
+  border-radius: 0.75rem;
+}
+
+/* Larger neumorphic button for landing page */
+.neu-button-large {
+  background: var(--neutral-bg);
+  border-radius: 16px;
+  padding: 16px;
+  box-shadow: 8px 8px 16px var(--shadow-color),
+              -8px -8px 16px var(--highlight-color);
+  transition: all 0.3s ease-in-out;
+}
+
+.neu-button-large:active {
+  box-shadow: inset 8px 8px 16px var(--shadow-color),
+              inset -8px -8px 16px var(--highlight-color);
+}
+
+/* Modern Toggle Switch Styles for 2026 */
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 60px;
+  height: 30px;
+  margin: 0;
+}
+
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: var(--neutral-bg);
+  border-radius: 34px;
+  transition: 0.4s;
+  box-shadow: inset 2px 2px 4px var(--shadow-color),
+              inset -2px -2px 4px var(--highlight-color);
+}
+
+.toggle-slider:before {
+  position: absolute;
+  content: "";
+  height: 22px;
+  width: 22px;
+  left: 4px;
+  bottom: 4px;
+  background: var(--background);
+  transition: 0.4s;
+  border-radius: 50%;
+  box-shadow: 2px 2px 4px var(--shadow-color),
+              -1px -1px 3px var(--highlight-color);
+}
+
+/* When toggle is checked */
+input:checked + .toggle-slider {
+  background: linear-gradient(135deg, var(--accent), #0de3ac);
+}
+
+input:checked + .toggle-slider:before {
+  transform: translateX(30px);
+}
+
+/* QR Code Container - adapts to theme */
+.qr-container {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.qr-code-wrapper {
+  background-color: var(--qrcode-bg);
+  padding: var(--qrcode-padding);
+  border-radius: 8px;
+  overflow: hidden;
+  /* Add subtle shadow for depth */
+  box-shadow: 0 4px 8px var(--shadow-color);
+}
+
+.secret-code-container {
+  background-color: var(--background);
+  border-radius: 8px;
+  padding: 12px;
+  margin-top: 16px;
+  width: 100%;
+  position: relative;
+  box-shadow: inset 2px 2px 4px var(--shadow-color),
+              inset -2px -2px 4px var(--highlight-color);
+}
+
+.secret-code {
+  font-family: monospace;
+  color: var(--accent);
+  letter-spacing: 1px;
+  width: 100%;
+  text-align: center;
+}
+
+/* CPU Mining Slider Styles */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 3px;
+  outline: none;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 20px;
+  width: 20px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+  box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--accent);
+  transition: all 0.3s ease;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.1);
+  box-shadow: 0 0 0 2px var(--background), 0 0 0 6px var(--accent), 0 0 15px rgba(var(--accent-r, 152), var(--accent-g, 224), var(--accent-b, 95), 0.3);
+}
+
+input[type="range"]::-webkit-slider-thumb:active {
+  transform: scale(1.15);
+  box-shadow: 0 0 0 2px var(--background), 0 0 0 8px var(--accent), 0 0 20px rgba(var(--accent-r, 152), var(--accent-g, 224), var(--accent-b, 95), 0.4);
+}
+
+input[type="range"]::-moz-range-thumb {
+  height: 20px;
+  width: 20px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+  border: 2px solid var(--background);
+  box-shadow: 0 0 0 2px var(--accent);
+  transition: all 0.3s ease;
+}
+
+input[type="range"]::-moz-range-thumb:hover {
+  transform: scale(1.1);
+  box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--accent), 0 0 15px rgba(var(--accent-r, 152), var(--accent-g, 224), var(--accent-b, 95), 0.3);
+}
+
+input[type="range"]::-moz-range-thumb:active {
+  transform: scale(1.15);
+  box-shadow: 0 0 0 2px var(--background), 0 0 0 6px var(--accent), 0 0 20px rgba(var(--accent-r, 152), var(--accent-g, 224), var(--accent-b, 95), 0.4);
+}
+
+input[type="range"]::-moz-range-track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--background);
+}
+
+/* Touch-friendly adjustments */
+@media (hover: none) and (pointer: coarse) {
+  input[type="range"]::-webkit-slider-thumb {
+    height: 24px;
+    width: 24px;
+  }
+  
+  input[type="range"]::-moz-range-thumb {
+    height: 24px;
+    width: 24px;
+  }
+}

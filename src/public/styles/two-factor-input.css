@@ -1,0 +1,78 @@
+/* Two Factor Input Styles */
+
+.two-factor-box {
+  position: relative;
+  border-radius: 8px;
+  transition: all 0.3s ease;
+  overflow: hidden;
+  backdrop-filter: blur(4px);
+}
+
+.two-factor-box.active {
+  box-shadow: 0 0 0 2px var(--accent), 0 0 15px rgba(var(--accent-rgb), 0.5);
+}
+
+.two-factor-box.filled {
+  background-color: rgba(var(--accent-rgb), 0.1);
+  border-color: var(--accent);
+  box-shadow: 0 0 10px 1px rgba(var(--accent-rgb), 0.25);
+}
+
+.two-factor-box.last-digit-filled {
+  background-color: rgba(var(--accent-rgb), 0.2);
+  border-color: var(--accent);
+  box-shadow: 0 0 15px 2px rgba(var(--accent-rgb), 0.5);
+}
+
+.two-factor-box input {
+  font-family: 'JetBrains Mono', monospace, sans-serif;
+  font-weight: 600;
+}
+
+.two-factor-container {
+  width: 100%;
+  padding: 8px 0;
+  background-color: transparent;
+  border-radius: 12px;
+  margin: 8px 0;
+}
+
+.shadow-glow-sm {
+  box-shadow: 0 0 8px 0px rgba(var(--accent-rgb), 0.4);
+}
+
+.shadow-glow-md {
+  box-shadow: 0 0 15px 2px rgba(var(--accent-rgb), 0.5);
+}
+
+.digit-counter {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  text-align: center;
+  padding-top: 6px;
+  display: flex;
+  justify-content: flex-end;
+  margin-right: 10px;
+}
+
+.digit-counter.complete {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+/* Add subtle pulsing animation for the active box */
+@keyframes subtle-pulse {
+  0% {
+    box-shadow: 0 0 5px 0px rgba(var(--accent-rgb), 0.2);
+  }
+  50% {
+    box-shadow: 0 0 10px 2px rgba(var(--accent-rgb), 0.4);
+  }
+  100% {
+    box-shadow: 0 0 5px 0px rgba(var(--accent-rgb), 0.2);
+  }
+}
+
+.two-factor-box.active {
+  animation: subtle-pulse 2s infinite;
+}

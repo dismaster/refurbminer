@@ -29,6 +29,10 @@ export class MinerManagerService
   public isManuallyStoppedByUser = false;
   private manualStopTime?: Date;
   private readonly MANUAL_STOP_TIMEOUT = 10 * 60 * 1000; // 10 minutes
+  
+  // Add restart cooldown to prevent too frequent restarts
+  private lastRestartTime?: Date;
+  private readonly RESTART_COOLDOWN = 5 * 60 * 1000; // 5 minutes between restarts
 
   constructor(
     private readonly loggingService: LoggingService,
@@ -221,15 +225,452 @@ export class MinerManagerService
         }
 
         void this.restartMiner();
+      } else if (this.shouldBeMining() && this.isMinerRunning()) {
+        // Enhanced health check: Check for errors in miner output
+        const hasErrors = await this.checkMinerOutput();
+        if (hasErrors) {
+          // Check if we're in restart cooldown period
+          const now = new Date();
+          if (this.lastRestartTime && 
+              now.getTime() - this.lastRestartTime.getTime() < this.RESTART_COOLDOWN) {
+            this.loggingService.log(
+              '⏳ Restart cooldown active, skipping restart to prevent too frequent restarts',
+              'DEBUG',
+              'miner-manager',
+            );
+            return;
+          }
+          
+          this.loggingService.log(
+            '⚠️ Miner errors detected in output, restarting miner',
+            'WARN',
+            'miner-manager',
+          );
+          void this.restartMiner();
+        } else {
+          this.crashCount = 0;
+        }
       } else {
         this.crashCount = 0;
       }
     } catch (error) {
       await this.logMinerError(
-        `Health check failed: ${error.message}`,
-        error.stack,
+        `Health check failed: ${error instanceof Error ? error.message : String(error)}`,
+        error instanceof Error ? error.stack || '' : '',
       );
     }
+  }
+
+  /**
+   * Ensure storage directory exists and is writable
+   */
+  private ensureStorageDirectory(): void {
+    try {
+      if (!fs.existsSync('storage')) {
+        fs.mkdirSync('storage', { recursive: true });
+        this.loggingService.log(
+          '📁 Created storage directory for miner output files',
+          'DEBUG',
+          'miner-manager',
+        );
+      }
+    } catch (error) {
+      this.loggingService.log(
+        `❌ Failed to create storage directory: ${error instanceof Error ? error.message : String(error)}`,
+        'ERROR',
+        'miner-manager',
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Check miner screen session output for errors and connection issues
+   */
+  private async checkMinerOutput(): Promise<boolean> {
+    try {
+      // First, verify the screen session is actually running
+      if (!this.isMinerRunning()) {
+        this.loggingService.log(
+          '⚠️ Miner screen session not found during health check',
+          'DEBUG',
+          'miner-manager',
+        );
+        return false;
+      }
+
+      // Detect which miner is running for appropriate health checks
+      const minerSoftware = this.getMinerFromFlightsheet();
+      this.loggingService.log(
+        `🔍 Performing health check for ${minerSoftware || 'unknown'} miner`,
+        'DEBUG',
+        'miner-manager',
+      );
+
+      // Try multiple methods to capture output
+      let output = '';
+      
+      // Method 1: Try hardcopy with better error handling
+      const hardcopyFile = `storage/miner-output-${Date.now()}.txt`;
+      
+      try {
+        // Ensure storage directory exists
+        this.ensureStorageDirectory();
+        
+        this.loggingService.log(
+          `📄 Creating miner output hardcopy at: ${hardcopyFile}`,
+          'DEBUG',
+          'miner-manager',
+        );
+        
+        // Create hardcopy with timeout
+        execSync(`screen -S ${this.minerScreen} -X hardcopy ${hardcopyFile}`, {
+          timeout: 10000,
+        });
+        
+        // Wait a bit longer for file to be written
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        
+        if (fs.existsSync(hardcopyFile)) {
+          output = fs.readFileSync(hardcopyFile, 'utf8');
+          // Clean up the temporary file
+          try {
+            fs.unlinkSync(hardcopyFile);
+          } catch {
+            // Ignore cleanup errors
+          }
+        }
+      } catch (hardcopyError) {
+        this.loggingService.log(
+          `⚠️ Hardcopy method failed: ${hardcopyError instanceof Error ? hardcopyError.message : String(hardcopyError)}`,
+          'DEBUG',
+          'miner-manager',
+        );
+      }
+      
+      // Method 2: If hardcopy failed, try screen -r with expect-like approach
+      if (!output) {
+        try {
+          // Use timeout command to limit screen session interaction
+          const screenOutput = execSync(
+            `timeout 5 screen -S ${this.minerScreen} -X hardcopy /dev/stdout 2>/dev/null || echo "screen_capture_failed"`,
+            {
+              encoding: 'utf8',
+              timeout: 10000,
+            },
+          );
+          
+          if (screenOutput && !screenOutput.includes('screen_capture_failed')) {
+            output = screenOutput;
+          }
+        } catch (screenError) {
+          this.loggingService.log(
+            `⚠️ Screen stdout method failed: ${screenError instanceof Error ? screenError.message : String(screenError)}`,
+            'DEBUG',
+            'miner-manager',
+          );
+        }
+      }
+
+      // Method 3: If all else fails, check if we can at least detect the session is responsive
+      if (!output) {
+        this.loggingService.log(
+          '⚠️ Could not capture miner output, checking session responsiveness',
+          'DEBUG',
+          'miner-manager',
+        );
+        
+        // Check if the screen session is responsive by sending a simple command
+        try {
+          execSync(`screen -S ${this.minerScreen} -X info`, { timeout: 5000 });
+          // If we get here, the session exists but we can't read output
+          // This is not necessarily an error, so return false (no errors detected)
+          return false;
+        } catch {
+          // Session is not responsive, this might indicate a problem
+          this.loggingService.log(
+            '⚠️ Screen session appears unresponsive',
+            'WARN',
+            'miner-manager',
+          );
+          return true; // Consider this an error condition
+        }
+      }
+
+      // If we have output, analyze it for errors
+      if (output) {
+        return this.analyzeOutput(output, minerSoftware);
+      }
+
+      return false;
+    } catch (error) {
+      this.loggingService.log(
+        `❌ Error checking miner output: ${error instanceof Error ? error.message : String(error)}`,
+        'ERROR',
+        'miner-manager',
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Analyze miner output for errors and issues
+   */
+  private async analyzeOutput(output: string, minerSoftware?: string): Promise<boolean> {
+    // Detect miner software if not provided
+    if (!minerSoftware) {
+      minerSoftware = this.detectMinerFromOutput(output) || this.getMinerFromFlightsheet();
+    }
+
+    this.loggingService.log(
+      `🔍 Analyzing output for ${minerSoftware || 'unknown'} miner`,
+      'DEBUG',
+      'miner-manager',
+    );
+
+    // Get miner-specific error patterns
+    const errorPatterns = this.getErrorPatterns(minerSoftware);
+
+    let hasErrors = false;
+    const lines = output.split('\n').slice(-50); // Check last 50 lines
+    
+    for (const line of lines) {
+      for (const pattern of errorPatterns) {
+        if (pattern.test(line)) {
+          this.loggingService.log(
+            `🔍 Detected ${minerSoftware} error in output: ${line.trim()}`,
+            'WARN',
+            'miner-manager',
+          );
+          await this.logMinerError(`${minerSoftware} output error: ${line.trim()}`);
+          hasErrors = true;
+          break;
+        }
+      }
+      if (hasErrors) break;
+    }
+
+    // Check for recent activity using miner-specific patterns
+    const now = new Date();
+    const recentActivity = this.checkForRecentMinerActivity(lines, now, minerSoftware);
+    
+    if (!recentActivity) {
+      this.loggingService.log(
+        `⚠️ No recent ${minerSoftware} activity detected (possible connection issue or pool difficulty adjustment)`,
+        'DEBUG',
+        'miner-manager',
+      );
+      // Don't treat lack of activity as an error unless combined with other issues
+      // This is especially important for XMRig which may have longer intervals between activities
+      // hasErrors = true; // Commented out to be less aggressive
+    }
+
+    return hasErrors;
+  }
+
+  /**
+   * Detect miner software from output patterns
+   */
+  private detectMinerFromOutput(output: string): string | null {
+    // XMRig patterns
+    if (output.includes('XMRig/') || 
+        output.includes('randomx') || 
+        output.includes('new job from') ||
+        output.includes('algo rx/')) {
+      return 'xmrig';
+    }
+    
+    // CCMiner patterns
+    if (output.includes('ccminer') || 
+        output.includes('stratum+tcp') ||
+        output.includes('accepted') ||
+        output.includes('kH/s')) {
+      return 'ccminer';
+    }
+    
+    return null;
+  }
+
+  /**
+   * Get error patterns specific to each miner
+   */
+  private getErrorPatterns(minerSoftware?: string): RegExp[] {
+    const commonPatterns = [
+      /stratum connection interrupted/i,
+      /connection failed/i,
+      /pool timeout/i,
+      /failed to connect/i,
+      /socket error/i,
+      /network error/i,
+      /authentication failed/i,
+      /pool rejected/i,
+      /no response from pool/i,
+      /disconnected from pool/i,
+    ];
+
+    if (minerSoftware === 'ccminer') {
+      return [
+        ...commonPatterns,
+        /cuda error/i,
+        /opencl error/i,
+        /gpu error/i,
+        /device error/i,
+        /rejected/i,
+        /booooo/i,
+        /stratum authentication failed/i,
+      ];
+    } else if (minerSoftware === 'xmrig') {
+      return [
+        ...commonPatterns,
+        /randomx init failed/i,
+        /pool connection error/i,
+        /tls handshake failed/i,
+        /job timeout/i,
+        /backend error/i,
+        /bind failed/i,
+        /login failed/i,
+        /connect error/i,
+        /donate pool.*error/i, // Only actual donation pool errors, not normal messages
+        /thread.*error/i, // Thread-specific errors
+        /opencl.*error/i, // OpenCL errors
+        /cuda.*error/i, // CUDA errors
+      ];
+    }
+
+    // Default: return all patterns
+    return [
+      ...commonPatterns,
+      /cuda error/i,
+      /opencl error/i,
+      /randomx init failed/i,
+      /pool connection error/i,
+      /tls handshake failed/i,
+      /job timeout/i,
+      /backend error/i,
+      /bind failed/i,
+      /login failed/i,
+      /connect error/i,
+    ];
+  }
+
+  /**
+   * Check if there's recent mining activity in the output
+   */
+  private checkForRecentMinerActivity(
+    lines: string[],
+    now: Date,
+    minerSoftware?: string,
+  ): boolean {
+    // Look for recent timestamps in the output - support both ccminer and XMRig formats
+    const timestampPatterns = [
+      /\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]/, // XMRig format: [2025-07-11 21:27:13]
+      /\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\]/, // XMRig with milliseconds
+      /(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/, // ccminer format without brackets
+    ];
+    
+    for (const line of lines.reverse()) {
+      // Check most recent lines first
+      let logTime: Date | null = null;
+      
+      // Try different timestamp patterns
+      for (const pattern of timestampPatterns) {
+        const match = line.match(pattern);
+        if (match) {
+          try {
+            // Handle both formats - with and without milliseconds
+            const timeStr = match[1];
+            if (timeStr.includes('.')) {
+              // XMRig format with milliseconds
+              logTime = new Date(timeStr);
+            } else {
+              // Standard format without milliseconds
+              logTime = new Date(timeStr);
+            }
+            break;
+          } catch {
+            // Ignore date parsing errors and try next pattern
+          }
+        }
+      }
+      
+      if (logTime) {
+        const timeDiff = now.getTime() - logTime.getTime();
+        
+        // Allow up to 20 minutes of inactivity to account for pool difficulty adjustments
+        // Mining pools can adjust difficulty causing longer periods between shares
+        if (timeDiff < 20 * 60 * 1000) {
+          // Check if it's meaningful activity using miner-specific patterns
+          const activityPatterns = this.getActivityPatterns(minerSoftware);
+          
+          for (const pattern of activityPatterns) {
+            if (pattern.test(line)) {
+              this.loggingService.log(
+                `✅ Recent ${minerSoftware} activity detected: ${line.trim()}`,
+                'DEBUG',
+                'miner-manager',
+              );
+              return true;
+            }
+          }
+        }
+      }
+    }
+    
+    return false;
+  }
+
+  /**
+   * Get activity patterns specific to each miner
+   */
+  private getActivityPatterns(minerSoftware?: string): RegExp[] {
+    if (minerSoftware === 'ccminer') {
+      return [
+        /accepted/i,
+        /kH\/s/i,
+        /yes!/i,
+        /stratum/i,
+        /difficulty/i,
+        /target/i,
+        /share/i,
+        /submit/i,
+      ];
+    } else if (minerSoftware === 'xmrig') {
+      return [
+        /new job from/i,
+        /speed/i,
+        /H\/s/i,
+        /use pool/i,
+        /net/i,
+        /miner/i,
+        /randomx/i,
+        /cpu/i,
+        /accepted/i,
+        /job/i,
+        /diff/i,
+        /algo/i,
+      ];
+    }
+
+    // Default: return all patterns
+    return [
+      /accepted/i,
+      /kH\/s/i,
+      /H\/s/i,
+      /yes!/i,
+      /stratum/i,
+      /difficulty/i,
+      /target/i,
+      /new job from/i,
+      /speed/i,
+      /use pool/i,
+      /net/i,
+      /miner/i,
+      /randomx/i,
+      /cpu/i,
+      /job/i,
+      /diff/i,
+      /algo/i,
+    ];
   }
 
   public shouldBeMining(): boolean {
@@ -672,6 +1113,10 @@ export class MinerManagerService
 
   public async restartMiner(): Promise<boolean> {
     this.loggingService.log('🔄 Restarting miner...', 'INFO', 'miner-manager');
+    
+    // Record restart time for cooldown tracking
+    this.lastRestartTime = new Date();
+    
     const stopped = this.stopMiner();
     if (!stopped) {
       const error = 'Failed to restart: Could not stop miner';
@@ -881,18 +1326,26 @@ export class MinerManagerService
     // Check scheduled restarts - independent of mining schedule
     const restarts = config.schedules?.scheduledRestarts || [];
     for (const restart of restarts) {
-      // Only support new object format from backend API
-      if (!restart || typeof restart !== 'object' || !restart.time) {
+      let restartTime: string;
+      let restartDays: string[] | undefined;
+
+      // Support both string format (from config) and object format (from API)
+      if (typeof restart === 'string') {
+        // Simple string format: "03:00"
+        restartTime = restart;
+        restartDays = undefined; // Apply to all days
+      } else if (restart && typeof restart === 'object' && restart.time) {
+        // Object format: { time: "03:00", days: ["monday", "tuesday"] }
+        restartTime = restart.time;
+        restartDays = restart.days;
+      } else {
         this.loggingService.log(
-          `⚠️ Invalid restart configuration (expected object with time property): ${JSON.stringify(restart)}`,
+          `⚠️ Invalid restart configuration (expected string or object with time property): ${JSON.stringify(restart)}`,
           'WARN',
           'miner-manager',
         );
         continue;
       }
-
-      const restartTime = restart.time;
-      const restartDays = restart.days;
 
       // Check if restart applies to current day (if days are specified)
       const appliesToday = !restartDays || restartDays.includes(currentDay);

@@ -1,0 +1,34 @@
+/* Animation Styles */
+
+/* Card fade-in animation */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.grid > div {
+  animation: fadeIn 0.5s ease-out forwards;
+  opacity: 0;
+}
+
+.grid > div:nth-child(1) { animation-delay: 0.1s; }
+.grid > div:nth-child(2) { animation-delay: 0.2s; }
+.grid > div:nth-child(3) { animation-delay: 0.3s; }
+.grid > div:nth-child(4) { animation-delay: 0.4s; }
+.grid > div:nth-child(5) { animation-delay: 0.5s; }
+
+/* Logo glow animation */
+@keyframes pulse-glow {
+  0% { filter: drop-shadow(0 0 5px rgba(152, 224, 95, 0.5)); }
+  50% { filter: drop-shadow(0 0 20px rgba(13, 227, 172, 0.8)); }
+  100% { filter: drop-shadow(0 0 5px rgba(152, 224, 95, 0.5)); }
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 3s ease-in-out infinite;
+}
+
+/* Background handling */
+.background-beams {
+  pointer-events: none;
+}

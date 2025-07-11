@@ -1,0 +1,79 @@
+/* Dedicated loader styles */
+/* Orbiting loader animation */
+
+.loader {
+  --size-loader: 50px;
+  --size-orbe: 10px;
+  width: var(--size-loader);
+  height: var(--size-loader);
+  position: relative;
+  transform: rotate(45deg);
+}
+
+.orbe {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  --delay: calc(var(--index) * 0.1s);
+  animation: orbit7456 ease-in-out 1.5s var(--delay) infinite;
+  opacity: calc(1 - calc(0.2 * var(--index)));
+}
+
+.orbe::after {
+  position: absolute;
+  content: '';
+  top: 0;
+  left: 0;
+  width: var(--size-orbe);
+  height: var(--size-orbe);
+  background-color: var(--accent);
+  box-shadow: 0px 0px 20px 2px var(--accent);
+  border-radius: 50%;
+}
+
+@keyframes orbit7456 {
+  0% {
+  }
+
+  80% {
+    transform: rotate(360deg);
+  }
+
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+/* More responsive size adjustments */
+@media (min-width: 640px) {
+  .loader {
+    --size-loader: 80px;
+    --size-orbe: 12px;
+  }
+}
+
+/* Adding mood-specific effects for the loader */
+:root[data-mood="chill"] .orbe::after {
+  background-color: var(--accent);
+  box-shadow: 0px 0px 20px 2px var(--accent);
+}
+
+:root[data-mood="focus"] .orbe::after {
+  background-color: var(--accent);
+  box-shadow: 0px 0px 20px 2px var(--scrollbar-gradient-end);
+}
+
+:root[data-mood="energetic"] .orbe::after {
+  background-color: var(--accent);
+  box-shadow: 0px 0px 20px 2px var(--scrollbar-gradient-end);
+}
+
+:root[data-mood="night-owl"] .orbe::after {
+  background-color: var(--accent);
+  box-shadow: 0px 0px 20px 2px var(--scrollbar-gradient-end);
+}
+
+/* Dark mode adjustments to ensure visibility */
+:root[class~="dark"] .orbe::after {
+  filter: brightness(1.2);
+}

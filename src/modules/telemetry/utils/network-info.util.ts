@@ -4,7 +4,7 @@ import { LRUCache } from '../../device-monitoring/os-detection/lru-cache';
 import { NETWORK_CONSTANTS } from './network-info-constants';
 
 // Define NetworkInfo interface outside of class
-interface NetworkInfo {
+export interface NetworkInfo {
   primaryIp: string;
   externalIp: string;
   gateway: string;
@@ -21,8 +21,8 @@ interface NetworkInfo {
   };
 }
 
-// Traffic data with timestamp interface
-interface TrafficData {
+// Export other interfaces that might be needed
+export interface TrafficData {
   rxBytes: number;
   txBytes: number;
   rxSpeed: number;
@@ -30,9 +30,50 @@ interface TrafficData {
   timestamp: number;
 }
 
-// Ping data with timestamp interface to support TTL
-interface PingData {
+export interface PingData {
   value: number;
+  timestamp: number;
+}
+
+// Define comprehensive telemetry interface
+export interface TelemetryData {
+  status: string;
+  appVersion?: string;
+  minerSoftware: {
+    name: string;
+    version: string;
+    algorithm: string;
+    hashrate: number;
+    acceptedShares: number;
+    rejectedShares: number;
+    uptime: number;
+    solvedBlocks: number;
+    difficulty?: number;
+    miningStatus?: string;
+  };
+  pool: {
+    name: string;
+    url?: string;
+    user?: string;
+    acceptedShares: number;
+    rejectedShares: number;
+    staleShares?: number;
+    ping: number;
+    uptime: number;
+  };
+  deviceInfo: any;
+  network: NetworkInfo;
+  battery: any;
+  schedules?: any;
+  historicalHashrate?: any[];
+}
+
+// Traffic data with timestamp interface
+interface TrafficDataInternal {
+  rxBytes: number;
+  txBytes: number;
+  rxSpeed: number;
+  txSpeed: number;
   timestamp: number;
 }
 

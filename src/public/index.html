@@ -1,233 +1,291 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Miner Dashboard</title>    
+    <title>RefurbMiner Dashboard</title>    
     <link rel="icon" type="image/png" href="favicon.png">
     <link href="https://cdn.jsdelivr.net/npm/@coreui/coreui@4.3.0/dist/css/coreui.min.css" rel="stylesheet">
-    <link href="styles.css" rel="stylesheet">
-    <style>
-        .schedule-list {
-            list-style: none;
-            padding-left: 0;
-        }
-        .schedule-list li {
-            background-color: rgba(50, 50, 50, 0.1);
-            padding: 8px 12px;
-            margin-bottom: 8px;
-            border-radius: 4px;
-        }
-        #schedules-section h3 {
-            font-size: 1rem;
-            margin-top: 16px;
-            margin-bottom: 8px;
-            font-weight: 600;
-        }
-    </style>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="styles/globals.css" rel="stylesheet">
+    <link href="styles/theme.css" rel="stylesheet">
+    <link href="styles/neumorphism.css" rel="stylesheet">
+    <link href="styles/buttons.css" rel="stylesheet">
+    <link href="styles/animations.css" rel="stylesheet">
+    <link href="styles/typography.css" rel="stylesheet">
+    <link href="styles/scrollbar.css" rel="stylesheet">
+    <link href="styles/loader.css" rel="stylesheet">
+    <link href="styles/dashboard.css" rel="stylesheet">
 </head>
 <body class="dark-mode">
     <div class="app-container">
-        <header class="header">
+        <header class="header soft-glow">
             <div class="container-lg">
                 <div class="header-container">
-                    <img src="logo.png" alt="Logo" class="logo">
-                    <button id="theme-toggle" class="theme-toggle" title="Toggle Dark/Light Mode">🌙</button>
+                    <div class="header-left">
+                        <img src="logo.png" alt="RefurbMiner" class="logo animate-pulse-glow" style="height: 32px; margin-right: 0.75rem;">
+                        <h1 class="gradient-text mb-0" style="font-size: 1.5rem; font-weight: 600;">Dashboard</h1>
+                        <div class="health-status checking" id="health-indicator" style="margin-left: 1.5rem;">
+                            <i class="fas fa-spinner fa-spin"></i>
+                            <span id="health-status-text">Checking health...</span>
+                        </div>
+                    </div>
+                    <div class="header-right">
+                        <button id="theme-toggle" class="theme-toggle-btn" title="Toggle Dark/Light Mode">
+                            <i class="fas fa-moon"></i>
+                        </button>
+                    </div>
                 </div>
             </div>
         </header>
 
         <main class="body flex-grow-1 py-4">
             <div class="container-lg">
-                <!-- Mining Status Section -->
-                <div class="card mb-4">
-                    <div class="card-header">Mining Status</div>
-                    <div class="card-body">
-                        <div class="row mb-4">
-                            <div class="col-sm-6 col-lg-3">
-                                <div class="info-box status-box" id="status-indicator">
-                                    <div class="info-box-title">Status</div>
-                                    <div class="info-box-value" id="minerStatus">N/A</div>
-                                </div>
-                            </div>
-                            <div class="col-sm-6 col-lg-3">
-                                <div class="info-box">
-                                    <div class="info-box-title">Hashrate</div>
-                                    <div class="info-box-value"><span id="minerHashrate">0</span> H/s</div>
-                                </div>
-                            </div>
-                            <div class="col-sm-6 col-lg-3">
-                                <div class="info-box">
-                                    <div class="info-box-title">Algorithm</div>
-                                    <div class="info-box-value" id="minerAlgorithm">N/A</div>
-                                </div>
-                            </div>
-                            <div class="col-sm-6 col-lg-3">
-                                <div class="info-box">
-                                    <div class="info-box-title">Uptime</div>
-                                    <div class="info-box-value" id="minerUptime">N/A</div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="miner-controls">
-                            <button id="start-miner" class="btn btn-success">Start Miner</button>
-                            <button id="stop-miner" class="btn btn-danger">Stop Miner</button>
-                        </div>
+                <!-- Loading State -->
+                <div id="loading-state" class="loader-container">
+                    <div class="loader">
+                        <div class="orbe" style="--index: 0;"></div>
+                        <div class="orbe" style="--index: 1;"></div>
+                        <div class="orbe" style="--index: 2;"></div>
+                        <div class="orbe" style="--index: 3;"></div>
+                        <div class="orbe" style="--index: 4;"></div>
                     </div>
                 </div>
 
-                <!-- Hashrate Chart -->
-                <div class="card mb-4">
-                    <div class="card-header">Hashrate Chart</div>
-                    <div class="card-body">
-                        <div id="hashrate-chart" style="width:100%; height:350px;">
-                            <canvas id="hashrateChart"></canvas>
-                        </div>
-                    </div>
+                <!-- Error State -->
+                <div id="error-state" class="error-message" style="display: none;">
+                    <i class="fas fa-exclamation-triangle"></i>
+                    <span id="error-message">Failed to load dashboard data</span>
                 </div>
 
-                <div class="row">
-                    <!-- Left Column -->
-                    <div class="col-md-6">                        
-                        <!-- Schedule Section -->
-                        <div class="card mb-4">
-                            <div class="card-header">Schedules & Maintenance</div>
-                            <div class="card-body">
-                                <div class="row">
-                                    <div class="col-md-6">
-                                        <h5 class="text-theme">Mining Schedule</h5>
-                                        <div class="info-list">
-                                            <div class="info-item">
-                                                <span class="info-label">Start:</span>
-                                                <span class="info-value" id="scheduleStart">Not set</span>
-                                            </div>
-                                            <div class="info-item">
-                                                <span class="info-label">Stop:</span>
-                                                <span class="info-value" id="scheduleStop">Not set</span>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div class="col-md-6">
-                                        <h5 class="text-theme">Next Restart</h5>
-                                        <div class="info-list">
-                                            <div class="info-item">
-                                                <span class="info-value" id="nextRestart">No restart scheduled</span>
-                                            </div>
-                                        </div>
-                                    </div>
+                <!-- Dashboard Content -->
+                <div id="dashboard-content" style="display: none;">
+                    <!-- Mining Status and Controls -->
+                    <div class="dashboard-grid">
+                        <div class="metric-card soft-glow stat-gradient-1">
+                            <div class="metric-label">Mining Status <span class="status-indicator" id="status-indicator"></span></div>
+                            <div class="control-buttons" style="justify-content: center; align-items: center;">
+                                <button id="start-miner" class="btn-primary">
+                                    <i class="fas fa-play"></i> Start
+                                </button>
+                                <button id="stop-miner" class="btn-secondary">
+                                    <i class="fas fa-stop"></i> Stop
+                                </button>
+                                <button id="restart-miner" class="btn-secondary">
+                                    <i class="fas fa-redo"></i> Restart
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="metric-card soft-glow stat-gradient-2">
+                            <div class="metric-label">Current Hashrate</div>
+                            <div class="metric-value gradient-text" id="minerHashrate">0 H/s</div>
+                            <div class="d-flex justify-content-between text-sm">
+                                <span>Algorithm: <span id="minerAlgorithm">-</span></span>
+                                <span>Version: <span id="minerVersion">-</span></span>
+                            </div>
+                        </div>
+
+                        <div class="metric-card soft-glow stat-gradient-3">
+                            <div class="metric-label">Mining Performance</div>
+                            <div class="row text-center">
+                                <div class="col-4">
+                                    <div class="metric-value text-success" id="acceptedShares">0</div>
+                                    <div class="metric-label">Accepted</div>
                                 </div>
-                                <!-- Detailed schedule information -->
-                                <div id="schedules-section" class="mt-3">
-                                    <!-- This will be populated by JavaScript -->
+                                <div class="col-4">
+                                    <div class="metric-value text-warning" id="rejectedShares">0</div>
+                                    <div class="metric-label">Rejected</div>
+                                </div>
+                                <div class="col-4">
+                                    <div class="metric-value text-info" id="minerUptime">0m</div>
+                                    <div class="metric-label">Uptime</div>
                                 </div>
                             </div>
                         </div>
 
-                        <!-- Pool Information -->
-                            <div class="card mb-4">
-                                <div class="card-header">Pool Information</div>
+                        <div class="metric-card soft-glow stat-gradient-4">
+                            <div class="metric-label">Pool Connection</div>
+                            <div class="metric-value" id="poolName">-</div>
+                            <div class="pool-status">
+                                <div class="ping-indicator" id="poolPing">- ms</div>
+                                <div class="text-sm" id="poolUrl">-</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Hashrate Chart -->
+                    <div class="card soft-glow mb-4">
+                        <div class="card-header">
+                            <h3 class="gradient-text mb-0">
+                                <i class="fas fa-chart-line"></i> Hashrate History
+                            </h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="chart-container">
+                                <canvas id="hashrateChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- System Information -->
+                    <div class="row mb-4">
+                        <div class="col-md-6">
+                            <div class="card soft-glow">
+                                <div class="card-header">
+                                    <h3 class="gradient-text mb-0">
+                                        <i class="fas fa-microchip"></i> System Information
+                                    </h3>
+                                </div>
                                 <div class="card-body">
-                                    <div class="info-list">
-                                        <div class="info-item">
-                                            <span class="info-label">Pool:</span>
-                                            <span class="info-value" id="poolName">N/A</span>
+                                    <div class="metric-card inner-card mb-3">
+                                        <div class="metric-label">Device</div>
+                                        <div class="metric-value" id="deviceInfo">-</div>
+                                    </div>
+                                    
+                                    <div class="metric-card inner-card mb-3">
+                                        <div class="metric-label">CPU Cores</div>
+                                        <div class="cpu-core-grid" id="cpuCores">
+                                            <!-- CPU cores will be populated by JavaScript -->
                                         </div>
-                                        <div class="info-item">
-                                            <span class="info-label">URL:</span>
-                                            <span class="info-value" id="poolUrl">N/A</span>
+                                    </div>
+                                    
+                                    <div class="metric-card inner-card mb-3">
+                                        <div class="metric-label">Temperature</div>
+                                        <div class="temperature-gauge">
+                                            <i class="fas fa-thermometer-half"></i>
+                                            <div class="temp-value" id="cpuTemp">-°C</div>
                                         </div>
-                                        <div class="info-item">
-                                            <span class="info-label">Ping:</span>
-                                            <span class="info-value"><span id="poolPing">N/A</span></span>
-                                        </div>
-                                        <div class="info-item shares-info">
-                                            <div class="shares-progress">
-                                                <div class="shares-accepted" id="shares-accepted-bar"></div>
-                                                <div class="shares-rejected" id="shares-rejected-bar"></div>
+                                    </div>
+                                                      <div class="metric-card inner-card">
+                        <div class="metric-label">Memory Usage</div>
+                        <div class="d-flex justify-content-between text-sm mb-1">
+                            <span id="memoryUsage">-</span>
+                            <span id="memoryTotal">-</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="memoryProgress"></div>
+                            <div class="progress-text" id="memoryPercent">-%</div>
+                        </div>
+                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="col-md-6">
+                            <div class="card soft-glow">
+                                <div class="card-header">
+                                    <h3 class="gradient-text mb-0">
+                                        <i class="fas fa-network-wired"></i> Network & Rig Info
+                                    </h3>
+                                </div>
+                                <div class="card-body">
+                                    <div class="metric-card inner-card mb-3">
+                                        <div class="metric-label">Rig Information</div>
+                                        <div class="network-info">
+                                            <div class="network-stat">
+                                                <div class="text-sm">Rig ID</div>
+                                                <div class="fw-bold" id="rigId">-</div>
                                             </div>
-                                            <div class="shares-labels">
-                                                <div>
-                                                    <span class="info-label">Accepted:</span>
-                                                    <span class="info-value success-text" id="minerAcceptedShares">0</span>
-                                                </div>
-                                                <div>
-                                                    <span class="info-label">Rejected:</span>
-                                                    <span class="info-value danger-text" id="minerRejectedShares">0</span>
-                                                </div>
+                                            <div class="network-stat">
+                                                <div class="text-sm">Miner ID</div>
+                                                <div class="fw-bold" id="minerId">-</div>
+                                            </div>
+                                            <div class="network-stat">
+                                                <div class="text-sm">Rig Name</div>
+                                                <div class="fw-bold" id="rigName">-</div>
+                                            </div>
+                                            <div class="network-stat">
+                                                <div class="text-sm">Software</div>
+                                                <div class="fw-bold" id="minerSoftwareName">-</div>
                                             </div>
                                         </div>
+                                    </div>
+                                    
+                                    <div class="metric-card inner-card mb-3">
+                                        <div class="metric-label">Network</div>
+                                        <div class="network-info">
+                                            <div class="network-stat">
+                                                <div class="text-sm">Internal IP</div>
+                                                <div class="fw-bold" id="internalIp">-</div>
+                                            </div>
+                                            <div class="network-stat">
+                                                <div class="text-sm">External IP</div>
+                                                <div class="fw-bold" id="externalIp">-</div>
+                                            </div>
+                                            <div class="network-stat">
+                                                <div class="text-sm">Gateway</div>
+                                                <div class="fw-bold" id="gateway">-</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="metric-card inner-card mb-3">
+                                        <div class="metric-label">Battery Status</div>
+                                        <div class="battery-indicator">
+                                            <div class="battery-level">
+                                                <div class="battery-fill" id="batteryFill"></div>
+                                                <div class="battery-percentage" id="batteryPercent">-</div>
+                                            </div>
+                                            <div class="d-flex flex-column">
+                                                <div class="text-sm mb-1" id="batteryStatus">-</div>
+                                                <div class="text-sm" id="batteryHealth">-</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                                      <div class="metric-card inner-card">
+                        <div class="metric-label">Storage</div>
+                        <div class="d-flex justify-content-between text-sm mb-1">
+                            <span id="storageUsage">-</span>
+                            <span id="storageTotal">-</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="storageProgress"></div>
+                            <div class="progress-text" id="storagePercent">-%</div>
+                        </div>
+                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Schedules Section -->
+                    <div class="card soft-glow mb-4" id="schedules-section">
+                        <div class="card-header">
+                            <h3 class="gradient-text mb-0">
+                                <i class="fas fa-calendar-alt"></i> Mining Schedules
+                            </h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <h4>Mining Periods</h4>
+                                    <div id="mining-periods">
+                                        <div class="text-muted">No mining periods configured</div>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <h4>Restart Schedule</h4>
+                                    <div id="restart-schedule">
+                                        <div class="text-muted">No restart schedule configured</div>
                                     </div>
                                 </div>
                             </div>
-
+                        </div>
                     </div>
 
-                    <!-- Right Column -->
-                    <div class="col-md-6">
-                        <!-- System Information -->
-                        <div class="card mb-4">
-                            <div class="card-header">System Information</div>
-                            <div class="card-body">
-                                <div class="device-info-list">
-                                    <!-- OS Info -->
-                                    <div class="device-info-item">
-                                        <div class="info-header">
-                                            <div class="info-title">Operating System</div>
-                                            <div class="info-value" id="osInfo">N/A</div>
-                                        </div>
-                                    </div>
-
-                                    <!-- CPU Info -->
-                                    <div class="device-info-item">
-                                        <div class="info-header">
-                                            <div class="info-title">CPU</div>
-                                            <div class="info-value" id="cpuInfo">N/A</div>
-                                        </div>
-                                        <div class="sub-info">
-                                            <span class="info-label">Cores:</span>
-                                            <span class="info-value" id="cpuCores">N/A</span>
-                                            <span class="info-label ml-3">Speed:</span>
-                                            <span class="info-value" id="cpuSpeed">N/A</span>
-                                        </div>
-                                    </div>
-
-                                    <!-- CPU Temperature -->
-                                    <div class="device-info-item">
-                                        <div class="info-header">
-                                            <div class="info-title">CPU Temperature</div>
-                                            <div class="info-value"><span id="cpuTemp">N/A</span>°C</div>
-                                        </div>
-                                        <div class="progress">
-                                            <div id="cpu-temp-bar" class="progress-bar bg-info" role="progressbar"></div>
-                                        </div>
-                                    </div>
-
-                                    <!-- Memory Usage -->
-                                    <div class="device-info-item">
-                                        <div class="info-header">
-                                            <div class="info-title">Memory Usage</div>
-                                            <div class="info-value">
-                                                <span id="memoryUsed">N/A</span> / <span id="memoryTotal">N/A</span> GB
-                                            </div>
-                                        </div>
-                                        <div class="progress">
-                                            <div id="memory-usage-bar" class="progress-bar bg-primary" role="progressbar"></div>
-                                        </div>
-                                    </div>
-
-                                    <!-- Storage Usage -->
-                                    <div class="device-info-item">
-                                        <div class="info-header">
-                                            <div class="info-title">Storage Usage</div>
-                                            <div class="info-value">
-                                                <span id="storageUsed">N/A</span> / <span id="storageTotal">N/A</span> GB
-                                            </div>
-                                        </div>
-                                        <div class="progress">
-                                            <div id="storage-usage-bar" class="progress-bar bg-primary" role="progressbar"></div>
-                                        </div>
-                                    </div>
+                    <!-- Recent Activity -->
+                    <div class="card soft-glow">
+                        <div class="card-header">
+                            <h3 class="gradient-text mb-0">
+                                <i class="fas fa-history"></i> Recent Activity
+                            </h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="recent-activity" id="recent-activity">
+                                <div class="activity-item">
+                                    <i class="fas fa-info-circle text-info"></i>
+                                    Dashboard loaded successfully
                                 </div>
                             </div>
                         </div>
@@ -240,34 +298,112 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script>
 let hashrateChart;
-const themeToggle = document.getElementById('theme-toggle');
+let isLoading = false;
+let activityLog = [];
+
+// Health status update function
+function updateHealthStatus(isHealthy, message, hasWarnings = false) {
+    const healthIndicator = document.getElementById('health-indicator');
+    const healthText = document.getElementById('health-status-text');
+    
+    // Remove all status classes
+    healthIndicator.classList.remove('healthy', 'warning', 'error', 'checking');
+    
+    if (isHealthy === null) {
+        // Checking state
+        healthIndicator.classList.add('checking');
+        healthIndicator.innerHTML = `
+            <i class="fas fa-spinner fa-spin"></i>
+            <span id="health-status-text">Checking health...</span>
+        `;
+    } else if (isHealthy && !hasWarnings) {
+        // Healthy state
+        healthIndicator.classList.add('healthy');
+        healthIndicator.innerHTML = `
+            <i class="fas fa-heart-pulse"></i>
+            <span id="health-status-text">${message || 'Healthy'}</span>
+        `;
+    } else if (isHealthy && hasWarnings) {
+        // Warning state (running but with issues)
+        healthIndicator.classList.add('warning');
+        healthIndicator.innerHTML = `
+            <i class="fas fa-exclamation-triangle"></i>
+            <span id="health-status-text">${message || 'Running with warnings'}</span>
+        `;
+    } else {
+        // Error state
+        healthIndicator.classList.add('error');
+        healthIndicator.innerHTML = `
+            <i class="fas fa-heart-crack"></i>
+            <span id="health-status-text">${message || 'Unhealthy'}</span>
+        `;
+    }
+}
 
 // Theme handling
 function initTheme() {
     const savedTheme = localStorage.getItem('theme') || 'dark';
-    document.body.className = `${savedTheme}-mode`;
-    themeToggle.innerHTML = savedTheme === 'dark' ? '☀️' : '🌙';
+    
+    // Use the correct class names that match theme.css
+    document.documentElement.classList.remove('dark', 'light');
+    document.documentElement.classList.add(savedTheme);
+    
+    // Also set body class for compatibility
+    document.body.classList.remove('dark-mode', 'light-mode');
+    document.body.classList.add(`${savedTheme}-mode`);
+    
+    const themeToggle = document.getElementById('theme-toggle');
+    if (themeToggle) {
+        themeToggle.innerHTML = `<i class="fas ${savedTheme === 'dark' ? 'fa-sun' : 'fa-moon'}"></i>`;
+        
+        // Add click event listener
+        themeToggle.addEventListener('click', () => {
+            const isDark = document.documentElement.classList.contains('dark');
+            const newTheme = isDark ? 'light' : 'dark';
+            
+            // Toggle theme classes on documentElement (for CSS vars)
+            document.documentElement.classList.remove('dark', 'light');
+            document.documentElement.classList.add(newTheme);
+            
+            // Also toggle body classes for compatibility
+            document.body.classList.remove('dark-mode', 'light-mode');
+            document.body.classList.add(`${newTheme}-mode`);
+            
+            // Update button icon
+            themeToggle.innerHTML = `<i class="fas ${newTheme === 'dark' ? 'fa-sun' : 'fa-moon'}"></i>`;
+            
+            // Save theme preference
+            localStorage.setItem('theme', newTheme);
+            
+            // Update chart theme if it exists
+            if (hashrateChart) {
+                updateChartTheme();
+            }
+        });
+    }
 }
 
-themeToggle.addEventListener('click', () => {
-    const isDark = document.body.classList.contains('dark-mode');
-    document.body.className = isDark ? 'light-mode' : 'dark-mode';
-    themeToggle.innerHTML = isDark ? '🌙' : '☀️';
-    localStorage.setItem('theme', isDark ? 'light' : 'dark');
-    if (hashrateChart) {
-        updateChartTheme();
-    }
-});
-
 function getChartOptions() {
-    const isDark = document.body.classList.contains('dark-mode');
+    const isDark = document.documentElement.classList.contains('dark');
     return {
         responsive: true,
         maintainAspectRatio: false,
         plugins: {
             legend: {
-                labels: {
-                    color: isDark ? '#ffffff' : '#333333'
+                display: false
+            },
+            tooltip: {
+                mode: 'index',
+                intersect: false,
+                backgroundColor: isDark ? 'rgba(30, 31, 41, 0.9)' : 'rgba(255, 255, 255, 0.9)',
+                titleColor: isDark ? '#ffffff' : '#333333',
+                bodyColor: isDark ? '#ffffff' : '#333333',
+                borderColor: '#98e05f',
+                borderWidth: 1,
+                callbacks: {
+                    label: function(context) {
+                        return `${formatHashrate(context.raw)}`;
+                    }
                 }
             }
         },
@@ -277,7 +413,8 @@ function getChartOptions() {
                     color: isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)'
                 },
                 ticks: {
-                    color: isDark ? '#ffffff' : '#333333'
+                    color: isDark ? '#ffffff' : '#333333',
+                    maxTicksLimit: 8
                 }
             },
             y: {
@@ -285,28 +422,89 @@ function getChartOptions() {
                     color: isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)'
                 },
                 ticks: {
-                    color: isDark ? '#ffffff' : '#333333'
+                    color: isDark ? '#ffffff' : '#333333',
+                    callback: function(value) {
+                        return formatHashrate(value);
+                    }
                 }
             }
+        },
+        interaction: {
+            mode: 'nearest',
+            axis: 'x',
+            intersect: false
+        },
+        animation: {
+            duration: 750,
+            easing: 'easeInOutQuart'
         }
     };
 }
 
 function updateChartTheme() {
-    hashrateChart.options = getChartOptions();
-    hashrateChart.update();
+    if (hashrateChart) {
+        hashrateChart.options = getChartOptions();
+        hashrateChart.update();
+    }
+}
+
+function formatHashrate(hashrate) {
+    const rate = parseFloat(hashrate);
+    if (rate >= 1000000000) {
+        return (rate / 1000000000).toFixed(2) + ' GH/s';
+    } else if (rate >= 1000000) {
+        return (rate / 1000000).toFixed(2) + ' MH/s';
+    } else if (rate >= 1000) {
+        return (rate / 1000).toFixed(2) + ' kH/s';
+    } else {
+        return rate.toFixed(2) + ' H/s';
+    }
 }
 
 function updateHashrateChart(historicalData) {
-    if (!Array.isArray(historicalData) || historicalData.length === 0) {
+    console.log('updateHashrateChart called with:', historicalData);
+    
+    if (!Array.isArray(historicalData)) {
+        console.log('Historical data is not an array');
+        historicalData = [];
+    }
+    
+    if (historicalData.length === 0) {
+        console.log('No historical data available');
+        // Create empty chart with placeholder
+        if (hashrateChart) {
+            hashrateChart.destroy();
+        }
+        
+        const ctx = document.getElementById('hashrateChart').getContext('2d');
+        hashrateChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: ['No data'],
+                datasets: [{
+                    label: 'Hashrate',
+                    data: [0],
+                    borderColor: '#98e05f',
+                    backgroundColor: 'rgba(152, 224, 95, 0.1)',
+                    tension: 0.4,
+                    fill: true,
+                    pointRadius: 2,
+                    pointHoverRadius: 6,
+                    pointBackgroundColor: '#98e05f',
+                    pointBorderColor: '#ffffff',
+                    pointBorderWidth: 2
+                }]
+            },
+            options: getChartOptions()
+        });
         return;
     }
 
     const sortedData = historicalData.sort((a, b) => a.timestamp - b.timestamp);
-    const thirtyMinutesAgo = Date.now() - (30 * 60 * 1000);
-    const recentData = sortedData.filter(item => 
-        (item.timestamp * 1000) > thirtyMinutesAgo
-    );
+    const thirtyMinutesAgo = Date.now() / 1000 - (30 * 60);
+    const recentData = sortedData.filter(item => item.timestamp > thirtyMinutesAgo);
+
+    console.log('Filtered recent data:', recentData.length, 'points');
 
     const labels = recentData.map(item => {
         const date = new Date(item.timestamp * 1000);
@@ -317,9 +515,7 @@ function updateHashrateChart(historicalData) {
         });
     });
 
-    const hashrates = recentData.map(item => 
-        parseFloat(item.hashrate || item.khs || 0).toFixed(2)
-    );
+    const hashrates = recentData.map(item => parseFloat(item.hashrate || 0));
 
     if (hashrateChart) {
         hashrateChart.destroy();
@@ -331,331 +527,690 @@ function updateHashrateChart(historicalData) {
         data: {
             labels: labels,
             datasets: [{
-                label: 'Hashrate (H/s)',
+                label: 'Hashrate',
                 data: hashrates,
-                borderColor: getComputedStyle(document.documentElement).getPropertyValue('--primary-color'),
-                backgroundColor: 'rgba(46, 184, 92, 0.1)',
+                borderColor: '#98e05f',
+                backgroundColor: 'rgba(152, 224, 95, 0.1)',
                 tension: 0.4,
                 fill: true,
-                pointRadius: 3,
-                pointHoverRadius: 5
+                pointRadius: 2,
+                pointHoverRadius: 6,
+                pointBackgroundColor: '#98e05f',
+                pointBorderColor: '#ffffff',
+                pointBorderWidth: 2
             }]
         },
-        options: {
-            ...getChartOptions(),
-            animation: {
-                duration: 750,
-                easing: 'easeInOutQuart'
-            },
-            plugins: {
-                legend: {
-                    display: true,
-                    position: 'top'
-                },
-                tooltip: {
-                    mode: 'index',
-                    intersect: false,
-                    callbacks: {
-                        label: function(context) {
-                            return `Hashrate: ${context.raw} H/s`;
-                        }
-                    }
-                }
-            },
-            scales: {
-                x: {
-                    ...getChartOptions().scales.x,
-                    display: true,
-                    title: {
-                        display: true,
-                        text: 'Time'
-                    }
-                },
-                y: {
-                    ...getChartOptions().scales.y,
-                    display: true,
-                    title: {
-                        display: true,
-                        text: 'Hashrate (H/s)'
-                    },
-                    beginAtZero: true,
-                    suggestedMin: function() {
-                        const min = Math.min(...hashrates);
-                        return min > 0 ? min * 0.9 : 0;
-                    },
-                    suggestedMax: function() {
-                        const max = Math.max(...hashrates);
-                        return max * 1.1;
-                    }
-                }
-            }
-        }
+        options: getChartOptions()
+    });
+}
+
+function showLoading() {
+    document.getElementById('loading-state').style.display = 'flex';
+    document.getElementById('error-state').style.display = 'none';
+    document.getElementById('dashboard-content').style.display = 'none';
+}
+
+function hideLoading() {
+    document.getElementById('loading-state').style.display = 'none';
+    document.getElementById('dashboard-content').style.display = 'block';
+}
+
+function showError(message) {
+    document.getElementById('error-message').textContent = message;
+    document.getElementById('error-state').style.display = 'block';
+    document.getElementById('loading-state').style.display = 'none';
+    document.getElementById('dashboard-content').style.display = 'none';
+}
+
+function addActivity(message, type = 'info') {
+    const activity = {
+        timestamp: new Date(),
+        message: message,
+        type: type
+    };
+    activityLog.unshift(activity);
+    activityLog = activityLog.slice(0, 10); // Keep only last 10 activities
+    
+    updateRecentActivity();
+}
+
+function updateRecentActivity() {
+    const container = document.getElementById('recent-activity');
+    container.innerHTML = '';
+    
+    if (activityLog.length === 0) {
+        container.innerHTML = '<div class="activity-item">No recent activity</div>';
+        return;
+    }
+    
+    activityLog.forEach(activity => {
+        const div = document.createElement('div');
+        div.className = 'activity-item';
+        
+        const icon = {
+            'info': 'fa-info-circle text-info',
+            'success': 'fa-check-circle text-success',
+            'warning': 'fa-exclamation-triangle text-warning',
+            'error': 'fa-times-circle text-danger'
+        }[activity.type] || 'fa-info-circle';
+        
+        div.innerHTML = `
+            <i class="fas ${icon}"></i>
+            <span>${activity.message}</span>
+            <small class="text-muted float-end">${activity.timestamp.toLocaleTimeString()}</small>
+        `;
+        
+        container.appendChild(div);
     });
 }
 
 async function fetchTelemetry() {
+    if (isLoading) return;
+    
     try {
-        const [telemetryResponse, historyResponse] = await Promise.all([
-            fetch('/api/telemetry'),
-            fetch('/api/telemetry/history')
+        isLoading = true;
+        
+        const [telemetryResponse, historyResponse, healthResponse, statusResponse] = await Promise.all([
+            fetch('/api/telemetry').catch(() => null),
+            fetch('/api/telemetry/history').catch(() => null),
+            fetch('/miner/health').catch(() => null),
+            fetch('/miner/status').catch(() => null)
         ]);
 
-        const telemetryData = await telemetryResponse.json();
-        const historyData = await historyResponse.json();
-
-        updateDashboard(telemetryData);
-        updateHashrateChart(historyData);
-    } catch (error) {
-        console.error('Failed to fetch data:', error);
-    }
-}
-
-function updateDashboard(data) {
-    // Mining Status
-    document.getElementById('minerStatus').textContent = data.status;
-    document.getElementById('status-indicator').className = 
-        `info-box status-box ${data.status === 'active' ? 'active' : 'stopped'}`;
-
-    // Add this code right after it:
-    // Toggle button states based on miner status
-    const startButton = document.getElementById('start-miner');
-    const stopButton = document.getElementById('stop-miner');
-    const isMinerActive = data.status === 'active';
-
-    startButton.disabled = isMinerActive;
-    startButton.classList.toggle('btn-disabled', isMinerActive);
-    startButton.title = isMinerActive ? 'Miner is already running' : 'Start the miner';
-
-    stopButton.disabled = !isMinerActive;
-    stopButton.classList.toggle('btn-disabled', !isMinerActive);
-    stopButton.title = isMinerActive ? 'Stop the miner' : 'Miner is not running';
-
-    // Miner Software Info
-    if (data.minerSoftware) {
-        document.getElementById('minerHashrate').textContent = 
-            data.minerSoftware.hashrate?.toFixed(2) || '0';
-        document.getElementById('minerAlgorithm').textContent = 
-            data.minerSoftware.algorithm || 'N/A';
-        document.getElementById('minerUptime').textContent = 
-            formatUptime(data.minerSoftware.uptime || 0);
-    }    // Schedule Information
-    if (data.schedules) {
-        console.log('Schedule data:', data.schedules); // Debug log
+        let telemetryData = null;
+        let historyData = null;
+        let healthData = null;
+        let statusData = null;
         
-        // Always use the format from the telemetry data (mining/restarts)
-        const miningSchedule = data.schedules.mining;
-        
-        if (miningSchedule?.enabled && miningSchedule.periods && miningSchedule.periods.length > 0) {
-            // Display first period's times
-            const firstPeriod = miningSchedule.periods[0];
-            document.getElementById('scheduleStart').textContent = 
-                firstPeriod.start || 'Not set';
-            document.getElementById('scheduleStop').textContent = 
-                firstPeriod.end || 'Not set';
-        } else {
-            document.getElementById('scheduleStart').textContent = 'Not set';
-            document.getElementById('scheduleStop').textContent = 'Not set';
+        if (telemetryResponse && telemetryResponse.ok) {
+            telemetryData = await telemetryResponse.json();
+            console.log('Telemetry data received:', telemetryData);
         }
         
-        // Handle restart schedules
-        const restarts = data.schedules.restarts || [];
-        document.getElementById('nextRestart').textContent = 
-            restarts.length > 0 ? `${restarts[0]}` : 'No restart scheduled';
-    }
+        if (historyResponse && historyResponse.ok) {
+            historyData = await historyResponse.json();
+            console.log('History data received:', historyData);
+        } else {
+            console.log('History response failed:', historyResponse?.status);
+        }
+        
+        if (healthResponse && healthResponse.ok) {
+            healthData = await healthResponse.json();
+        }
+        
+        if (statusResponse && statusResponse.ok) {
+            statusData = await statusResponse.json();
+            console.log('Status data received:', statusData);
+        }
 
-    // System Information
-    if (data.deviceInfo) {
-    // OS Info - now using the correct property
-    const osInfo = `${data.deviceInfo.hwBrand || ''} ${data.deviceInfo.hwModel || ''} - ${data.deviceInfo.os || ''}`.trim();
-    document.getElementById('osInfo').textContent = osInfo || 'N/A';
-
-    // CPU Info - handle heterogeneous CPU cores
-    if (Array.isArray(data.deviceInfo.cpuModel) && data.deviceInfo.cpuModel.length > 0) {
-        // Get unique CPU models and count them
-        const cpuModels = {};
-        data.deviceInfo.cpuModel.forEach(cpu => {
-            if (!cpuModels[cpu.model]) {
-                cpuModels[cpu.model] = {
-                    count: 1,
-                    maxMHz: cpu.maxMHz
-                };
-            } else {
-                cpuModels[cpu.model].count++;
+        hideLoading();
+        
+        // Check if we have at least some data from endpoints
+        const hasAnyData = telemetryData || statusData || healthData;
+        
+        if (telemetryData) {
+            updateDashboard(telemetryData, healthData, statusData);
+            addActivity('Telemetry data updated successfully', 'success');
+            
+            // Log current mining status
+            const status = telemetryData.status || 'unknown';
+            addActivity(`Current mining status: ${status === 'active' ? 'Mining' : 'Stopped'}`, 'info');
+            
+            // Log current hashrate if available
+            if (telemetryData.minerSoftware && telemetryData.minerSoftware.hashrate) {
+                addActivity(`Current hashrate: ${formatHashrate(telemetryData.minerSoftware.hashrate)}`, 'info');
             }
-        });
+            
+            // Update chart with historical data
+            if (historyData && Array.isArray(historyData)) {
+                console.log('Updating chart with', historyData.length, 'data points');
+                updateHashrateChart(historyData);
+                addActivity(`Chart updated with ${historyData.length} data points`, 'info');
+            } else {
+                console.log('No historical data available for chart');
+                // Create empty chart or show message
+                updateHashrateChart([]);
+            }
+        } else if (statusData) {
+            // If no telemetry data, try to use status data for basic info
+            console.log('Using status data as fallback');
+            updateDashboard(statusData, healthData, statusData);
+            addActivity('Status data updated (limited telemetry available)', 'info');
+        } else if (hasAnyData) {
+            // We have some data but not the main endpoints - show partial info
+            console.log('Limited data available');
+            updateDashboard({status: 'unknown'}, healthData, statusData);
+            addActivity('Limited data available - some endpoints may be unavailable', 'warning');
+        } else {
+            // Only show error if we can't connect to ANY endpoint
+            showError('Unable to connect to the mining server. Please check if the application is running.');
+            addActivity('Failed to connect to mining server', 'error');
+        }
         
-        // Format CPU info for display
-        const cpuModelText = Object.entries(cpuModels)
-            .map(([model, info]) => `${model} (${info.count}x)`)
-            .join(' + ');
-        
-        document.getElementById('cpuInfo').textContent = cpuModelText || 'N/A';
-        
-        // CPU Cores
-        document.getElementById('cpuCores').textContent = 
-            data.deviceInfo.cpuCount || data.deviceInfo.cpuModel.length || 'N/A';
-        
-        // CPU Speed (calculate average max speed from all cores)
-        const totalMaxMHz = data.deviceInfo.cpuModel.reduce((sum, cpu) => 
-            sum + (cpu.maxMHz || 0), 0);
-        const avgMaxGHz = (totalMaxMHz / data.deviceInfo.cpuModel.length / 1000).toFixed(1);
-        
-        document.getElementById('cpuSpeed').textContent = 
-            avgMaxGHz > 0 ? `${avgMaxGHz} GHz avg` : 'N/A';
-    }
-
-    // CPU Temperature
-    const cpuTemp = data.deviceInfo.cpuTemperature;
-    document.getElementById('cpuTemp').textContent = cpuTemp?.toFixed(1) || 'N/A';
-    
-    const tempBar = document.getElementById('cpu-temp-bar');
-    if (cpuTemp !== undefined) {
-        const tempPercent = Math.min((cpuTemp / 100) * 100, 100);
-        tempBar.style.width = `${tempPercent}%`;
-        tempBar.className = `progress-bar ${
-            cpuTemp >= 80 ? 'bg-danger' : 
-            cpuTemp >= 60 ? 'bg-warning' : 
-            'bg-info'
-        }`;
-    }
-
-    // Memory Usage - convert from bytes to GB
-    const memoryTotal = (data.deviceInfo.totalMemory / (1024 * 1024 * 1024)).toFixed(1);
-    const memoryFree = (data.deviceInfo.freeMemory / (1024 * 1024 * 1024)).toFixed(1);
-    const memoryUsed = (data.deviceInfo.totalMemory - data.deviceInfo.freeMemory) / (1024 * 1024 * 1024);
-    const memoryUsedFormatted = memoryUsed.toFixed(1);
-
-    document.getElementById('memoryUsed').textContent = memoryUsedFormatted;
-    document.getElementById('memoryTotal').textContent = memoryTotal;
-
-    if (data.deviceInfo.totalMemory > 0) {
-        const memoryPercent = (memoryUsed / parseFloat(memoryTotal) * 100).toFixed(1);
-        const memoryBar = document.getElementById('memory-usage-bar');
-        memoryBar.style.width = `${memoryPercent}%`;
-        memoryBar.className = `progress-bar ${
-            memoryPercent > 90 ? 'bg-danger' : 
-            memoryPercent > 70 ? 'bg-warning' : 
-            'bg-primary'
-        }`;
-    }
-
-    // Storage Usage - convert from bytes to GB
-    const storageTotal = Math.round(data.deviceInfo.totalStorage / (1024 * 1024 * 1024));
-    const storageFree = Math.round(data.deviceInfo.freeStorage / (1024 * 1024 * 1024));
-    const storageUsed = storageTotal - storageFree;
-    
-    document.getElementById('storageUsed').textContent = storageUsed;
-    document.getElementById('storageTotal').textContent = storageTotal;
-
-    if (storageTotal > 0) {
-        const storagePercent = (storageUsed / storageTotal * 100).toFixed(1);
-        const storageBar = document.getElementById('storage-usage-bar');
-        storageBar.style.width = `${storagePercent}%`;
-        storageBar.className = `progress-bar ${
-            storagePercent > 90 ? 'bg-danger' : 
-            storagePercent > 70 ? 'bg-warning' : 
-            'bg-primary'
-        }`;
+    } catch (error) {
+        console.error('Failed to fetch data:', error);
+        showError('Failed to load dashboard data. Please check your connection.');
+        addActivity('Failed to fetch telemetry data', 'error');
+    } finally {
+        isLoading = false;
     }
 }
 
-    // Pool Information
+function updateDashboard(data, healthData, statusData) {
+    // Check if data exists - allow minimal data when miner is stopped
+    if (!data) {
+        console.error('No telemetry data available');
+        // Don't show error if we have status data, just log it
+        if (statusData) {
+            console.log('Using status data only');
+        } else {
+            showError('No data available from the mining server');
+            return;
+        }
+    }
+
+    // Update health status
+    if (healthData) {
+        const hasWarnings = healthData.recentOutput && 
+                           healthData.recentOutput.some(line => 
+                               line && (line.includes('reject reason:') || line.includes('booooo')));
+        
+        updateHealthStatus(healthData.healthy, healthData.message, hasWarnings);
+        
+        // Log health changes
+        const healthIndicator = document.getElementById('health-indicator');
+        const previousHealthy = healthIndicator.getAttribute('data-healthy');
+        const currentHealthy = healthData.healthy ? 'true' : 'false';
+        
+        if (previousHealthy && previousHealthy !== currentHealthy) {
+            if (healthData.healthy) {
+                addActivity('Miner health restored: ' + (healthData.message || 'Mining normally'), 'success');
+            } else {
+                addActivity('Miner health issue detected: ' + (healthData.message || 'Connection issues'), 'warning');
+            }
+        }
+        
+        // Store current health state
+        healthIndicator.setAttribute('data-healthy', currentHealthy);
+        
+        // Process recent miner output for activity logging
+        if (healthData.recentOutput && Array.isArray(healthData.recentOutput)) {
+            const lastProcessedOutput = healthIndicator.getAttribute('data-last-output') || '';
+            const recentOutputString = healthData.recentOutput.join('\n');
+            
+            if (lastProcessedOutput !== recentOutputString) {
+                // Look for new accepted shares
+                healthData.recentOutput.forEach(line => {
+                    if (line && line.includes('accepted:')) {
+                        const match = line.match(/accepted: (\d+\/\d+).*?(\d+\.\d+\s+[kmgKMG]?H\/s)/);
+                        if (match) {
+                            addActivity(`Share accepted: ${match[1]} - ${match[2]}`, 'success');
+                        }
+                    }
+                    
+                    // Look for rejected shares and rejection reasons
+                    if (line && line.includes('reject reason:')) {
+                        const reasonMatch = line.match(/reject reason:\s*(.+)/);
+                        if (reasonMatch) {
+                            addActivity(`Share rejected: ${reasonMatch[1]}`, 'warning');
+                        }
+                    }
+                    
+                    // Look for "booooo" rejections (ccminer style)
+                    if (line && line.includes('booooo')) {
+                        addActivity(`Share rejected (booooo)`, 'warning');
+                    }
+                });
+                
+                // Store the processed output
+                healthIndicator.setAttribute('data-last-output', recentOutputString);
+            }
+        }
+    } else {
+        // No health data available - determine status based on available data
+        const status = data?.status || statusData?.status || 'unknown';
+        const shouldBeMining = statusData?.shouldBeMining;
+        
+        if (status === 'active' || status === 'running') {
+            updateHealthStatus(true, 'Mining (status unknown)', false);
+        } else if (status === 'stopped' && shouldBeMining === false) {
+            // Miner is stopped but it's expected (outside mining schedule)
+            updateHealthStatus(true, 'Stopped (outside mining schedule)', false);
+        } else {
+            updateHealthStatus(false, 'Stopped or disconnected', false);
+        }
+    }
+
+    // Mining Status - handle both telemetry and status data formats
+    let status = data.status || 'unknown';
+    
+    // If we have status data, use it for more accurate status
+    if (statusData && statusData.status) {
+        status = statusData.status === 'running' ? 'active' : 'stopped';
+    }
+    
+    const statusIndicator = document.getElementById('status-indicator');
+    
+    // Track status changes for activity logging
+    const previousStatus = statusIndicator.getAttribute('data-status');
+    const currentStatus = status === 'active' ? 'Mining' : 'Stopped';
+    
+    // Log status changes
+    if (previousStatus && previousStatus !== currentStatus) {
+        const activityType = status === 'active' ? 'success' : 'warning';
+        addActivity(`Mining status changed to: ${currentStatus}`, activityType);
+    }
+    
+    // Update status indicator
+    if (statusIndicator) {
+        statusIndicator.className = `status-indicator ${status === 'active' ? 'status-active' : 'status-inactive'}`;
+        statusIndicator.setAttribute('data-status', currentStatus);
+    }
+
+    // Control buttons
+    const startButton = document.getElementById('start-miner');
+    const stopButton = document.getElementById('stop-miner');
+    const restartButton = document.getElementById('restart-miner');
+    const isMinerActive = status === 'active';
+
+    // Update button states
+    startButton.disabled = isMinerActive;
+    stopButton.disabled = !isMinerActive;
+    restartButton.disabled = false;
+    
+    // Apply gradient colors based on state
+    if (isMinerActive) {
+        // Mining is active - highlight start button with green gradient (active state)
+        startButton.style.background = 'linear-gradient(135deg, var(--accent), #0de3ac)';
+        startButton.style.color = 'white';
+        startButton.style.border = 'none';
+        
+        // Reset stop button to default secondary style
+        stopButton.style.background = '';
+        stopButton.style.color = '';
+        stopButton.style.border = '';
+    } else {
+        // Mining is stopped - highlight stop button with red gradient (stopped state)
+        stopButton.style.background = 'linear-gradient(135deg, #ef4444, #dc2626)';
+        stopButton.style.color = 'white';
+        stopButton.style.border = 'none';
+        
+        // Reset start button to default secondary style
+        startButton.style.background = '';
+        startButton.style.color = '';
+        startButton.style.border = '';
+    }
+
+    // Mining metrics
+    if (data.minerSoftware) {
+        const hashrate = data.minerSoftware.hashrate || 0;
+        const hashrateElement = document.getElementById('minerHashrate');
+        const previousHashrate = hashrateElement.getAttribute('data-hashrate');
+        
+        hashrateElement.textContent = formatHashrate(hashrate);
+        
+        // Log significant hashrate changes
+        if (previousHashrate && Math.abs(hashrate - parseFloat(previousHashrate)) > hashrate * 0.1) {
+            const change = hashrate > parseFloat(previousHashrate) ? 'increased' : 'decreased';
+            addActivity(`Hashrate ${change} to ${formatHashrate(hashrate)}`, 'info');
+        }
+        
+        hashrateElement.setAttribute('data-hashrate', hashrate);
+        
+        document.getElementById('minerAlgorithm').textContent = data.minerSoftware.algorithm || 'N/A';
+        document.getElementById('minerVersion').textContent = data.minerSoftware.version || 'N/A';
+        document.getElementById('acceptedShares').textContent = data.minerSoftware.acceptedShares || 0;
+        document.getElementById('rejectedShares').textContent = data.minerSoftware.rejectedShares || 0;
+        document.getElementById('minerUptime').textContent = formatUptime(data.minerSoftware.uptime || 0);
+        
+        // Log rejected shares
+        const rejectedShares = data.minerSoftware.rejectedShares || 0;
+        const acceptedShares = data.minerSoftware.acceptedShares || 0;
+        const previousRejected = document.getElementById('rejectedShares').getAttribute('data-rejected');
+        const previousAccepted = document.getElementById('acceptedShares').getAttribute('data-accepted');
+        
+        if (previousRejected && rejectedShares > parseFloat(previousRejected)) {
+            addActivity(`Rejected share detected (Total: ${rejectedShares})`, 'warning');
+        }
+        
+        if (previousAccepted && acceptedShares > parseFloat(previousAccepted)) {
+            const newAccepted = acceptedShares - parseFloat(previousAccepted);
+            addActivity(`${newAccepted} new share(s) accepted (Total: ${acceptedShares})`, 'success');
+        }
+        
+        document.getElementById('rejectedShares').setAttribute('data-rejected', rejectedShares);
+        document.getElementById('acceptedShares').setAttribute('data-accepted', acceptedShares);
+    }
+
+    // Pool information
     if (data.pool) {
         document.getElementById('poolName').textContent = data.pool.name || 'N/A';
         document.getElementById('poolUrl').textContent = data.pool.url || 'N/A';
-        document.getElementById('poolPing').textContent = data.pool.ping ? `${data.pool.ping} ms` : 'N/A';
+        
+        const ping = data.pool.ping || 0;
+        const pingElement = document.getElementById('poolPing');
+        pingElement.textContent = `${ping} ms`;
+        
+        if (ping < 50) {
+            pingElement.className = 'ping-indicator ping-good';
+        } else if (ping < 150) {
+            pingElement.className = 'ping-indicator ping-fair';
+        } else {
+            pingElement.className = 'ping-indicator ping-poor';
+        }
+    }
 
-        const acceptedShares = parseInt(data.pool.acceptedShares) || 0;
-        const rejectedShares = parseInt(data.pool.rejectedShares) || 0;
-        const totalShares = acceptedShares + rejectedShares;
-
-        document.getElementById('minerAcceptedShares').textContent = acceptedShares;
-        document.getElementById('minerRejectedShares').textContent = rejectedShares;
-
-        if (totalShares > 0) {
-            const acceptedPercent = (acceptedShares / totalShares * 100).toFixed(1);
-            const rejectedPercent = (rejectedShares / totalShares * 100).toFixed(1);
-
-            const acceptedBar = document.getElementById('shares-accepted-bar');
-            const rejectedBar = document.getElementById('shares-rejected-bar');
-
-            if (acceptedBar && rejectedBar) {
-                acceptedBar.style.width = `${acceptedPercent}%`;
-                rejectedBar.style.width = `${rejectedPercent}%`;
-                
-                // Update accessibility attributes
-                acceptedBar.setAttribute('aria-valuenow', acceptedPercent);
-                rejectedBar.setAttribute('aria-valuenow', rejectedPercent);
+    // System information
+    if (data.deviceInfo) {
+        const deviceInfo = `${data.deviceInfo.hwBrand || ''} ${data.deviceInfo.hwModel || ''} - ${data.deviceInfo.os || ''}`.trim();
+        document.getElementById('deviceInfo').textContent = deviceInfo || 'N/A';
+        
+        // CPU cores
+        const cpuCoresContainer = document.getElementById('cpuCores');
+        cpuCoresContainer.innerHTML = '';
+        
+        if (data.deviceInfo.cpuModel && Array.isArray(data.deviceInfo.cpuModel)) {
+            data.deviceInfo.cpuModel.forEach((cpu, index) => {
+                const coreDiv = document.createElement('div');
+                coreDiv.className = `cpu-core ${cpu.hashrate > 0 ? 'active' : ''}`;
+                coreDiv.textContent = `C${index}`;
+                coreDiv.title = `Core ${index}: ${formatHashrate(cpu.hashrate || 0)}`;
+                cpuCoresContainer.appendChild(coreDiv);
+            });
+        } else {
+            for (let i = 0; i < (data.deviceInfo.cpuCount || 4); i++) {
+                const coreDiv = document.createElement('div');
+                coreDiv.className = 'cpu-core';
+                coreDiv.textContent = `C${i}`;
+                cpuCoresContainer.appendChild(coreDiv);
             }
         }
-    }    // Update schedule information
-    const scheduleSection = document.getElementById('schedules-section');
-    if (scheduleSection && data.schedules) {
-        // Use only telemetry format for consistency (mining/restarts)
-        const miningSchedules = data.schedules.mining;
-        const restartSchedules = data.schedules.restarts || [];
         
-        let scheduleHTML = '<h3>Mining Schedules</h3>';
+        // Temperature
+        const temp = data.deviceInfo.cpuTemperature || 0;
+        const tempElement = document.getElementById('cpuTemp');
+        tempElement.textContent = `${temp}°C`;
         
-        if (miningSchedules && miningSchedules.enabled && miningSchedules.periods && miningSchedules.periods.length > 0) {
-            scheduleHTML += '<ul class="schedule-list">';
-            miningSchedules.periods.forEach(period => {
-                const startTime = period.start;
-                const endTime = period.end;
-                const days = period.days ? period.days.join(', ') : 'all days';
-                scheduleHTML += `<li>Mine from ${startTime} to ${endTime} on ${days}</li>`;
-            });
-            scheduleHTML += '</ul>';
+        if (temp < 60) {
+            tempElement.className = 'temp-value temp-normal';
+        } else if (temp < 80) {
+            tempElement.className = 'temp-value temp-warm';
         } else {
-            scheduleHTML += '<p>No mining schedules configured</p>';
+            tempElement.className = 'temp-value temp-hot';
         }
         
-        scheduleHTML += '<h3>Restart Schedules</h3>';
+        // Memory
+        const memoryUsed = (data.deviceInfo.totalMemory - data.deviceInfo.freeMemory) / (1024 * 1024 * 1024);
+        const memoryTotal = data.deviceInfo.totalMemory / (1024 * 1024 * 1024);
+        const memoryPercent = (memoryUsed / memoryTotal) * 100;
         
-        if (restartSchedules && restartSchedules.length > 0) {
-            scheduleHTML += '<ul class="schedule-list">';
-            restartSchedules.forEach(restart => {
-                // Restart times are always strings in telemetry format
-                scheduleHTML += `<li>Restart at ${restart}</li>`;
-            });
-            scheduleHTML += '</ul>';
+        document.getElementById('memoryUsage').textContent = `${memoryUsed.toFixed(1)} GB`;
+        document.getElementById('memoryTotal').textContent = `${memoryTotal.toFixed(1)} GB`;
+        document.getElementById('memoryPercent').textContent = `${memoryPercent.toFixed(1)}%`;
+        
+        const memoryProgress = document.getElementById('memoryProgress');
+        memoryProgress.style.width = `${memoryPercent}%`;
+        
+        // Color coding for memory usage
+        if (memoryPercent > 90) {
+            memoryProgress.style.background = 'linear-gradient(90deg, #ef4444, #dc2626)';
+        } else if (memoryPercent > 70) {
+            memoryProgress.style.background = 'linear-gradient(90deg, #f59e0b, #d97706)';
         } else {
-            scheduleHTML += '<p>No restart schedules configured</p>';
+            memoryProgress.style.background = 'linear-gradient(90deg, var(--accent), #0de3ac)';
         }
         
-        scheduleSection.innerHTML = scheduleHTML;
+        // Storage
+        const storageUsed = (data.deviceInfo.totalStorage - data.deviceInfo.freeStorage) / (1024 * 1024 * 1024);
+        const storageTotal = data.deviceInfo.totalStorage / (1024 * 1024 * 1024);
+        const storagePercent = (storageUsed / storageTotal) * 100;
+        
+        document.getElementById('storageUsage').textContent = `${storageUsed.toFixed(1)} GB`;
+        document.getElementById('storageTotal').textContent = `${storageTotal.toFixed(1)} GB`;
+        document.getElementById('storagePercent').textContent = `${storagePercent.toFixed(1)}%`;
+        
+        const storageProgress = document.getElementById('storageProgress');
+        storageProgress.style.width = `${storagePercent}%`;
+        
+        // Color coding for storage usage
+        if (storagePercent > 90) {
+            storageProgress.style.background = 'linear-gradient(90deg, #ef4444, #dc2626)';
+        } else if (storagePercent > 70) {
+            storageProgress.style.background = 'linear-gradient(90deg, #f59e0b, #d97706)';
+        } else {
+            storageProgress.style.background = 'linear-gradient(90deg, var(--accent), #0de3ac)';
+        }
+    }
+
+    // Rig information from status data
+    if (statusData && statusData.rigInfo) {
+        document.getElementById('rigId').textContent = statusData.rigInfo.rigId || 'Unknown';
+        document.getElementById('minerId').textContent = statusData.rigInfo.minerId || 'Unknown';
+        document.getElementById('rigName').textContent = statusData.rigInfo.name || 'Unknown';
+        document.getElementById('minerSoftwareName').textContent = statusData.rigInfo.minerSoftware || 'Unknown';
+    }
+
+    // Network information
+    if (data.network) {
+        document.getElementById('internalIp').textContent = data.network.primaryIp || 'N/A';
+        document.getElementById('externalIp').textContent = data.network.externalIp || 'N/A';
+        document.getElementById('gateway').textContent = data.network.gateway || 'N/A';
+    }
+
+    // Battery information
+    if (data.battery) {
+        const batteryPercent = data.battery.percentage || 0;
+        const batteryFill = document.getElementById('batteryFill');
+        const batteryPercentElement = document.getElementById('batteryPercent');
+        const batteryStatus = document.getElementById('batteryStatus');
+        const batteryHealth = document.getElementById('batteryHealth');
+        
+        batteryFill.style.width = `${batteryPercent}%`;
+        batteryPercentElement.textContent = `${batteryPercent}%`;
+        batteryStatus.textContent = data.battery.status || 'Unknown';
+        batteryHealth.textContent = data.battery.health || 'Unknown';
+        
+        if (batteryPercent > 50) {
+            batteryFill.style.background = 'linear-gradient(90deg, #22c55e, #16a34a)';
+        } else if (batteryPercent > 20) {
+            batteryFill.style.background = 'linear-gradient(90deg, #f59e0b, #d97706)';
+        } else {
+            batteryFill.style.background = 'linear-gradient(90deg, #ef4444, #dc2626)';
+        }
+    }
+
+    // Schedules - use status data if available, otherwise fall back to data.schedules
+    const scheduleData = statusData?.scheduleStatus || data.schedules;
+    updateSchedules(scheduleData, statusData);
+}
+
+function updateSchedules(schedules, statusData) {
+    const miningPeriods = document.getElementById('mining-periods');
+    const restartSchedule = document.getElementById('restart-schedule');
+    
+    // Check if scheduled mining is enabled
+    const schedulingEnabled = statusData?.scheduleStatus?.schedulingEnabled ?? 
+                            schedules?.scheduledMining?.enabled ?? 
+                            schedules?.mining?.enabled ?? 
+                            false;
+    
+    // Mining periods - handle both old and new format
+    if (!schedulingEnabled) {
+        // If scheduling is disabled, show that mining is allowed at all times
+        miningPeriods.innerHTML = `
+            <div class="schedule-item schedule-disabled">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <strong><i class="fas fa-clock"></i> Mining Schedule</strong><br>
+                        <small>Scheduled mining is disabled - mining allowed at all times</small>
+                    </div>
+                    <div class="text-sm">
+                        <span class="text-success"><i class="fas fa-infinity"></i> Always Active</span>
+                    </div>
+                </div>
+            </div>
+        `;
+    } else if (statusData && statusData.scheduleStatus && statusData.scheduleStatus.allPeriods) {
+        // Use new format from status endpoint
+        const allPeriods = statusData.scheduleStatus.allPeriods;
+        if (allPeriods.length > 0) {
+            miningPeriods.innerHTML = '';
+            allPeriods.forEach(period => {
+                const div = document.createElement('div');
+                div.className = `schedule-item ${period.isActive ? 'schedule-active' : ''}`;
+                div.innerHTML = `
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <strong>${period.startTime} - ${period.endTime}</strong><br>
+                            <small>Days: ${period.days ? period.days.join(', ') : 'All days'}</small>
+                        </div>
+                        <div class="text-sm">
+                            ${period.isActive ? 
+                                '<span class="text-success"><i class="fas fa-play"></i> Active</span>' : 
+                                '<span class="text-muted"><i class="fas fa-pause"></i> Inactive</span>'
+                            }
+                        </div>
+                    </div>
+                `;
+                miningPeriods.appendChild(div);
+            });
+            
+            // Add current status info
+            if (statusData.scheduleStatus.schedulingEnabled) {
+                const statusDiv = document.createElement('div');
+                statusDiv.className = 'schedule-item';
+                statusDiv.innerHTML = `
+                    <div class="text-sm">
+                        <i class="fas fa-clock"></i> Current: ${statusData.scheduleStatus.currentDay} ${statusData.scheduleStatus.currentTime}<br>
+                        <i class="fas fa-info-circle"></i> Should mine: ${statusData.scheduleStatus.shouldMine ? 'Yes' : 'No'}
+                    </div>
+                `;
+                miningPeriods.appendChild(statusDiv);
+            }
+        } else {
+            miningPeriods.innerHTML = '<div class="text-muted">No mining periods configured</div>';
+        }
+    } else if (schedules && schedules.mining && schedules.mining.periods && schedules.mining.periods.length > 0) {
+        // Use old format fallback
+        miningPeriods.innerHTML = '';
+        schedules.mining.periods.forEach(period => {
+            const div = document.createElement('div');
+            div.className = 'schedule-item';
+            div.innerHTML = `
+                <strong>${period.start} - ${period.end}</strong><br>
+                <small>Days: ${period.days ? period.days.join(', ') : 'All days'}</small>
+            `;
+            miningPeriods.appendChild(div);
+        });
+    } else {
+        miningPeriods.innerHTML = '<div class="text-muted">No mining periods configured</div>';
+    }
+    
+    // Restart schedule - handle both old and new format
+    if (statusData && statusData.scheduleStatus && statusData.scheduleStatus.restartTimes) {
+        const restartTimes = statusData.scheduleStatus.restartTimes;
+        if (restartTimes.length > 0) {
+            restartSchedule.innerHTML = '';
+            restartTimes.forEach(time => {
+                const div = document.createElement('div');
+                div.className = 'schedule-item';
+                div.innerHTML = `
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div><strong>Restart at ${time}</strong></div>
+                        <div class="text-sm">
+                            ${statusData.scheduleStatus.nextRestart ? 
+                                `<span class="text-info"><i class="fas fa-clock"></i> Next: ${statusData.scheduleStatus.nextRestart}</span>` : 
+                                '<span class="text-muted">Not scheduled</span>'
+                            }
+                        </div>
+                    </div>
+                `;
+                restartSchedule.appendChild(div);
+            });
+        } else {
+            restartSchedule.innerHTML = '<div class="text-muted">No restart schedule configured</div>';
+        }
+    } else if (schedules && schedules.restarts && schedules.restarts.length > 0) {
+        // Use old format fallback
+        restartSchedule.innerHTML = '';
+        schedules.restarts.forEach(restart => {
+            const div = document.createElement('div');
+            div.className = 'schedule-item';
+            div.innerHTML = `<strong>Restart at ${restart}</strong>`;
+            restartSchedule.appendChild(div);
+        });
+    } else {
+        restartSchedule.innerHTML = '<div class="text-muted">No restart schedule configured</div>';
     }
 }
 
 function formatUptime(seconds) {
     const hours = Math.floor(seconds / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);
-    return `${hours}h ${minutes}m`;
+    const secs = seconds % 60;
+    
+    if (hours > 0) {
+        return `${hours}h ${minutes}m`;
+    } else if (minutes > 0) {
+        return `${minutes}m ${secs}s`;
+    } else {
+        return `${secs}s`;
+    }
 }
 
-// Initialize theme and start data fetching
-initTheme();
-fetchTelemetry();
-setInterval(fetchTelemetry, 30000);
-
-// Initialize miner controls
-document.getElementById('start-miner').addEventListener('click', async () => {
+async function controlMiner(action) {
     try {
-        await fetch('/miner/start', { method: 'POST' });
-        fetchTelemetry();
+        const response = await fetch(`/miner/${action}`, { method: 'POST' });
+        const result = await response.json();
+        
+        if (response.ok) {
+            addActivity(`Miner ${action} successful`, 'success');
+        } else {
+            addActivity(`Miner ${action} failed: ${result.message}`, 'error');
+        }
+        
+        // Refresh data after action
+        setTimeout(fetchTelemetry, 1000);
+        
     } catch (error) {
-        console.error('Failed to start miner:', error);
+        console.error(`Failed to ${action} miner:`, error);
+        addActivity(`Failed to ${action} miner: ${error.message}`, 'error');
     }
-});
+}
 
-document.getElementById('stop-miner').addEventListener('click', async () => {
-    try {
-        await fetch('/miner/stop', { method: 'POST' });
-        fetchTelemetry();
-    } catch (error) {
-        console.error('Failed to stop miner:', error);
-    }
-});
+// Initialize everything when DOM is ready
+const initializeApp = () => {
+    // Initialize theme
+    initTheme();
+    
+    // Initialize miner controls
+    const startBtn = document.getElementById('start-miner');
+    const stopBtn = document.getElementById('stop-miner');
+    const restartBtn = document.getElementById('restart-miner');
+    
+    if (startBtn) startBtn.addEventListener('click', () => controlMiner('start'));
+    if (stopBtn) stopBtn.addEventListener('click', () => controlMiner('stop'));
+    if (restartBtn) restartBtn.addEventListener('click', () => controlMiner('restart'));
+    
+    // Initialize activity log
+    addActivity('Dashboard loaded successfully', 'success');
+    
+    // Add initial system information
+    addActivity('Initializing RefurbMiner Dashboard...', 'info');
+    updateRecentActivity();
+    
+    // Initialize dashboard
+    showLoading();
+    fetchTelemetry();
+    setInterval(fetchTelemetry, 30000);
+};
+
+// Initialize on DOM content loaded
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initializeApp);
+} else {
+    initializeApp();
+}
     </script>
 </body>
 </html>

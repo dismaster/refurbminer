@@ -7,7 +7,7 @@ import { MinerManagerService } from '../miner-manager/miner-manager.service';
 import { OsDetectionService } from '../device-monitoring/os-detection/os-detection.service';
 import { ConfigService } from '../config/config.service';
 import { HardwareInfoUtil } from './utils/hardware/hardware-info.util';
-import { NetworkInfoUtil } from './utils/network-info.util';
+import { NetworkInfoUtil, TelemetryData } from './utils/network-info.util';
 import { BatteryInfoUtil } from './utils/battery-info.util';
 
 // Miner utilities
@@ -92,7 +92,7 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** Get telemetry data with comprehensive error handling */
-  async getTelemetryData() {
+  async getTelemetryData(): Promise<TelemetryData | null> {
     try {
       // Core system data - use safe sync operations
       const minerRunning = safeExecute(
@@ -409,14 +409,33 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
         'utf8'
       );
       
-      // Create backup with cleanup of old backups
-      const timestamp = Date.now();
-      const backupPath = `${this.telemetryFilePath}.${timestamp}.bak`;
-      
-      await fs.promises.copyFile(this.telemetryFilePath, backupPath);
-      
-      // Clean up old backups using MAX_BACKUPS setting
-      await this.cleanupOldBackups(this.telemetryFilePath, this.MAX_BACKUPS);
+      // Only create backup if file was successfully written and not too recent
+      const shouldCreateBackup = await this.shouldCreateBackup();
+      if (shouldCreateBackup) {
+        const timestamp = Date.now();
+        const backupPath = `${this.telemetryFilePath}.${timestamp}.bak`;
+        
+        try {
+          await fs.promises.copyFile(this.telemetryFilePath, backupPath);
+          
+          // Clean up old backups asynchronously to prevent blocking
+          setImmediate(() => {
+            this.cleanupOldBackups(this.telemetryFilePath, this.MAX_BACKUPS).catch(error => {
+              this.loggingService.log(
+                `Background backup cleanup failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+                'WARN',
+                'telemetry'
+              );
+            });
+          });
+        } catch (backupError) {
+          this.loggingService.log(
+            `Failed to create backup: ${backupError instanceof Error ? backupError.message : 'Unknown error'}`,
+            'WARN',
+            'telemetry'
+          );
+        }
+      }
       
       this.loggingService.log('✅ Telemetry data updated', 'DEBUG', 'telemetry');
     } catch (error) {
@@ -498,38 +517,106 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
       const dirPath = path.dirname(filePath);
       const fileName = path.basename(filePath);
       
-      // Get all files in the directory
-      const files = await fs.promises.readdir(dirPath);
+      // Check if directory exists first
+      if (!await fs.promises.access(dirPath).then(() => true).catch(() => false)) {
+        this.loggingService.log(`Directory does not exist: ${dirPath}`, 'DEBUG', 'telemetry');
+        return;
+      }
       
-      // Filter for backup files matching our pattern
+      // Get all files in the directory with timeout protection
+      const files = await Promise.race([
+        fs.promises.readdir(dirPath),
+        new Promise<string[]>((_, reject) => 
+          setTimeout(() => reject(new Error('Directory read timeout')), 5000)
+        )
+      ]);
+      
+      // Filter for backup files matching our pattern with better validation
       const backupFiles = files
-        .filter(file => file.startsWith(`${fileName}.`) && file.endsWith('.bak'))
-        .map(file => ({
-          name: file,
-          path: path.join(dirPath, file),
-          // Extract timestamp from filename
-          timestamp: parseInt(file.replace(`${fileName}.`, '').replace('.bak', ''), 10) || 0
-        }))
+        .filter(file => {
+          // More strict pattern matching
+          const pattern = new RegExp(`^${fileName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.\\d+\\.bak$`);
+          return pattern.test(file);
+        })
+        .map(file => {
+          // Extract timestamp more safely
+          const timestampMatch = file.match(/\.(\d+)\.bak$/);
+          const timestamp = timestampMatch ? parseInt(timestampMatch[1], 10) : 0;
+          
+          // Validate timestamp (should be reasonable Unix timestamp)
+          const isValidTimestamp = timestamp > 1000000000 && timestamp < Date.now() + 86400000; // Not too old, not in future
+          
+          return {
+            name: file,
+            path: path.join(dirPath, file),
+            timestamp: isValidTimestamp ? timestamp : 0,
+            isValid: isValidTimestamp
+          };
+        })
+        .filter(file => file.isValid) // Only keep files with valid timestamps
         .sort((a, b) => b.timestamp - a.timestamp); // Sort newest first
+      
+      this.loggingService.log(
+        `Found ${backupFiles.length} valid backup files for ${fileName}`,
+        'DEBUG',
+        'telemetry'
+      );
       
       // Remove older backups if we have more than maxBackups
       if (backupFiles.length > maxBackups) {
-        for (const file of backupFiles.slice(maxBackups)) {
+        const filesToDelete = backupFiles.slice(maxBackups);
+        
+        // Delete files in parallel with individual error handling
+        const deletePromises = filesToDelete.map(async (file) => {
           try {
-            await fs.promises.unlink(file.path);
-            this.loggingService.log(
-              `🗑️ Removed old telemetry backup: ${file.name}`,
-              'DEBUG',
-              'telemetry'
-            );
+            // Check if file still exists before attempting to delete
+            if (await fs.promises.access(file.path).then(() => true).catch(() => false)) {
+              await fs.promises.unlink(file.path);
+              this.loggingService.log(
+                `🗑️ Removed old telemetry backup: ${file.name}`,
+                'DEBUG',
+                'telemetry'
+              );
+              return { success: true, file: file.name };
+            } else {
+              this.loggingService.log(
+                `Backup file already removed: ${file.name}`,
+                'DEBUG',
+                'telemetry'
+              );
+              return { success: true, file: file.name, skipped: true };
+            }
           } catch (error) {
             this.loggingService.log(
               `Failed to delete backup ${file.name}: ${error instanceof Error ? error.message : 'Unknown error'}`,
               'WARN',
               'telemetry'
             );
+            return { success: false, file: file.name, error };
           }
-        }
+        });
+        
+        // Wait for all deletions with timeout protection
+        const results = await Promise.allSettled(
+          deletePromises.map(p => 
+            Promise.race([
+              p,
+              new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('Delete timeout')), 10000)
+              )
+            ])
+          )
+        );
+        
+        // Log summary of cleanup results
+        const successful = results.filter(r => r.status === 'fulfilled').length;
+        const failed = results.filter(r => r.status === 'rejected').length;
+        
+        this.loggingService.log(
+          `Backup cleanup completed: ${successful} successful, ${failed} failed`,
+          failed > 0 ? 'WARN' : 'DEBUG',
+          'telemetry'
+        );
       }
     } catch (error) {
       this.loggingService.log(
@@ -537,6 +624,36 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
         'ERROR',
         'telemetry'
       );
+      // Don't throw error to prevent blocking the main telemetry process
+    }
+  }
+
+  /**
+   * Check if we should create a backup (prevent too frequent backups)
+   */
+  private async shouldCreateBackup(): Promise<boolean> {
+    try {
+      const dirPath = path.dirname(this.telemetryFilePath);
+      const fileName = path.basename(this.telemetryFilePath);
+      
+      // Check if we created a backup in the last 5 minutes
+      const fiveMinutesAgo = Date.now() - (5 * 60 * 1000);
+      
+      const files = await fs.promises.readdir(dirPath);
+      const recentBackups = files.filter(file => {
+        if (!file.startsWith(`${fileName}.`) || !file.endsWith('.bak')) return false;
+        
+        const timestampMatch = file.match(/\.(\d+)\.bak$/);
+        if (!timestampMatch) return false;
+        
+        const timestamp = parseInt(timestampMatch[1], 10);
+        return timestamp > fiveMinutesAgo;
+      });
+      
+      return recentBackups.length === 0;
+    } catch (error) {
+      // If check fails, allow backup creation
+      return true;
     }
   }
 

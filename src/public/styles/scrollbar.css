@@ -1,0 +1,60 @@
+/* Scrollbar Styles */
+
+/* Base scrollbar styles - initially hidden */
+::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  background: transparent;
+  transition: width 0.3s, height 0.3s;
+}
+
+/* Show scrollbar when scrolling */
+:is(html:hover, body:hover, *:hover)::-webkit-scrollbar,
+:is(html:active, body:active, *:active)::-webkit-scrollbar,
+:is(html:focus, body:focus, *:focus)::-webkit-scrollbar,
+:is(html.scrolling, body.scrolling, *.scrolling)::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+/* Track styles */
+::-webkit-scrollbar-track {
+  background: var(--background);
+  margin: 3px;
+  border-radius: 10px;
+  box-shadow: inset 2px 2px 5px var(--shadow-color),
+              inset -2px -2px 5px var(--highlight-color);
+}
+
+/* Thumb styles */
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(135deg, var(--accent) 0%, var(--scrollbar-gradient-end) 100%);
+  border-radius: 10px;
+  border: 2px solid var(--background);
+  box-shadow: inset 2px 2px 5px var(--scrollbar-highlight),
+              inset -2px -2px 5px var(--scrollbar-shadow);
+  transition: all 0.3s ease;
+}
+
+/* Thumb hover effect */
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(135deg, var(--accent) 20%, var(--scrollbar-gradient-end) 80%);
+  box-shadow: inset 3px 3px 6px var(--scrollbar-highlight),
+              inset -3px -3px 6px var(--scrollbar-shadow);
+}
+
+/* Corner style */
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Firefox scrollbar styles */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-gradient-end) var(--background);
+}
+
+/* Firefox hover effect */
+*:hover {
+  scrollbar-color: var(--accent) var(--background);
+}

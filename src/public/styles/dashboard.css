@@ -1,0 +1,634 @@
+/* Dashboard Specific Styles */
+
+/* Dashboard Grid Layout */
+.dashboard-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 0.8rem;
+    margin-bottom: 1.2rem;
+}
+
+/* Metric Cards */
+.metric-card {
+    background: var(--card-bg);
+    border-radius: 12px;
+    padding: 0.8rem;
+    position: relative;
+    overflow: hidden;
+}
+
+.metric-value {
+    font-size: 1.25rem;
+    font-weight: 700;
+    margin-bottom: 0.25rem;
+}
+
+.metric-label {
+    color: var(--text-secondary);
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* Status Indicators */
+.status-indicator {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-right: 6px;
+    animation: pulse 2s infinite;
+}
+
+.status-active { background-color: #22c55e; }
+.status-inactive { background-color: #ef4444; }
+.status-warning { background-color: #f59e0b; }
+
+/* Health Status */
+.health-status {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.75rem;
+    margin-top: 0.25rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 12px;
+    background: var(--neutral-bg);
+    border: 1px solid var(--border-color);
+    transition: all 0.3s ease;
+}
+
+.health-status.healthy {
+    background: rgba(34, 197, 94, 0.1);
+    border-color: #22c55e;
+    color: #22c55e;
+}
+
+.health-status.warning {
+    background: rgba(245, 158, 11, 0.1);
+    border-color: #f59e0b;
+    color: #f59e0b;
+}
+
+.health-status.error {
+    background: rgba(239, 68, 68, 0.1);
+    border-color: #ef4444;
+    color: #ef4444;
+}
+
+.health-status.checking {
+    background: rgba(59, 130, 246, 0.1);
+    border-color: #3b82f6;
+    color: #3b82f6;
+}
+
+/* Header Layout */
+.header-container {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 0.75rem 0;
+    min-height: 60px;
+}
+
+.header-left {
+    display: flex;
+    align-items: center;
+    flex: 1;
+    min-width: 0;
+}
+
+.header-right {
+    display: flex;
+    align-items: center;
+    margin-left: auto;
+    flex-shrink: 0;
+}
+
+/* Theme Toggle Button */
+.theme-toggle-btn {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    font-size: 0.875rem;
+    margin-left: auto;
+}
+
+.theme-toggle-btn:hover {
+    background: var(--hover-bg);
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.theme-toggle-btn:active {
+    transform: translateY(0);
+}
+
+/* CPU Core Grid */
+.cpu-core-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(40px, 1fr));
+    gap: 0.5rem;
+    margin-top: 1rem;
+}
+
+.cpu-core {
+    background: var(--neutral-bg);
+    border-radius: 8px;
+    padding: 0.5rem;
+    text-align: center;
+    font-size: 0.75rem;
+    position: relative;
+}
+
+.cpu-core.active {
+    background: linear-gradient(135deg, var(--accent), #0de3ac);
+    color: white;
+}
+
+/* Battery Indicator */
+.battery-indicator {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.5rem;
+}
+
+.battery-level {
+    width: 80px;
+    height: 25px;
+    border: 2px solid var(--text-secondary);
+    border-radius: 4px;
+    position: relative;
+    overflow: hidden;
+}
+
+.battery-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #22c55e, #16a34a);
+    transition: width 0.3s ease;
+}
+
+.battery-percentage {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 0.75rem;
+    font-weight: bold;
+    color: var(--text-primary);
+}
+
+/* Progress Bars */
+.progress-bar {
+    width: 100%;
+    height: 20px;
+    background-color: var(--neutral-bg);
+    border-radius: 10px;
+    overflow: hidden;
+    position: relative;
+    margin-top: 0.5rem;
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), #0de3ac);
+    transition: width 0.3s ease;
+    border-radius: 10px;
+}
+
+.progress-text {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 0.75rem;
+    font-weight: bold;
+    color: var(--text-primary);
+    text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
+}
+
+/* Control Buttons */
+.control-buttons {
+    display: flex;
+    gap: 0.4rem;
+    margin-top: 0.5rem;
+}
+
+.btn-primary {
+    background: linear-gradient(135deg, var(--accent), #0de3ac);
+    border: none;
+    color: white;
+    padding: 0.4rem 0.8rem;
+    border-radius: 6px;
+    font-weight: 600;
+    font-size: 0.8rem;
+    transition: all 0.3s ease;
+    cursor: pointer;
+}
+
+.btn-primary:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 15px rgba(152, 224, 95, 0.3);
+}
+
+.btn-secondary {
+    background: var(--neutral-bg);
+    border: 2px solid var(--border-color);
+    color: var(--text-primary);
+    padding: 0.4rem 0.8rem;
+    border-radius: 6px;
+    font-weight: 600;
+    font-size: 0.8rem;
+    transition: all 0.3s ease;
+    cursor: pointer;
+}
+
+.btn-secondary:hover {
+    background: var(--hover-bg);
+    transform: translateY(-1px);
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none !important;
+}
+
+/* Pool Status */
+.pool-status {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+}
+
+.ping-indicator {
+    font-size: 0.75rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 12px;
+    background: var(--neutral-bg);
+}
+
+.ping-good { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
+.ping-fair { background: rgba(245, 158, 11, 0.2); color: #f59e0b; }
+.ping-poor { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
+
+/* Recent Activity */
+.recent-activity {
+    margin-top: 1rem;
+    padding: 1rem;
+    background: var(--neutral-bg);
+    border-radius: 8px;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.activity-item {
+    padding: 0.5rem 0;
+    border-bottom: 1px solid var(--border-color);
+    font-size: 0.875rem;
+}
+
+.activity-item:last-child {
+    border-bottom: none;
+}
+
+/* Network Info */
+.network-info {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.network-stat {
+    text-align: center;
+    padding: 0.75rem;
+    background: var(--neutral-bg);
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+}
+
+/* Temperature Gauge */
+.temperature-gauge {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.temp-value {
+    font-weight: 600;
+    font-size: 1.25rem;
+}
+
+.temp-normal { color: #22c55e; }
+.temp-warm { color: #f59e0b; }
+.temp-hot { color: #ef4444; }
+
+/* Loader and Error States */
+.loader-container {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100px;
+}
+
+.error-message {
+    background: rgba(239, 68, 68, 0.1);
+    color: #ef4444;
+    padding: 1rem;
+    border-radius: 8px;
+    margin: 1rem 0;
+    text-align: center;
+}
+
+/* Chart Container */
+.chart-container {
+    position: relative;
+    height: 200px;
+    margin-top: 0.5rem;
+}
+
+/* Schedule Styles */
+#schedules-section h3 {
+    font-weight: 600;
+    margin-bottom: 1rem;
+}
+
+.schedule-item {
+    background: var(--neutral-bg);
+    padding: 1rem;
+    border-radius: 8px;
+    margin-bottom: 0.5rem;
+    border-left: 4px solid var(--accent);
+}
+
+.schedule-active {
+    background: rgba(152, 224, 95, 0.1);
+    border-left-color: var(--accent);
+}
+
+/* Utility Classes */
+.text-sm {
+    font-size: 0.75rem;
+}
+
+.d-flex {
+    display: flex;
+}
+
+.justify-content-between {
+    justify-content: space-between;
+}
+
+.align-items-center {
+    align-items: center;
+}
+
+.text-center {
+    text-align: center;
+}
+
+/* Dark Mode Overrides */
+.dark-mode .card-body,
+.dark-mode .metric-card,
+.dark-mode .network-stat,
+.dark-mode .activity-item,
+.dark-mode h3,
+.dark-mode h4,
+.dark-mode h5 {
+    color: var(--text-primary) !important;
+}
+
+.dark-mode .text-muted {
+    color: var(--text-secondary) !important;
+}
+
+.dark-mode .metric-label {
+    color: var(--text-secondary) !important;
+}
+
+.dark-mode .text-sm {
+    color: var(--text-primary) !important;
+}
+
+.dark-mode .fw-bold {
+    color: var(--text-primary) !important;
+}
+
+.dark-mode .card {
+    background-color: var(--card-bg) !important;
+    color: var(--text-primary) !important;
+}
+
+.dark-mode .card-header {
+    background-color: var(--card-bg) !important;
+    color: var(--text-primary) !important;
+    border-bottom: 1px solid var(--border-color) !important;
+}
+
+.dark-mode .card-body {
+    background-color: var(--card-bg) !important;
+    color: var(--text-primary) !important;
+}
+
+.dark-mode .row {
+    color: var(--text-primary) !important;
+}
+
+.dark-mode .col-md-6 {
+    color: var(--text-primary) !important;
+}
+
+.dark-mode .network-stat {
+    background: var(--card-bg) !important;
+    border-color: var(--border-color) !important;
+    color: var(--text-primary) !important;
+}
+
+.dark-mode .cpu-core {
+    background: rgba(255, 255, 255, 0.1) !important;
+    border: 1px solid rgba(255, 255, 255, 0.2) !important;
+    color: var(--text-primary) !important;
+}
+
+.dark-mode .cpu-core.active {
+    background: linear-gradient(135deg, var(--accent), #0de3ac) !important;
+    color: white !important;
+    border-color: var(--accent) !important;
+}
+
+.dark-mode .progress-bar {
+    background-color: rgba(255, 255, 255, 0.1) !important;
+    border: 1px solid rgba(255, 255, 255, 0.2) !important;
+}
+
+.dark-mode .battery-level {
+    background-color: rgba(255, 255, 255, 0.1) !important;
+    border: 2px solid rgba(255, 255, 255, 0.3) !important;
+}
+
+/* Mobile Responsive Design */
+@media (max-width: 768px) {
+    .header-left {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.5rem;
+    }
+    
+    .header-left h1 {
+        font-size: 1.25rem !important;
+    }
+    
+    .health-status {
+        margin-left: 0 !important;
+        font-size: 0.7rem;
+    }
+    
+    .theme-toggle-btn {
+        width: 28px;
+        height: 28px;
+        font-size: 0.75rem;
+    }
+    
+    .dashboard-grid {
+        grid-template-columns: 1fr;
+        gap: 1rem;
+    }
+    
+    .control-buttons {
+        flex-direction: column;
+        gap: 0.3rem;
+        width: 100%;
+    }
+    
+    .control-buttons button {
+        width: 100%;
+        padding: 0.5rem;
+        font-size: 0.75rem;
+    }
+    
+    .metric-card {
+        padding: 1rem;
+    }
+    
+    .metric-value {
+        font-size: 1.5rem;
+    }
+    
+    .chart-container {
+        height: 150px;
+    }
+    
+    .network-info {
+        grid-template-columns: 1fr;
+        gap: 0.5rem;
+    }
+    
+    .battery-indicator {
+        flex-direction: column;
+        gap: 0.5rem;
+        align-items: flex-start;
+    }
+    
+    .cpu-core-grid {
+        grid-template-columns: repeat(auto-fit, minmax(35px, 1fr));
+        gap: 0.3rem;
+    }
+    
+    .recent-activity {
+        max-height: 150px;
+        padding: 0.75rem;
+    }
+    
+    .activity-item {
+        font-size: 0.8rem;
+        padding: 0.3rem 0;
+    }
+}
+
+@media (max-width: 480px) {
+    .header-container {
+        padding: 0.5rem 0;
+    }
+    
+    .header-left h1 {
+        font-size: 1.1rem !important;
+    }
+    
+    .health-status {
+        font-size: 0.65rem;
+        padding: 0.2rem 0.4rem;
+    }
+    
+    .theme-toggle-btn {
+        width: 24px;
+        height: 24px;
+        font-size: 0.7rem;
+    }
+    
+    .metric-card {
+        padding: 0.75rem;
+    }
+    
+    .metric-value {
+        font-size: 1.25rem;
+    }
+    
+    .metric-label {
+        font-size: 0.75rem;
+    }
+    
+    .control-buttons button {
+        padding: 0.4rem;
+        font-size: 0.7rem;
+    }
+    
+    .chart-container {
+        height: 120px;
+    }
+    
+    .progress-bar {
+        height: 16px;
+    }
+    
+    .progress-text {
+        font-size: 0.65rem;
+    }
+    
+    .cpu-core-grid {
+        grid-template-columns: repeat(auto-fit, minmax(30px, 1fr));
+    }
+    
+    .cpu-core {
+        padding: 0.3rem;
+        font-size: 0.65rem;
+    }
+}
+
+/* Tablet Responsive Design */
+@media (min-width: 769px) and (max-width: 1024px) {
+    .dashboard-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+    
+    .control-buttons {
+        flex-direction: column;
+        gap: 0.3rem;
+    }
+    
+    .control-buttons button {
+        width: 100%;
+        font-size: 0.75rem;
+    }
+}
