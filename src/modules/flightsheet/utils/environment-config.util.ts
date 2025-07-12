@@ -105,6 +105,7 @@ export class EnvironmentConfigUtil {
 
   /**
    * Generate optimal XMRig configuration based on environment
+   * NOTE: This preserves thread configurations from backend while optimizing other settings
    */
   static generateOptimalXMRigConfig(baseConfig: any, environmentInfo: EnvironmentInfo): any {
     const optimizedConfig = { ...baseConfig };
@@ -134,6 +135,10 @@ export class EnvironmentConfigUtil {
       if (!environmentInfo.isTermux && environmentInfo.hasRoot) {
         optimizedConfig.cpu.priority = 2; // Higher priority for mining
       }
+      
+      // IMPORTANT: Do NOT modify thread configurations (rx, cn, etc.) 
+      // as these are controlled by the backend API through flightsheet
+      // ALSO: Do NOT add algorithm arrays that weren't in the original config
     }
 
     // Adjust API settings for different environments
@@ -142,6 +147,8 @@ export class EnvironmentConfigUtil {
       if (environmentInfo.isTermux) {
         optimizedConfig.http.host = '127.0.0.1';
       }
+      // Note: This will cause flightsheet changes when backend sends "0.0.0.0"
+      // but it's necessary for Termux security
     }
 
     // Adjust logging and background settings
@@ -150,6 +157,7 @@ export class EnvironmentConfigUtil {
       optimizedConfig.colors = false; // Reduce terminal overhead
       optimizedConfig['print-time'] = 120; // Less frequent printing
       optimizedConfig['health-print-time'] = 120;
+      // Note: This will cause flightsheet changes when backend sends different values
     }
 
     return optimizedConfig;

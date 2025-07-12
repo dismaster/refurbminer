@@ -284,7 +284,7 @@ export class ConfigService implements OnModuleInit {
       );
 
       // Get miner configuration from API
-      const url = `${this.apiUrl}/api/miners/config?rigToken=${rigToken}`;
+      const url = `${this.apiUrl}/api/miners/config?rigToken=${rigToken}&minerId=${currentConfig.minerId}`;
       this.loggingService.log(
         `📡 Fetching config from: ${url}`,
         'DEBUG',

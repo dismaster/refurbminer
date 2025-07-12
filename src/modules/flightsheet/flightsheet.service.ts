@@ -45,7 +45,7 @@ export class FlightsheetService {
 
       this.loggingService.log(
         `🔍 Using miner software from config: ${minerSoftware}`,
-        'INFO',
+        'DEBUG',
         'flightsheet',
       );
 
@@ -80,32 +80,64 @@ export class FlightsheetService {
         fs.mkdirSync(path.dirname(minerConfigPath), { recursive: true });
       }
 
-      // Apply environment-specific optimizations for XMRig
-      let optimizedFlightsheet = flightsheet;
+      // Always update the config file with what we get from backend
+      // Apply minimal local optimizations if needed (only for security/compatibility)
+      let finalConfig = flightsheet;
       if (minerSoftware === 'xmrig') {
-        optimizedFlightsheet = await this.applyXMRigOptimizations(flightsheet);
+        finalConfig = this.applyMinimalLocalOptimizations(flightsheet);
       }
 
-      if (!this.hasFlightsheetChanged(minerConfigPath, optimizedFlightsheet)) {
+      // Check if this is a real change that requires miner restart
+      // Compare the final processed config (after optimizations) with existing file
+      const hasRealChanges = this.hasSignificantChanges(minerConfigPath, finalConfig);
+      
+      // Debug logging to help understand what's happening
+      this.loggingService.log(
+        `🔍 Change detection: Backend config vs Final config comparison completed. Significant changes: ${hasRealChanges}`,
+        'DEBUG',
+        'flightsheet',
+      );
+      
+      // Only write the file if there are significant changes or if the file doesn't exist
+      if (hasRealChanges || !fs.existsSync(minerConfigPath)) {
+        fs.writeFileSync(minerConfigPath, JSON.stringify(finalConfig, null, 2));
+        
+        // Debug: Log the actual config being written (only in debug/verbose mode)
         this.loggingService.log(
-          `⚡ Flightsheet unchanged. Skipping update.`,
+          `🔍 Config written to ${minerConfigPath}:\n${JSON.stringify(finalConfig, null, 2)}`,
+          'DEBUG',
+          'flightsheet',
+        );
+        
+        // Always show that config was written
+        this.loggingService.log(
+          `✅ Config written to ${minerConfigPath}`,
           'INFO',
           'flightsheet',
         );
-        return false;
+      } else {
+        this.loggingService.log(
+          `⏭️ Skipping config write (no significant changes): ${minerConfigPath}`,
+          'DEBUG',
+          'flightsheet',
+        );
       }
-
-      fs.writeFileSync(
-        minerConfigPath,
-        JSON.stringify(optimizedFlightsheet, null, 2),
-      );
-      this.loggingService.log(
-        `✅ Flightsheet updated: ${minerConfigPath}`,
-        'INFO',
-        'flightsheet',
-      );
-
-      return true;
+      
+      if (hasRealChanges) {
+        this.loggingService.log(
+          `✅ Flightsheet updated with significant changes: ${minerConfigPath}`,
+          'INFO',
+          'flightsheet',
+        );
+        return true; // Miner will be restarted
+      } else {
+        this.loggingService.log(
+          `✅ Flightsheet updated (no significant changes): ${minerConfigPath}`,
+          'INFO',
+          'flightsheet',
+        );
+        return false; // No restart needed
+      }
     } catch (error: any) {
       this.loggingService.log(
         `❌ Failed to update flightsheet: ${error.message}`,
@@ -114,6 +146,156 @@ export class FlightsheetService {
       );
       return false;
     }
+  }
+
+  /**
+   * Apply minimal local optimizations (only for security/compatibility)
+   * Unlike the full optimization, this only changes non-mining-critical settings
+   */
+  private applyMinimalLocalOptimizations(flightsheet: any): any {
+    const optimizedConfig = { ...flightsheet };
+
+    // Log thread configuration from backend
+    if (optimizedConfig.cpu && optimizedConfig.cpu.rx) {
+      this.loggingService.log(
+        `⚡ Backend provided thread configuration: ${optimizedConfig.cpu.rx.length} threads, rx array: ${JSON.stringify(optimizedConfig.cpu.rx)}`,
+        'DEBUG',
+        'flightsheet',
+      );
+    }
+
+    // Log autosave setting from backend
+    this.loggingService.log(
+      `⚡ Backend autosave setting: ${optimizedConfig.autosave}`,
+      'DEBUG',
+      'flightsheet',
+    );
+
+    // Only apply Termux-specific security settings if in Termux environment
+    if (this.isTermuxEnvironment()) {
+      // Ensure localhost binding for security in Termux
+      if (optimizedConfig.http) {
+        optimizedConfig.http.host = '127.0.0.1';
+      }
+      
+      this.loggingService.log(
+        `⚡ Applied Termux security optimization: host binding to localhost`,
+        'DEBUG',
+        'flightsheet',
+      );
+    }
+
+    this.loggingService.log(
+      `⚡ Using backend-provided XMRig configuration (autosave: ${optimizedConfig.autosave})`,
+      'DEBUG',
+      'flightsheet',
+    );
+
+    return optimizedConfig;
+  }
+
+  /**
+   * Check if running in Termux environment
+   */
+  private isTermuxEnvironment(): boolean {
+    return !!(
+      process.env.PREFIX?.includes('termux') ||
+      process.env.TERMUX_VERSION ||
+      process.env.ANDROID_DATA ||
+      process.env.ANDROID_ROOT
+    );
+  }
+
+  /**
+   * Check if there are significant changes that require miner restart
+   * Only checks mining-critical settings, ignores cosmetic changes and XMRig autosave artifacts
+   */
+  private hasSignificantChanges(filePath: string, newFlightsheet: any): boolean {
+    if (!fs.existsSync(filePath)) {
+      this.loggingService.log(
+        `📋 No existing config file, treating as significant change`,
+        'DEBUG',
+        'flightsheet',
+      );
+      return true;
+    }
+
+    try {
+      const currentFlightsheet = JSON.parse(
+        fs.readFileSync(filePath, 'utf8'),
+      );
+
+      // Check mining-critical settings (ignore XMRig autosave artifacts)
+      const criticalSettings = [
+        'pools',           // Pool changes (wallet, mining pool)
+        'cpu.rx',          // Thread configuration
+        'randomx.mode',    // RandomX mode
+        'cpu.enabled',     // CPU mining enabled
+        'opencl.enabled',  // OpenCL enabled
+        'cuda.enabled',    // CUDA enabled
+        'cpu.huge-pages',  // Huge pages setting
+        'cpu.memory-pool', // Memory pool setting
+        'cpu.yield',       // CPU yield setting
+      ];
+
+      for (const setting of criticalSettings) {
+        const currentValue = this.getNestedValue(currentFlightsheet, setting);
+        const newValue = this.getNestedValue(newFlightsheet, setting);
+        
+        if (JSON.stringify(currentValue) !== JSON.stringify(newValue)) {
+          this.loggingService.log(
+            `📋 Significant change detected in ${setting}: ${JSON.stringify(currentValue)} → ${JSON.stringify(newValue)}`,
+            'DEBUG',
+            'flightsheet',
+          );
+          return true;
+        }
+      }
+
+      // Special check: If current config has XMRig-added algorithm arrays but new doesn't,
+      // this is NOT a significant change (it's just backend sending compact vs XMRig expanded format)
+      const xmrigArtifacts = ['cpu.argon2', 'cpu.cn', 'cpu.cn-heavy', 'cpu.cn-lite', 'cpu.cn-pico', 'cpu.cn/upx2', 'cpu.ghostrider', 'cpu.rx/wow', 'cpu.cn-lite/0', 'cpu.cn/0', 'cpu.rx/arq'];
+      let hasOnlyArtifactDifferences = true;
+      
+      for (const artifact of xmrigArtifacts) {
+        const currentValue = this.getNestedValue(currentFlightsheet, artifact);
+        const newValue = this.getNestedValue(newFlightsheet, artifact);
+        
+        // If the new config is missing these artifacts, it's normal (backend sends compact)
+        if (currentValue !== undefined && newValue === undefined) {
+          continue; // This is expected
+        }
+        
+        // If there are other differences, it's significant
+        if (JSON.stringify(currentValue) !== JSON.stringify(newValue)) {
+          hasOnlyArtifactDifferences = false;
+          break;
+        }
+      }
+
+      this.loggingService.log(
+        `📋 No significant changes detected in mining-critical settings`,
+        'DEBUG',
+        'flightsheet',
+      );
+      return false;
+    } catch (error: any) {
+      this.loggingService.log(
+        `⚠️ Error checking config changes: ${error.message}`,
+        'WARN',
+        'flightsheet',
+      );
+      return true; // Assume changes if we can't compare
+    }
+  }
+
+  /**
+   * Get nested value from object using dot notation
+   */
+  private getNestedValue(obj: any, path: string): any {
+    return path.split('.').reduce((current, key) => {
+      return current && current[key] !== undefined ? current[key] : undefined;
+    }, obj);
   }
 
   /**
@@ -142,11 +324,31 @@ export class FlightsheetService {
         this.environmentInfo,
       );
 
-      this.loggingService.log(
-        `⚡ Applied XMRig optimizations: RandomX=${this.environmentInfo.recommendedRandomXMode}, HugePages=${this.environmentInfo.shouldUseHugePages}`,
-        'INFO',
-        'flightsheet',
-      );
+      // Log what optimizations were applied
+      const changes = [];
+      if (flightsheet.http?.host !== optimizedConfig.http?.host) {
+        changes.push(`Host: ${flightsheet.http?.host} → ${optimizedConfig.http?.host}`);
+      }
+      if (flightsheet['print-time'] !== optimizedConfig['print-time']) {
+        changes.push(`Print-time: ${flightsheet['print-time']} → ${optimizedConfig['print-time']}`);
+      }
+      if (flightsheet['health-print-time'] !== optimizedConfig['health-print-time']) {
+        changes.push(`Health-print-time: ${flightsheet['health-print-time']} → ${optimizedConfig['health-print-time']}`);
+      }
+
+      if (changes.length > 0) {
+        this.loggingService.log(
+          `⚡ Applied XMRig optimizations: ${changes.join(', ')}`,
+          'INFO',
+          'flightsheet',
+        );
+      } else {
+        this.loggingService.log(
+          `⚡ XMRig optimizations applied (no visible changes)`,
+          'INFO',
+          'flightsheet',
+        );
+      }
 
       return optimizedConfig;
     } catch (error: any) {
@@ -175,30 +377,6 @@ export class FlightsheetService {
   refreshEnvironmentInfo(): EnvironmentInfo {
     this.environmentInfo = EnvironmentConfigUtil.detectEnvironment();
     return this.environmentInfo;
-  }
-
-  private hasFlightsheetChanged(
-    filePath: string,
-    newFlightsheet: any,
-  ): boolean {
-    if (!fs.existsSync(filePath)) return true;
-
-    try {
-      const currentFlightsheet = JSON.parse(
-        fs.readFileSync(filePath, 'utf8'),
-      );
-      return (
-        JSON.stringify(currentFlightsheet) !==
-        JSON.stringify(newFlightsheet)
-      );
-    } catch (error: any) {
-      this.loggingService.log(
-        `⚠️ Error reading flightsheet file: ${error.message}`,
-        'WARN',
-        'flightsheet',
-      );
-      return true;
-    }
   }
 
   getFlightsheet(miner: string): any {
