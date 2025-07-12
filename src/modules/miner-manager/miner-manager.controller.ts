@@ -285,7 +285,6 @@ export class MinerManagerController {
         /opencl error/i,
         /gpu error/i,
         /device error/i,
-        /booooo/i,
         /stratum authentication failed/i,
       ];
     } else if (minerSoftware === 'xmrig') {

@@ -516,7 +516,6 @@ export class MinerManagerService
         /gpu error/i,
         /device error/i,
         /rejected/i,
-        /booooo/i,
         /stratum authentication failed/i,
       ];
     } else if (minerSoftware === 'xmrig') {
