@@ -3,6 +3,7 @@ import { LoggingService } from '../../logging/logging.service';
 import * as fs from 'fs';
 import * as os from 'os';
 import { execSync } from 'child_process';
+import { HardwareInfoUtil } from '../../telemetry/utils/hardware/hardware-info.util';
 
 @Injectable()
 export class OsDetectionService {
@@ -373,11 +374,53 @@ export class OsDetectionService {
       return this.cachedSystemInfo;
     }
 
+    const osType = this.detectOS();
+    
+    // Try to get enhanced hardware info first
+    let hwBrand = 'Unknown';
+    let hwModel = 'Unknown';
+    
+    try {
+      const enhancedInfo = HardwareInfoUtil.getDeviceInfo(
+        osType,
+        this.loggingService.log.bind(this.loggingService),
+      );
+      
+      if (enhancedInfo?.hardwareDetectionMethod === 'lshw') {
+        hwBrand = enhancedInfo.hwBrand || this.getHardwareBrand();
+        hwModel = enhancedInfo.hwModel || this.getHardwareModel();
+        
+        this.loggingService.log(
+          `Using enhanced hardware detection: ${hwBrand} ${hwModel}`,
+          'INFO',
+          'os-detection',
+        );
+      } else {
+        // Fallback to basic detection
+        hwBrand = this.getHardwareBrand();
+        hwModel = this.getHardwareModel();
+        
+        this.loggingService.log(
+          `Using basic hardware detection: ${hwBrand} ${hwModel}`,
+          'INFO',
+          'os-detection',
+        );
+      }
+    } catch (error) {
+      this.loggingService.log(
+        `Enhanced hardware detection failed, using basic: ${error instanceof Error ? error.message : String(error)}`,
+        'WARN',
+        'os-detection',
+      );
+      hwBrand = this.getHardwareBrand();
+      hwModel = this.getHardwareModel();
+    }
+
     const systemInfo = {
-      osType: this.detectOS(),
-      hwBrand: this.getHardwareBrand(),
-      hwModel: this.getHardwareModel(),
-      os: this.detectOS() === 'termux' ? 'Termux (Linux)' : os.version(),
+      osType,
+      hwBrand,
+      hwModel,
+      os: osType === 'termux' ? 'Termux (Linux)' : os.version(),
       cpuInfo: this.getCPUInfo(),
     };
 
