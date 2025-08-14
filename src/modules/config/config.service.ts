@@ -72,10 +72,13 @@ export class ConfigService implements OnModuleInit {
   private readonly MAX_BACKUPS = 5; // Maximum number of backup files to keep
   
   // Enhanced cache to prevent excessive file reads within the same minute
-  private configCache: Config | null = null;
-  private lastCacheTime: number = 0;
-  private readonly CACHE_TTL = 30000; // 30 seconds - short cache to ensure fresh data for minute-based operations
+  private configCache: { data: Config | null; timestamp: number } | null = null;
+  private readonly CACHE_TTL = 60000; // 1 minute - longer cache for better performance
   private isLoading: boolean = false; // Prevent multiple simultaneous reads
+
+  // API response cache to prevent excessive API calls
+  private apiCache: { data: ApiConfigResponse | null; timestamp: number } | null = null;
+  private readonly API_CACHE_TTL = 30000; // 30 seconds for API responses
 
   constructor(
     private readonly loggingService: LoggingService,
@@ -140,14 +143,14 @@ export class ConfigService implements OnModuleInit {
     try {
       // Check if cache is still valid
       const now = Date.now();
-      if (this.configCache && now - this.lastCacheTime < this.CACHE_TTL) {
+      if (this.configCache && (now - this.configCache.timestamp) < this.CACHE_TTL) {
         // Only log in DEBUG to reduce noise in logs
         this.loggingService.log(
           '📋 Using cached config data',
           'DEBUG',
           'config',
         );
-        return this.configCache;
+        return this.configCache.data;
       }
 
       // Prevent multiple simultaneous reads
@@ -157,7 +160,7 @@ export class ConfigService implements OnModuleInit {
           'DEBUG',
           'config',
         );
-        return this.configCache;
+        return this.configCache?.data || null;
       }
 
       this.isLoading = true;
@@ -174,13 +177,11 @@ export class ConfigService implements OnModuleInit {
         throw new Error('Config file not found');
       }
 
-      const config: Config = JSON.parse(
-        fs.readFileSync(this.configPath, 'utf8'),
-      );
+      const configData = fs.readFileSync(this.configPath, 'utf8');
+      const config: Config = JSON.parse(configData);
       
       // Update cache
-      this.configCache = config;
-      this.lastCacheTime = now;
+      this.configCache = { data: config, timestamp: now };
       this.isLoading = false;
       
       // Only log successful loads in DEBUG to reduce noise
@@ -208,8 +209,7 @@ export class ConfigService implements OnModuleInit {
       
       // Update cache with the new config instead of invalidating it
       // This prevents unnecessary file reads right after saving
-      this.configCache = config;
-      this.lastCacheTime = Date.now();
+      this.configCache = { data: config, timestamp: Date.now() };
       
       // Only create backup if not too recent
       this.createBackupIfNeeded();
@@ -366,8 +366,7 @@ export class ConfigService implements OnModuleInit {
       this.saveConfig(updatedConfig);
       
       // Update cache immediately with the new config to prevent unnecessary file reads
-      this.configCache = updatedConfig;
-      this.lastCacheTime = Date.now();
+      this.configCache = { data: updatedConfig, timestamp: Date.now() };
       
       this.loggingService.log(
         '✅ Config synchronized with API successfully',
@@ -633,9 +632,20 @@ export class ConfigService implements OnModuleInit {
    */
   refreshCache(): void {
     this.configCache = null;
-    this.lastCacheTime = 0;
     this.loggingService.log(
       '🔄 Config cache cleared - next access will read from disk',
+      'DEBUG',
+      'config',
+    );
+  }
+
+  /**
+   * Clear API cache to force fresh API call
+   */
+  clearApiCache(): void {
+    this.apiCache = null;
+    this.loggingService.log(
+      '🔄 API cache cleared - next sync will fetch fresh data',
       'DEBUG',
       'config',
     );
@@ -851,7 +861,6 @@ export class ConfigService implements OnModuleInit {
           
           // Clear cache to force reload
           this.configCache = null;
-          this.lastCacheTime = 0;
           
           this.loggingService.log(
             `Successfully restored config from backup: ${backupFile.name}`,

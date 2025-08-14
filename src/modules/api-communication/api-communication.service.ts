@@ -85,7 +85,7 @@ export class ApiCommunicationService {
         throw new Error(`API returned ${response.status}`);
       }
   
-      this.loggingService.log('✅ Telemetry sent successfully', 'INFO', 'api');
+      // Success - let the calling service handle success logging
       return response.data;
     } catch (error) {
       this.loggingService.log(

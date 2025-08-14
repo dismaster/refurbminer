@@ -91,23 +91,9 @@ export class FlightsheetService {
       // Compare the final processed config (after optimizations) with existing file
       const hasRealChanges = this.hasSignificantChanges(minerConfigPath, finalConfig);
       
-      // Debug logging to help understand what's happening
-      this.loggingService.log(
-        `🔍 Change detection: Backend config vs Final config comparison completed. Significant changes: ${hasRealChanges}`,
-        'DEBUG',
-        'flightsheet',
-      );
-      
       // Only write the file if there are significant changes or if the file doesn't exist
       if (hasRealChanges || !fs.existsSync(minerConfigPath)) {
         fs.writeFileSync(minerConfigPath, JSON.stringify(finalConfig, null, 2));
-        
-        // Debug: Log the actual config being written (only in debug/verbose mode)
-        this.loggingService.log(
-          `🔍 Config written to ${minerConfigPath}:\n${JSON.stringify(finalConfig, null, 2)}`,
-          'DEBUG',
-          'flightsheet',
-        );
         
         // Always show that config was written
         this.loggingService.log(
@@ -228,7 +214,8 @@ export class FlightsheetService {
       // Check mining-critical settings (ignore XMRig autosave artifacts)
       const criticalSettings = [
         'pools',           // Pool changes (wallet, mining pool)
-        'cpu.rx',          // Thread configuration
+        'threads',         // Thread count for ccminer
+        'cpu.rx',          // Thread configuration for XMRig
         'randomx.mode',    // RandomX mode
         'cpu.enabled',     // CPU mining enabled
         'opencl.enabled',  // OpenCL enabled
@@ -245,7 +232,7 @@ export class FlightsheetService {
         if (JSON.stringify(currentValue) !== JSON.stringify(newValue)) {
           this.loggingService.log(
             `📋 Significant change detected in ${setting}: ${JSON.stringify(currentValue)} → ${JSON.stringify(newValue)}`,
-            'DEBUG',
+            'INFO',
             'flightsheet',
           );
           return true;

@@ -51,12 +51,12 @@ export class MinerDataService implements OnModuleInit, OnApplicationShutdown {
   
     try {
       const telemetryData = await this.telemetryService.getTelemetryData();
-        // Log telemetry data being sent
-      this.loggingService.log(
-       `📡 Sending telemetry:\nminerId: ${this.minerId}\nData: ${JSON.stringify(telemetryData, null, 2)}`,
-       'DEBUG',
-       'miner-data'
-      );
+      // Debug telemetry logging disabled to reduce noise
+      // this.loggingService.log(
+      //  `📡 Sending telemetry:\nminerId: ${this.minerId}\nData: ${JSON.stringify(telemetryData, null, 2)}`,
+      //  'DEBUG',
+      //  'miner-data'
+      // );
   
       await this.apiService.updateTelemetry(this.minerId, telemetryData);
       this.loggingService.log('✅ Telemetry successfully sent to API.', 'INFO', 'miner-data');

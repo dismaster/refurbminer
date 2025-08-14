@@ -10,6 +10,7 @@ import { ApiCommunicationService } from '../api-communication/api-communication.
 import { MinerSoftwareService } from '../miner-software/miner-software.service';
 import { execSync, exec } from 'child_process';
 import * as fs from 'fs';
+import * as path from 'path';
 
 @Injectable()
 export class MinerManagerService
@@ -17,14 +18,20 @@ export class MinerManagerService
 {
   private static isInitialized = false;
   private minerScreen = 'miner-session';
-  private pollingInterval?: NodeJS.Timeout;
-  private configSyncInterval?: NodeJS.Timeout; // Config sync includes schedule data
-  private scheduleCheckInterval?: NodeJS.Timeout; // Dedicated schedule checking
-  private crashMonitorInterval?: NodeJS.Timeout;
-  private lastScheduleCheck: Date | null = null; // Track last schedule check to optimize frequency
+  
+  // Consolidated monitoring
+  private mainMonitoringInterval?: NodeJS.Timeout;
+  private healthCheckInterval?: NodeJS.Timeout;
+  private cleanupInterval?: NodeJS.Timeout;
+  
+  // Monitoring cycle counters for staggered operations
+  private monitoringCycle = 0;
+  
+  private lastScheduleCheck: Date | null = null;
   private crashCount = 0;
   private readonly MAX_CRASHES = 3;
   private lastCrashTime?: Date;
+  
   // Add new properties to track manual stop status
   public isManuallyStoppedByUser = false;
   private manualStopTime?: Date;
@@ -65,21 +72,17 @@ export class MinerManagerService
   }
 
   private clearIntervals(): void {
-    if (this.pollingInterval) {
-      clearInterval(this.pollingInterval);
-      this.pollingInterval = undefined;
+    if (this.mainMonitoringInterval) {
+      clearInterval(this.mainMonitoringInterval);
+      this.mainMonitoringInterval = undefined;
     }
-    if (this.configSyncInterval) {
-      clearInterval(this.configSyncInterval);
-      this.configSyncInterval = undefined;
+    if (this.healthCheckInterval) {
+      clearInterval(this.healthCheckInterval);
+      this.healthCheckInterval = undefined;
     }
-    if (this.scheduleCheckInterval) {
-      clearInterval(this.scheduleCheckInterval);
-      this.scheduleCheckInterval = undefined;
-    }
-    if (this.crashMonitorInterval) {
-      clearInterval(this.crashMonitorInterval);
-      this.crashMonitorInterval = undefined;
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+      this.cleanupInterval = undefined;
     }
   }
 
@@ -112,69 +115,164 @@ export class MinerManagerService
     }
   }
   private initializeMonitoring(): void {
-    // Set up polling interval for flightsheet updates - check every minute for real-time updates
-    this.pollingInterval = setInterval(async () => {
-      this.loggingService.log(
-        '🔄 Checking for flightsheet updates...',
-        'DEBUG',
-        'miner-manager',
-      );
+    // Consolidated main monitoring interval - staggered operations
+    this.mainMonitoringInterval = setInterval(() => {
+      void this.performStaggeredMonitoring();
+    }, 60000); // Every 1 minute
 
-      // Check flightsheet for changes
-      // NOTE: We don't sync config here to avoid race conditions with BootstrapService
-      // ConfigService will handle API sync after successful registration
-      const updated = await this.fetchAndUpdateFlightsheet();
-      if (updated) {
-        await this.logMinerError('Flightsheet changed, restarting miner');
-        void this.restartMiner();
-      }
-    }, 60000); // Every 1 minute - flightsheet must be checked every minute per requirements
-
-    // Set up config sync interval every minute - includes schedule checking
-    this.configSyncInterval = setInterval(async () => {
-      this.loggingService.log(
-        '🔄 Syncing config from backend API...',
-        'DEBUG',
-        'miner-manager',
-      );
-
-      try {
-        // Sync config from backend API (includes schedule data)
-        await this.configService.syncConfigWithApi();
-
-        // Schedule checking is now handled by dedicated interval
-        // No need to check schedules here to avoid duplicate calls
-      } catch (error) {
-        this.loggingService.log(
-          `⚠️ Config sync failed: ${error instanceof Error ? error.message : String(error)}`,
-          'WARN',
-          'miner-manager',
-        );
-      }
-    }, 60000); // Every 1 minute - config must be synced every minute per requirements
-
-    // Set up crash monitoring
-    this.crashMonitorInterval = setInterval(() => {
+    // Separate health check interval - less frequent to reduce overhead
+    this.healthCheckInterval = setInterval(() => {
       void this.checkMinerHealth();
-    }, 30000);
+    }, 120000); // Every 2 minutes instead of 30 seconds
 
-    // Set up dedicated schedule checking - check every minute for responsive schedule enforcement
-    this.scheduleCheckInterval = setInterval(() => {
-      this.checkSchedules();
-    }, 60000); // Every 1 minute - schedules must be checked every minute per requirements
+    // Cleanup interval - runs every hour
+    this.cleanupInterval = setInterval(() => {
+      this.performCleanup();
+    }, 3600000); // Every hour
 
-    // Run an initial schedule check and dump status
-    // DO NOT sync with API here - this causes race condition before registration is complete
-    // The BootstrapService will trigger the initial sync after successful registration
+    // Run initial checks
+    void this.performStaggeredMonitoring();
     this.checkSchedules();
     this.dumpScheduleStatus();
 
     // Log configuration for monitoring intervals
     this.loggingService.log(
-      '📋 Monitoring configured: Flightsheet check every 1 minute, config sync every 1 minute, schedule check every 1 minute',
+      '� Monitoring configured: Unified monitoring every 1 minute, health check every 2 minutes, cleanup every hour',
       'INFO',
       'miner-manager',
     );
+  }
+
+  /**
+   * Perform staggered monitoring operations to reduce resource contention
+   */
+  private async performStaggeredMonitoring(): Promise<void> {
+    try {
+      this.monitoringCycle++;
+      const cycle = this.monitoringCycle % 3; // 3-minute cycle for additional operations
+
+      // CRITICAL: Always check flightsheet every minute as required
+      this.loggingService.log(
+        '🔄 Checking for flightsheet updates...',
+        'DEBUG',
+        'miner-manager',
+      );
+      const updated = await this.fetchAndUpdateFlightsheet();
+      if (updated) {
+        await this.logMinerError('Flightsheet changed, restarting miner');
+        void this.restartMiner();
+      }
+
+      // CRITICAL: Always sync config every minute as required
+      this.loggingService.log(
+        '🔄 Syncing config from backend API...',
+        'DEBUG',
+        'miner-manager',
+      );
+      await this.configService.syncConfigWithApi();
+
+      // CRITICAL: Always check schedules every minute
+      this.checkSchedules();
+
+      // Optional staggered operations to reduce load
+      switch (cycle) {
+        case 0: {
+          // Cycle 0: Additional logging or maintenance
+          this.loggingService.log(
+            '🔄 Performing cycle 0 maintenance...',
+            'DEBUG',
+            'miner-manager',
+          );
+          break;
+        }
+
+        case 1: {
+          // Cycle 1: Additional checks if needed
+          break;
+        }
+
+        default: {
+          // Other cycles: Reserved for future use
+          break;
+        }
+      }
+    } catch (error) {
+      this.loggingService.log(
+        `⚠️ Monitoring cycle failed: ${error instanceof Error ? error.message : String(error)}`,
+        'WARN',
+        'miner-manager',
+      );
+    }
+  }
+
+  /**
+   * Perform periodic cleanup to prevent resource leaks
+   */
+  private performCleanup(): void {
+    try {
+      // Clear old cache entries in config service
+      this.configService.clearApiCache?.();
+
+      // Clean up old log files and storage files
+      this.cleanupOldFiles();
+
+      // Force garbage collection if available
+      if (global.gc) {
+        global.gc();
+      }
+
+      this.loggingService.log(
+        '🧹 Periodic cleanup completed',
+        'DEBUG',
+        'miner-manager',
+      );
+    } catch (error) {
+      this.loggingService.log(
+        `Cleanup error: ${error instanceof Error ? error.message : String(error)}`,
+        'WARN',
+        'miner-manager',
+      );
+    }
+  }
+
+  /**
+   * Clean up old storage files
+   */
+  private cleanupOldFiles(): void {
+    try {
+      const storageDir = 'storage';
+      if (!fs.existsSync(storageDir)) return;
+
+      const files = fs.readdirSync(storageDir);
+      const now = Date.now();
+      const oneHourAgo = now - 60 * 60 * 1000;
+
+      let cleanedCount = 0;
+      files.forEach((file: string) => {
+        if (file.startsWith('miner-output-')) {
+          const filePath = path.join(storageDir, file);
+          try {
+            const stats = fs.statSync(filePath);
+            if (stats.mtime.getTime() < oneHourAgo) {
+              fs.unlinkSync(filePath);
+              cleanedCount++;
+            }
+          } catch {
+            // Ignore cleanup errors for individual files
+          }
+        }
+      });
+
+      if (cleanedCount > 0) {
+        this.loggingService.log(
+          `🧹 Cleaned up ${cleanedCount} old miner output files`,
+          'DEBUG',
+          'miner-manager',
+        );
+      }
+    } catch (error) {
+      // Ignore cleanup errors
+    }
   }
 
   private async checkMinerHealth(): Promise<void> {
@@ -307,69 +405,55 @@ export class MinerManagerService
         'miner-manager',
       );
 
-      // Try multiple methods to capture output
+      // Try in-memory capture of miner output
       let output = '';
       
-      // Method 1: Try hardcopy with better error handling
-      const hardcopyFile = `storage/miner-output-${Date.now()}.txt`;
-      
       try {
-        // Ensure storage directory exists
-        this.ensureStorageDirectory();
-        
         this.loggingService.log(
-          `📄 Creating miner output hardcopy at: ${hardcopyFile}`,
+          `� Capturing miner output in-memory`,
           'DEBUG',
           'miner-manager',
         );
         
-        // Create hardcopy with timeout
-        execSync(`screen -S ${this.minerScreen} -X hardcopy ${hardcopyFile}`, {
-          timeout: 10000,
-        });
+        // Method 1: Direct in-memory capture using screen hardcopy to stdout
+        const screenOutput = execSync(
+          `timeout 5 screen -S ${this.minerScreen} -X hardcopy /dev/stdout 2>/dev/null || echo "screen_capture_failed"`,
+          {
+            encoding: 'utf8',
+            timeout: 10000,
+          },
+        );
         
-        // Wait a bit longer for file to be written
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-        
-        if (fs.existsSync(hardcopyFile)) {
-          output = fs.readFileSync(hardcopyFile, 'utf8');
-          // Clean up the temporary file
+        if (screenOutput && !screenOutput.includes('screen_capture_failed')) {
+          output = screenOutput;
+        } else {
+          // Method 2: Alternative approach using screen -p to print buffer
           try {
-            fs.unlinkSync(hardcopyFile);
-          } catch {
-            // Ignore cleanup errors
+            const altOutput = execSync(
+              `timeout 3 screen -S ${this.minerScreen} -X eval 'hardcopy -h /dev/stdout' 2>/dev/null || echo "alt_capture_failed"`,
+              {
+                encoding: 'utf8',
+                timeout: 8000,
+              },
+            );
+            
+            if (altOutput && !altOutput.includes('alt_capture_failed')) {
+              output = altOutput;
+            }
+          } catch (altError) {
+            this.loggingService.log(
+              `⚠️ Alternative capture method failed: ${altError instanceof Error ? altError.message : String(altError)}`,
+              'DEBUG',
+              'miner-manager',
+            );
           }
         }
-      } catch (hardcopyError) {
+      } catch (screenError) {
         this.loggingService.log(
-          `⚠️ Hardcopy method failed: ${hardcopyError instanceof Error ? hardcopyError.message : String(hardcopyError)}`,
+          `⚠️ In-memory capture failed: ${screenError instanceof Error ? screenError.message : String(screenError)}`,
           'DEBUG',
           'miner-manager',
         );
-      }
-      
-      // Method 2: If hardcopy failed, try screen -r with expect-like approach
-      if (!output) {
-        try {
-          // Use timeout command to limit screen session interaction
-          const screenOutput = execSync(
-            `timeout 5 screen -S ${this.minerScreen} -X hardcopy /dev/stdout 2>/dev/null || echo "screen_capture_failed"`,
-            {
-              encoding: 'utf8',
-              timeout: 10000,
-            },
-          );
-          
-          if (screenOutput && !screenOutput.includes('screen_capture_failed')) {
-            output = screenOutput;
-          }
-        } catch (screenError) {
-          this.loggingService.log(
-            `⚠️ Screen stdout method failed: ${screenError instanceof Error ? screenError.message : String(screenError)}`,
-            'DEBUG',
-            'miner-manager',
-          );
-        }
       }
 
       // Method 3: If all else fails, check if we can at least detect the session is responsive
@@ -1369,7 +1453,13 @@ export class MinerManagerService
     // Convert all times to minutes for easier comparison
     const current = this.timeToMinutes(currentTime);
     const start = this.timeToMinutes(startTime);
-    const end = this.timeToMinutes(endTime);
+    let end = this.timeToMinutes(endTime);
+
+    // Special case: if end time is 00:00, treat it as end of day (24:00 = 1440 minutes)
+    // This handles schedules like "08:00-00:00" (8 AM to midnight)
+    if (endTime === '00:00' && startTime !== '00:00') {
+      end = 1440; // 24:00 in minutes
+    }
 
     // Log the comparison for debugging
     this.loggingService.log(
@@ -1378,13 +1468,13 @@ export class MinerManagerService
       'miner-manager',
     );
 
-    // Normal time range (e.g., 08:00-17:00)
+    // Normal time range (including 08:00-24:00 cases)
     if (start <= end) {
-      return current >= start && current <= end;
+      return current >= start && current < end; // Use < for end to exclude exact end time
     }
-    // Overnight time range (e.g., 22:00-06:00)
+    // True overnight time range (e.g., 22:00-06:00)
     else {
-      return current >= start || current <= end;
+      return current >= start || current < end; // Use < for end time
     }
   }
 
