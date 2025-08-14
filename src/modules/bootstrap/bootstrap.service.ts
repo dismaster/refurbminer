@@ -221,7 +221,7 @@ export class BootstrapService implements OnModuleInit {
           network: ['netcat-openbsd', 'dnsutils', 'traceroute'],
           networkFallback: ['netcat', 'bind9-host', 'iputils-ping'],
           system: ['gnupg', 'debianutils'],
-          hardware: ['lm-sensors', 'acpi'],
+          hardware: ['lm-sensors', 'acpi', 'lshw'],
           compilation: ['make', 'clang', 'cmake'],
         },
         dnf: {
@@ -229,7 +229,7 @@ export class BootstrapService implements OnModuleInit {
           network: ['nc', 'bind-utils', 'traceroute'],
           networkFallback: ['nmap-ncat', 'bind-utils', 'iputils'],
           system: ['gnupg', 'which'],
-          hardware: ['lm_sensors', 'acpi'],
+          hardware: ['lm_sensors', 'acpi', 'lshw'],
           compilation: ['make', 'clang', 'cmake'],
         },
         yum: {
@@ -237,7 +237,7 @@ export class BootstrapService implements OnModuleInit {
           network: ['nc', 'bind-utils', 'traceroute'],
           networkFallback: ['nmap-ncat', 'bind-utils', 'iputils'],
           system: ['gnupg', 'which'],
-          hardware: ['lm_sensors', 'acpi'],
+          hardware: ['lm_sensors', 'acpi', 'lshw'],
           compilation: ['make', 'clang', 'cmake'],
         },
         pacman: {
@@ -245,7 +245,7 @@ export class BootstrapService implements OnModuleInit {
           network: ['openbsd-netcat', 'bind-tools', 'traceroute'],
           networkFallback: ['gnu-netcat', 'bind', 'iputils'],
           system: ['gnupg', 'which'],
-          hardware: ['lm_sensors', 'acpi'],
+          hardware: ['lm_sensors', 'acpi', 'lshw'],
           compilation: ['make', 'clang', 'cmake'],
         },
         pkg: {
@@ -253,7 +253,7 @@ export class BootstrapService implements OnModuleInit {
           network: ['netcat-openbsd', 'dnsutils', 'traceroute'],
           networkFallback: ['netcat', 'bind9-host', 'iputils-ping'],
           system: ['gnupg', 'debianutils'],
-          hardware: ['lm-sensors', 'acpi'],
+          hardware: ['lm-sensors', 'acpi', 'lshw'],
           compilation: ['make', 'clang', 'cmake'],
         },
       };

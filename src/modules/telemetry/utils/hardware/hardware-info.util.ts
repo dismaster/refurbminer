@@ -13,8 +13,19 @@ export class HardwareInfoUtil {
     'vcgencmd',
   );
 
-  /** ✅ Get full hardware info */
+  /** ✅ Get full hardware info with enhanced detection */
   static getDeviceInfo(systemType: string, logger?: (message: string, level: string, category: string) => void): any {
+    const log = logger || (() => {});
+    
+    // For non-Termux systems, try enhanced detection first
+    if (systemType !== 'termux') {
+      const enhancedInfo = this.getEnhancedDeviceInfo(systemType, log);
+      if (enhancedInfo.hardwareDetectionMethod === 'lshw') {
+        return enhancedInfo;
+      }
+    }
+    
+    // Fallback to basic detection
     const totalMemory = MemoryInfoUtil.getTotalMemory();
     const freeMemory = MemoryInfoUtil.getFreeMemory();
     const totalStorage = StorageInfoUtil.getTotalStorage();
@@ -28,16 +39,181 @@ export class HardwareInfoUtil {
       cpuCount: this.getCpuCount(),
       cpuModel: this.getCpuThreads(),
       cpuTemperature: this.getCpuTemperature(systemType, logger),
-      // Add system uptime
       systemUptime: this.getSystemUptime(systemType),
-      // Add raw values
       totalMemory: totalMemory,
       freeMemory: freeMemory,
       totalStorage: totalStorage,
       freeStorage: freeStorage,
       adbEnabled: this.isAdbEnabled(systemType),
       suAvailable: this.isSuAvailable(systemType),
+      hardwareDetectionMethod: 'basic'
     };
+  }
+
+  /** ✅ Get enhanced hardware info using lshw */
+  static getEnhancedDeviceInfo(systemType: string, logger: (message: string, level: string, category: string) => void): any {
+    const log = logger;
+    
+    try {
+      log('Attempting to get enhanced hardware info using lshw...', 'DEBUG', 'hardware');
+      
+      // Check if lshw is available
+      execSync('command -v lshw > /dev/null 2>&1');
+      
+      const lshwOutput = execSync('lshw -short -quiet 2>/dev/null', { 
+        encoding: 'utf8',
+        timeout: 10000 // 10 second timeout
+      });
+      
+      const enhancedInfo = this.parseLshwOutput(lshwOutput, log);
+      
+      // Get basic info for fallback values
+      const totalMemory = MemoryInfoUtil.getTotalMemory();
+      const freeMemory = MemoryInfoUtil.getFreeMemory();
+      const totalStorage = StorageInfoUtil.getTotalStorage();
+      const freeStorage = StorageInfoUtil.getFreeStorage();
+      
+      // Merge with basic info, preferring lshw data
+      return {
+        hwBrand: enhancedInfo.hwBrand || this.getBrand(systemType),
+        hwModel: enhancedInfo.hwModel || this.getModel(systemType),
+        detailedCpuModel: enhancedInfo.detailedCpuModel,
+        detailedSystemInfo: enhancedInfo.systemDescription,
+        primaryStorage: enhancedInfo.primaryStorage,
+        graphicsCard: enhancedInfo.graphicsCard,
+        networkController: enhancedInfo.networkController,
+        memoryDescription: enhancedInfo.memoryDescription,
+        architecture: this.getArchitecture(),
+        os: this.getOsVersion(),
+        cpuCount: this.getCpuCount(),
+        cpuModel: this.getCpuThreads(),
+        cpuTemperature: this.getCpuTemperature(systemType, logger),
+        systemUptime: this.getSystemUptime(systemType),
+        totalMemory: enhancedInfo.detailedTotalMemory || totalMemory,
+        freeMemory: freeMemory,
+        totalStorage: totalStorage,
+        freeStorage: freeStorage,
+        adbEnabled: this.isAdbEnabled(systemType),
+        suAvailable: this.isSuAvailable(systemType),
+        hardwareDetectionMethod: 'lshw'
+      };
+      
+    } catch (error) {
+      log(`lshw not available or failed, using basic detection: ${error instanceof Error ? error.message : String(error)}`, 'WARN', 'hardware');
+      return {
+        hardwareDetectionMethod: 'basic'
+      };
+    }
+  }
+
+  /** ✅ Parse lshw output for enhanced hardware info */
+  private static parseLshwOutput(lshwOutput: string, log: (message: string, level: string, category: string) => void): any {
+    const lines = lshwOutput.split('\n');
+    const hwInfo: any = {};
+    
+    log(`Parsing lshw output with ${lines.length} lines`, 'DEBUG', 'hardware');
+    
+    lines.forEach(line => {
+      const trimmedLine = line.trim();
+      
+      // System info (motherboard/laptop model)
+      if (trimmedLine.includes('system') && !hwInfo.hwModel) {
+        const systemMatch = trimmedLine.match(/system\s+(.+)/);
+        if (systemMatch && systemMatch[1]) {
+          const systemInfo = systemMatch[1].trim();
+          hwInfo.systemDescription = systemInfo;
+          
+          // Extract brand and model from system string
+          if (systemInfo.includes('LENOVO')) {
+            hwInfo.hwBrand = 'Lenovo';
+            // Extract model number (20EGS01T08 from "20EGS01T08 (LENOVO_MT_20EG)")
+            const modelMatch = systemInfo.match(/^([A-Z0-9]+)/);
+            if (modelMatch) {
+              hwInfo.hwModel = modelMatch[1];
+            } else {
+              hwInfo.hwModel = systemInfo.replace(/LENOVO[_\s]*MT[_\s]*/, '').replace(/[()]/g, '').trim();
+            }
+          } else if (systemInfo.includes('DELL')) {
+            hwInfo.hwBrand = 'Dell';
+            hwInfo.hwModel = systemInfo.replace('DELL', '').trim();
+          } else if (systemInfo.includes('HP')) {
+            hwInfo.hwBrand = 'HP';
+            hwInfo.hwModel = systemInfo.replace('HP', '').trim();
+          } else {
+            // Try to extract brand from first word
+            const parts = systemInfo.split(/[\s_()]+/).filter(p => p.length > 0);
+            if (parts.length > 1) {
+              hwInfo.hwBrand = parts[0];
+              hwInfo.hwModel = parts.slice(1).join(' ');
+            } else {
+              hwInfo.hwModel = systemInfo;
+            }
+          }
+          
+          log(`Detected system: Brand=${hwInfo.hwBrand}, Model=${hwInfo.hwModel}`, 'DEBUG', 'hardware');
+        }
+      }
+      
+      // Processor info
+      if (trimmedLine.includes('processor') && !hwInfo.detailedCpuModel) {
+        const cpuMatch = trimmedLine.match(/processor\s+(.+)/);
+        if (cpuMatch && cpuMatch[1]) {
+          hwInfo.detailedCpuModel = cpuMatch[1].trim();
+          log(`Detected processor: ${hwInfo.detailedCpuModel}`, 'DEBUG', 'hardware');
+        }
+      }
+      
+      // Memory info - look for "System Memory"
+      if (trimmedLine.includes('System Memory')) {
+        const memoryMatch = trimmedLine.match(/(\d+(?:\.\d+)?)\s*(KiB|MiB|GiB|TiB)/);
+        if (memoryMatch) {
+          const value = parseFloat(memoryMatch[1]);
+          const unit = memoryMatch[2];
+          
+          // Convert to bytes
+          let memoryBytes = value;
+          switch (unit) {
+            case 'KiB': memoryBytes *= 1024; break;
+            case 'MiB': memoryBytes *= 1024 * 1024; break;
+            case 'GiB': memoryBytes *= 1024 * 1024 * 1024; break;
+            case 'TiB': memoryBytes *= 1024 * 1024 * 1024 * 1024; break;
+          }
+          
+          hwInfo.detailedTotalMemory = Math.round(memoryBytes);
+          hwInfo.memoryDescription = `${value} ${unit}`;
+          log(`Detected memory: ${hwInfo.memoryDescription}`, 'DEBUG', 'hardware');
+        }
+      }
+      
+      // Storage info (primary disk)
+      if (trimmedLine.includes('/dev/sda') && trimmedLine.includes('disk') && !hwInfo.primaryStorage) {
+        const storageMatch = trimmedLine.match(/disk\s+(.+)/);
+        if (storageMatch && storageMatch[1]) {
+          hwInfo.primaryStorage = storageMatch[1].trim();
+          log(`Detected primary storage: ${hwInfo.primaryStorage}`, 'DEBUG', 'hardware');
+        }
+      }
+      
+      // Graphics info - look for display devices
+      if (trimmedLine.includes('display') && !hwInfo.graphicsCard) {
+        const gpuMatch = trimmedLine.match(/display\s+(.+)/);
+        if (gpuMatch && gpuMatch[1]) {
+          hwInfo.graphicsCard = gpuMatch[1].trim();
+          log(`Detected graphics: ${hwInfo.graphicsCard}`, 'DEBUG', 'hardware');
+        }
+      }
+      
+      // Network info - look for network devices
+      if (trimmedLine.includes('network') && !hwInfo.networkController) {
+        const networkMatch = trimmedLine.match(/network\s+(.+)/);
+        if (networkMatch && networkMatch[1]) {
+          hwInfo.networkController = networkMatch[1].trim();
+          log(`Detected network: ${hwInfo.networkController}`, 'DEBUG', 'hardware');
+        }
+      }
+    });
+    
+    return hwInfo;
   }
 
   /** ✅ Get system uptime in seconds */
