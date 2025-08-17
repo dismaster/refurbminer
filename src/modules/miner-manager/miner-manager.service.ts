@@ -405,12 +405,12 @@ export class MinerManagerService
         'miner-manager',
       );
 
-      // Try in-memory capture of miner output
+      // Try in-memory capture first (faster, no disk I/O)
       let output = '';
       
       try {
         this.loggingService.log(
-          `� Capturing miner output in-memory`,
+          `🚀 Attempting in-memory miner output capture`,
           'DEBUG',
           'miner-manager',
         );
@@ -426,8 +426,13 @@ export class MinerManagerService
         
         if (screenOutput && !screenOutput.includes('screen_capture_failed')) {
           output = screenOutput;
+          this.loggingService.log(
+            `✅ Successfully captured miner output in-memory (${output.length} chars)`,
+            'DEBUG',
+            'miner-manager',
+          );
         } else {
-          // Method 2: Alternative approach using screen -p to print buffer
+          // Method 2: Alternative in-memory approach using screen -p to print buffer
           try {
             const altOutput = execSync(
               `timeout 3 screen -S ${this.minerScreen} -X eval 'hardcopy -h /dev/stdout' 2>/dev/null || echo "alt_capture_failed"`,
@@ -439,10 +444,15 @@ export class MinerManagerService
             
             if (altOutput && !altOutput.includes('alt_capture_failed')) {
               output = altOutput;
+              this.loggingService.log(
+                `✅ Successfully captured miner output with alternative in-memory method (${output.length} chars)`,
+                'DEBUG',
+                'miner-manager',
+              );
             }
           } catch (altError) {
             this.loggingService.log(
-              `⚠️ Alternative capture method failed: ${altError instanceof Error ? altError.message : String(altError)}`,
+              `⚠️ Alternative in-memory capture method failed: ${altError instanceof Error ? altError.message : String(altError)}`,
               'DEBUG',
               'miner-manager',
             );
@@ -456,7 +466,100 @@ export class MinerManagerService
         );
       }
 
-      // Method 3: If all else fails, check if we can at least detect the session is responsive
+      // Fallback to file-based method if in-memory capture failed
+      if (!output) {
+        this.loggingService.log(
+          `📋 Falling back to file-based hardcopy method`,
+          'DEBUG',
+          'miner-manager',
+        );
+        
+        try {
+          // Ensure storage directory exists
+          this.ensureStorageDirectory();
+          
+          const hardcopyFile = `storage/miner-health-${Date.now()}.txt`;
+          
+          // Create hardcopy of screen session with timeout
+          execSync(`screen -S ${this.minerScreen} -X hardcopy ${hardcopyFile}`, {
+            timeout: 10000,
+          });
+          
+          // Wait for file to be written
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          
+          if (fs.existsSync(hardcopyFile)) {
+            output = fs.readFileSync(hardcopyFile, 'utf8');
+            this.loggingService.log(
+              `✅ Successfully captured miner output via file method (${output.length} chars)`,
+              'DEBUG',
+              'miner-manager',
+            );
+            try {
+              fs.unlinkSync(hardcopyFile);
+            } catch {
+              // Ignore cleanup errors
+            }
+          } else {
+            this.loggingService.log(
+              `⚠️ Hardcopy file was not created: ${hardcopyFile}`,
+              'WARN',
+              'miner-manager',
+            );
+          }
+        } catch (fileError) {
+          this.loggingService.log(
+            `⚠️ File-based hardcopy method failed: ${fileError instanceof Error ? fileError.message : String(fileError)}`,
+            'WARN',
+            'miner-manager',
+          );
+        }
+      }
+
+      // If file-based also failed, try final alternative approach with timeout
+      if (!output) {
+        this.loggingService.log(
+          '⚠️ Primary methods failed, trying final alternative hardcopy approach',
+          'DEBUG',
+          'miner-manager',
+        );
+        
+        try {
+          // Alternative: Try to capture output to a temporary file with explicit timeout command
+          const altHardcopyFile = `storage/miner-alt-${Date.now()}.txt`;
+          execSync(
+            `timeout 5 screen -S ${this.minerScreen} -X hardcopy ${altHardcopyFile} 2>/dev/null`,
+            {
+              timeout: 10000,
+            },
+          );
+          
+          // Wait a bit longer for the file
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+          
+          if (fs.existsSync(altHardcopyFile)) {
+            output = fs.readFileSync(altHardcopyFile, 'utf8');
+            this.loggingService.log(
+              `✅ Successfully captured miner output with alternative approach (${output.length} chars)`,
+              'DEBUG',
+              'miner-manager',
+            );
+            try {
+              fs.unlinkSync(altHardcopyFile);
+            } catch {
+              // Ignore cleanup errors
+            }
+          }
+        } catch (altError) {
+          this.loggingService.log(
+            `⚠️ Alternative hardcopy method failed: ${altError instanceof Error ? altError.message : String(altError)}`,
+            'DEBUG',
+            'miner-manager',
+          );
+        }
+      }
+
+      // Final fallback: Check if we can at least detect the session is responsive
       if (!output) {
         this.loggingService.log(
           '⚠️ Could not capture miner output, checking session responsiveness',
