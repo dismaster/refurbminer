@@ -120,10 +120,10 @@ export class MinerManagerService
       void this.performStaggeredMonitoring();
     }, 60000); // Every 1 minute
 
-    // Separate health check interval - less frequent to reduce overhead
+    // More frequent health check interval to catch miner crashes quickly
     this.healthCheckInterval = setInterval(() => {
       void this.checkMinerHealth();
-    }, 120000); // Every 2 minutes instead of 30 seconds
+    }, 30000); // Every 30 seconds for responsive crash detection
 
     // Cleanup interval - runs every hour
     this.cleanupInterval = setInterval(() => {
@@ -132,12 +132,12 @@ export class MinerManagerService
 
     // Run initial checks
     void this.performStaggeredMonitoring();
-    this.checkSchedules();
+    void this.checkSchedules();
     this.dumpScheduleStatus();
 
     // Log configuration for monitoring intervals
     this.loggingService.log(
-      '� Monitoring configured: Unified monitoring every 1 minute, health check every 2 minutes, cleanup every hour',
+      '🔧 Monitoring configured: Unified monitoring every 1 minute, health check every 30 seconds, cleanup every hour',
       'INFO',
       'miner-manager',
     );
@@ -172,7 +172,7 @@ export class MinerManagerService
       await this.configService.syncConfigWithApi();
 
       // CRITICAL: Always check schedules every minute
-      this.checkSchedules();
+      await this.checkSchedules();
 
       // Optional staggered operations to reduce load
       switch (cycle) {
@@ -304,26 +304,58 @@ export class MinerManagerService
         }
       }
 
-      if (this.shouldBeMining() && !this.isMinerRunning()) {
+      const shouldBeMining = this.shouldBeMining();
+      const isMinerRunning = this.isMinerRunning();
+
+      this.loggingService.log(
+        `🔍 Health check: Should mine=${shouldBeMining}, Is running=${isMinerRunning}`,
+        'DEBUG',
+        'miner-manager',
+      );
+
+      if (shouldBeMining && !isMinerRunning) {
         this.crashCount++;
-        const error = `Miner crash detected (Attempt ${this.crashCount}/${this.MAX_CRASHES})`;
+        const error = `Miner not running when it should be (Detection ${this.crashCount}/${this.MAX_CRASHES})`;
         this.loggingService.log(`⚠️ ${error}`, 'WARN', 'miner-manager');
         await this.logMinerError(error);
 
         if (this.crashCount >= this.MAX_CRASHES) {
           const criticalError =
-            'Maximum crash count reached. Stopping miner...';
+            'Maximum detection count reached. Miner may have persistent issues.';
           this.loggingService.log(
             `❌ ${criticalError}`,
             'ERROR',
             'miner-manager',
           );
           await this.logMinerError(criticalError);
-          return;
+          // Reset crash count to allow future restart attempts
+          this.crashCount = 0;
+          this.lastCrashTime = new Date();
         }
 
-        void this.restartMiner();
-      } else if (this.shouldBeMining() && this.isMinerRunning()) {
+        // Always try to restart when miner should be running but isn't
+        this.loggingService.log(
+          '🔄 Attempting to start miner immediately...',
+          'INFO',
+          'miner-manager',
+        );
+        const started = await this.startMiner();
+        if (started) {
+          this.loggingService.log(
+            '✅ Miner successfully restarted by health check',
+            'INFO',
+            'miner-manager',
+          );
+          // Reset crash count on successful restart
+          this.crashCount = 0;
+        } else {
+          this.loggingService.log(
+            '❌ Failed to restart miner in health check',
+            'ERROR',
+            'miner-manager',
+          );
+        }
+      } else if (shouldBeMining && isMinerRunning) {
         // Enhanced health check: Check for errors in miner output
         const hasErrors = await this.checkMinerOutput();
         if (hasErrors) {
@@ -982,11 +1014,56 @@ export class MinerManagerService
 
   public isMinerRunning(): boolean {
     try {
-      const output = execSync(`screen -ls | grep ${this.minerScreen}`, {
+      // First check if screen session exists
+      const screenOutput = execSync(`screen -ls`, {
         encoding: 'utf8',
+        timeout: 5000,
       });
-      return output.includes(this.minerScreen);
-    } catch {
+      
+      // Look for our specific session name
+      const sessionExists = screenOutput.includes(this.minerScreen);
+      
+      if (!sessionExists) {
+        this.loggingService.log(
+          `📋 No screen session '${this.minerScreen}' found`,
+          'DEBUG',
+          'miner-manager',
+        );
+        return false;
+      }
+
+      // Additional check: verify the session is actually attached/detached (not dead)
+      const sessionLines = screenOutput.split('\n');
+      for (const line of sessionLines) {
+        if (line.includes(this.minerScreen)) {
+          // Check if session shows as Dead, Detached, or Attached
+          if (line.includes('(Dead)')) {
+            this.loggingService.log(
+              `💀 Screen session '${this.minerScreen}' is dead, cleaning up`,
+              'WARN',
+              'miner-manager',
+            );
+            this.cleanupAllMinerSessions();
+            return false;
+          }
+          
+          // Session exists and is not dead
+          this.loggingService.log(
+            `✅ Screen session '${this.minerScreen}' is running: ${line.trim()}`,
+            'DEBUG',
+            'miner-manager',
+          );
+          return true;
+        }
+      }
+      
+      return false;
+    } catch (error) {
+      this.loggingService.log(
+        `❌ Error checking miner status: ${error instanceof Error ? error.message : String(error)}`,
+        'DEBUG',
+        'miner-manager',
+      );
       return false;
     }
   }
@@ -1391,7 +1468,7 @@ export class MinerManagerService
     }
   }
 
-  private checkSchedules() {
+  private async checkSchedules() {
     // Optimize schedule checking by caching config and only checking when necessary
     const now = new Date();
     const currentTime = now.toTimeString().split(' ')[0].substring(0, 5);
@@ -1475,7 +1552,15 @@ export class MinerManagerService
                 'INFO',
                 'miner-manager',
               );
-              void this.startMiner();
+              // Use async start to ensure it completes
+              const started = await this.startMiner();
+              if (!started) {
+                this.loggingService.log(
+                  `❌ Failed to start miner for scheduled period on ${currentDay}`,
+                  'ERROR',
+                  'miner-manager',
+                );
+              }
             } else {
               this.loggingService.log(
                 `✅ Miner already running as scheduled: ${period.startTime} - ${period.endTime} on ${currentDay}`,
@@ -1502,10 +1587,17 @@ export class MinerManagerService
       if (!this.isMinerRunning()) {
         this.loggingService.log(
           'ℹ️ Schedule disabled, ensuring miner is running',
-          'DEBUG',
+          'INFO',
           'miner-manager',
         );
-        void this.startMiner();
+        const started = await this.startMiner();
+        if (!started) {
+          this.loggingService.log(
+            '❌ Failed to start miner when scheduling is disabled',
+            'ERROR',
+            'miner-manager',
+          );
+        }
       }
     }
 
