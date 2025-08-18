@@ -1,4 +1,5 @@
 import { execSync } from 'child_process';
+import { MinerApiConfigUtil } from './miner-api-config.util';
 
 export class MinerSummaryUtil {
   /** ✅ Get miner summary based on detected miner */
@@ -30,7 +31,10 @@ export class MinerSummaryUtil {
   /** ✅ Get CCMiner summary */
   private static getCcminerSummary(): any {
     try {
-      const summaryRaw = execSync(`echo 'summary' | nc -w 1 127.0.0.1 4068`, { encoding: 'utf8' });
+      const endpoint = MinerApiConfigUtil.getCcminerApiEndpoint();
+      const summaryRaw = execSync(`echo 'summary' | nc -w 1 ${endpoint}`, {
+        encoding: 'utf8',
+      });
       const parsed = this.parseCcminerOutput(summaryRaw);
 
       return {
@@ -43,7 +47,7 @@ export class MinerSummaryUtil {
         rejectedShares: parseInt(parsed.REJ) || 0,
         uptime: parseInt(parsed.UPTIME) || 0,
         averageShareRate: parseFloat(parsed.ACCMN) || 0,
-        solvedBlocks: parseInt(parsed.SOLV) || 0
+        solvedBlocks: parseInt(parsed.SOLV) || 0,
       };
     } catch {
       return this.getDefaultSummary();
@@ -53,24 +57,35 @@ export class MinerSummaryUtil {
   /** ✅ Get XMRig summary */
   private static async getXmrigSummary(): Promise<any> {
     try {
-      const response = await fetch(`http://127.0.0.1:4068/1/summary`, {
+      const baseUrl = MinerApiConfigUtil.getXmrigApiUrl();
+      const response = await fetch(`${baseUrl}/1/summary`, {
         headers: {
-          'Authorization': 'Bearer xmrig'
-        }
+          'Content-Type': 'application/json',
+        },
+        signal: AbortSignal.timeout(5000),
       });
       if (!response.ok) return this.getDefaultSummary();
 
       const json = await response.json();
+      
+      // Parse based on the actual API response structure you provided
       return {
         name: 'xmrig',
         version: json.version || 'unknown',
-        algorithm: json.algo || 'unknown',
-        hashrate: parseFloat(json.hashrate?.total?.[0] || 0),
-        acceptedShares: parseInt(json.connection?.accepted || '0'),
+        algorithm: json.algo || json.connection?.algo || 'unknown',
+        hashrate: parseFloat(json.hashrate?.total?.[0] || 0), // Current hashrate (first value)
+        acceptedShares: parseInt(json.connection?.accepted || json.results?.shares_good || '0'),
         rejectedShares: parseInt(json.connection?.rejected || '0'),
-        uptime: parseInt(json.uptime || '0'),
-        averageShareRate: parseFloat(json.results?.avg_time_ms || '0') / 1000, // Convert ms to seconds
-        solvedBlocks: json.results?.best?.filter((b: number) => b > 0)?.length || 0
+        uptime: parseInt(json.uptime || '0'), // Main uptime, not connection uptime
+        averageShareRate: parseFloat(json.results?.avg_time_ms || json.connection?.avg_time_ms || '0') / 1000,
+        solvedBlocks: 0, // Not available in this API
+        // Additional fields from the API
+        difficulty: parseFloat(json.connection?.diff || json.results?.diff_current || '0'),
+        totalHashes: parseInt(json.results?.hashes_total || json.connection?.hashes_total || '0'),
+        highestHashrate: parseFloat(json.hashrate?.highest || '0'),
+        hugePagesEnabled: json.hugepages || false,
+        cpuBrand: json.cpu?.brand || 'unknown',
+        cpuThreads: parseInt(json.cpu?.threads || '0'),
       };
     } catch {
       return this.getDefaultSummary();

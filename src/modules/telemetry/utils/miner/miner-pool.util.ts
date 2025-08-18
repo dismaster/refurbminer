@@ -1,4 +1,5 @@
 import { execSync } from 'child_process';
+import { MinerApiConfigUtil } from './miner-api-config.util';
 
 export class MinerPoolUtil {
   /** ✅ Get miner pool details based on detected miner */
@@ -30,24 +31,28 @@ export class MinerPoolUtil {
 
   private static getCcminerPoolInfo(): any {
     try {
-      // Use same pattern as in summary and threads collection
-      const poolRaw = execSync(`echo 'pool' | nc -w 1 127.0.0.1 4068`, { encoding: 'utf8' });
+      // Use dynamic endpoint discovery
+      const endpoint = MinerApiConfigUtil.getCcminerApiEndpoint();
+      const poolRaw = execSync(`echo 'pool' | nc -w 1 ${endpoint}`, {
+        encoding: 'utf8',
+      });
 
       if (!poolRaw || !poolRaw.trim()) {
         return this.getDefaultPoolInfo();
       }
 
-      const parsed = this.parseCcminerOutput(poolRaw);      return {
+      const parsed = this.parseCcminerOutput(poolRaw);
+      return {
         name: parsed.POOL || 'unknown',
         url: parsed.URL || 'unknown',
         user: parsed.USER || 'unknown',
         acceptedShares: parseInt(parsed.ACC) || 0,
         rejectedShares: parseInt(parsed.REJ) || 0,
-        staleShares: parseInt(parsed.STALE) || 0, 
+        staleShares: parseInt(parsed.STALE) || 0,
         ping: parseInt(parsed.PING) || 0,
         uptime: parseInt(parsed.UPTIME) || 0,
         // Note: difficulty moved to minerSoftware section in telemetry service
-        difficulty: parseFloat(parsed.DIFF) || 0  // Keep for now as telemetry service still reads it
+        difficulty: parseFloat(parsed.DIFF) || 0, // Keep for now as telemetry service still reads it
       };
     } catch (error) {
       // Instead of logging the error, handle it silently
@@ -70,28 +75,60 @@ export class MinerPoolUtil {
     }
   }  
   
-  /** ✅ Get XMRig pool info */
+    /** ✅ Get XMRig pool info */
   private static async getXmrigPoolInfo(): Promise<any> {
     try {
-      const response = await fetch(`http://127.0.0.1:4068/1/summary`, {
+      // Use dynamic endpoint discovery with multiple API attempts
+      const baseUrl = MinerApiConfigUtil.getXmrigApiUrl();
+      
+      console.log(`🔍 Attempting XMRig API connection to: ${baseUrl}`);
+      
+      // Try the main endpoint first
+      const response = await fetch(`${baseUrl}/1/summary`, {
         headers: {
-          'Authorization': 'Bearer xmrig'
-        }
+          'Content-Type': 'application/json',
+        },
+        signal: AbortSignal.timeout(5000), // 5 second timeout
       });
-      if (!response.ok) return this.getDefaultPoolInfo();
-
-      const json = await response.json();      return {
+      
+      if (!response.ok) {
+        console.log(`❌ XMRig API responded with status ${response.status}`);
+        return this.getDefaultPoolInfo();
+      }
+      
+      const json = await response.json();
+      console.log(`✅ XMRig API responded successfully`);
+      
+      // Parse the actual API response structure based on your example
+      const poolData = {
         name: json.connection?.pool || 'unknown',
-        url: json.connection?.pool || 'unknown',
-        user: 'unknown',
+        url: json.connection?.pool || 'unknown', 
+        user: 'unknown', // User not exposed in summary API
         acceptedShares: parseInt(json.connection?.accepted || '0'),
         rejectedShares: parseInt(json.connection?.rejected || '0'),
-        staleShares: 0,
+        staleShares: 0, // Not available in XMRig API
         ping: parseInt(json.connection?.ping || '0'),
         uptime: parseInt(json.connection?.uptime || '0'),
-        difficulty: parseFloat(json.job?.diff || '0') || 0  // XMRig difficulty from job info
+        difficulty: parseFloat(json.connection?.diff || '0') || 0,
+        // Additional pool info from the API
+        poolIp: json.connection?.ip || 'unknown',
+        tlsVersion: json.connection?.tls || 'none',
+        algorithm: json.connection?.algo || json.algo || 'unknown',
+        failures: parseInt(json.connection?.failures || '0'),
       };
-    } catch {
+
+      console.log(`✅ XMRig pool data parsed:`, poolData);
+      return poolData;
+      
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error(`❌ XMRig pool info failed: ${errorMessage}`);
+      
+      // Log additional debugging info
+      if (process.env.DEBUG === 'true') {
+        console.debug('XMRig API error details:', error);
+      }
+      
       return this.getDefaultPoolInfo();
     }
   }
