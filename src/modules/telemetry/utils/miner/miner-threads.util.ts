@@ -1,5 +1,6 @@
 import { execSync } from 'child_process';
 import * as os from 'os';
+import { MinerApiConfigUtil } from './miner-api-config.util';
 
 export class MinerThreadsUtil {
   /** ✅ Get thread performance data */
@@ -15,8 +16,10 @@ export class MinerThreadsUtil {
           ? this.getCcminerThreadStats()
           : await this.getXmrigThreadStats();
           
-        minerHashrates = threadStats.map(t => t.hashrate || 0);
-      }      // Combine CPU info with hashrates
+        minerHashrates = threadStats.map((t: any) => t.hashrate || 0);
+      }
+      
+      // Combine CPU info with hashrates
       return cpuInfo.map((cpu, index) => ({
         ...cpu,
         // Convert to consistent naming: hashrate in hash/s for both miners
@@ -116,47 +119,60 @@ export class MinerThreadsUtil {
       // Method 1: Try the threads command
       let threadsRaw = '';
       try {
-        threadsRaw = execSync(`echo 'threads' | nc -w 1 127.0.0.1 4068`, { encoding: 'utf8' });
+        const endpoint = MinerApiConfigUtil.getCcminerApiEndpoint();
+        threadsRaw = execSync(`echo 'threads' | nc -w 1 ${endpoint}`, {
+          encoding: 'utf8',
+        });
         if (threadsRaw && threadsRaw.trim()) {
           const stats = this.parseCcminerThreads(threadsRaw);
           if (stats.length > 0) {
             return stats;
           }
         }
-      } catch (error) {
+      } catch {
         console.log('CCMiner threads command failed, trying alternatives...');
       }
 
       // Method 2: Try to get total hashrate from summary and distribute evenly
       try {
-        const summaryRaw = execSync(`echo 'summary' | nc -w 1 127.0.0.1 4068`, { encoding: 'utf8' });        const hashMatch = summaryRaw.match(/KHS=([\d.]+)/);
+        const endpoint = MinerApiConfigUtil.getCcminerApiEndpoint();
+        const summaryRaw = execSync(`echo 'summary' | nc -w 1 ${endpoint}`, {
+          encoding: 'utf8',
+        });
+        const hashMatch = summaryRaw.match(/KHS=([\d.]+)/);
         if (hashMatch) {
-          const totalHashrate = parseFloat(hashMatch[1]) * 1000; // Convert kilohash to hash
+          const totalKhs = parseFloat(hashMatch[1]);
           const cpuCount = os.cpus().length;
-          const hashratePerThread = totalHashrate / cpuCount;
-          
-          return Array(cpuCount).fill(null).map((_, index) => ({
-            coreId: index,
-            hashrate: hashratePerThread
-          }));
+          const hashratePerThread = (totalKhs * 1000) / cpuCount; // Convert to H/s and divide
+
+          return Array(cpuCount)
+            .fill(null)
+            .map((_, index) => ({
+              coreId: index,
+              hashrate: hashratePerThread,
+            }));
         }
-      } catch (error) {
+      } catch {
         console.log('CCMiner summary fallback failed');
       }
 
       // Method 3: Try hwinfo for CPU count and estimate
       try {
-        const hwinfoRaw = execSync(`echo 'hwinfo' | nc -w 1 127.0.0.1 4068`, { encoding: 'utf8' });
+        const endpoint = MinerApiConfigUtil.getCcminerApiEndpoint();
+        const hwinfoRaw = execSync(`echo 'hwinfo' | nc -w 1 ${endpoint}`, {
+          encoding: 'utf8',
+        });
         const cpusMatch = hwinfoRaw.match(/CPUS=(\d+)/);
         if (cpusMatch) {
           const cpuCount = parseInt(cpusMatch[1]);
-          // Return zero hashrate for each core since we can't get individual thread stats
-          return Array(cpuCount).fill(null).map((_, index) => ({
-            coreId: index,
-            hashrate: 0
-          }));
+          return Array(cpuCount)
+            .fill(null)
+            .map((_, index) => ({
+              coreId: index,
+              hashrate: 0,
+            }));
         }
-      } catch (error) {
+      } catch {
         console.log('CCMiner hwinfo fallback failed');
       }
 
@@ -166,27 +182,39 @@ export class MinerThreadsUtil {
       return this.getDefaultThreadStats();
     }
   }
+  
   /** ✅ Get XMRig thread statistics */
   private static async getXmrigThreadStats(): Promise<any[]> {
     try {
-      const response = await fetch(`http://127.0.0.1:4068/1/summary`, {
+      const baseUrl = MinerApiConfigUtil.getXmrigApiUrl();
+      const response = await fetch(`${baseUrl}/1/summary`, {
         headers: {
-          'Authorization': 'Bearer xmrig'
-        }
+          'Content-Type': 'application/json',
+        },
+        signal: AbortSignal.timeout(5000),
       });
       if (!response.ok) return this.getDefaultThreadStats();
 
       const json = await response.json();
-        // XMRig provides thread hashrates in the main summary endpoint
+      
+      // XMRig provides thread hashrates in the main summary endpoint
+      // Structure: "threads": [[8.3, 6.76, null], [24.18, 23.79, null], ...]
       if (json.hashrate?.threads && Array.isArray(json.hashrate.threads)) {
+        console.log('📊 XMRig thread hashrates found:', json.hashrate.threads);
+        
         return json.hashrate.threads.map((threadHashrates: number[], index: number) => ({
           coreId: index,
-          hashrate: threadHashrates[0] || 0 // First element is current hashrate
+          // First element is current hashrate, second is average, third is highest
+          hashrate: threadHashrates[0] || 0, // Current hashrate
+          averageHashrate: threadHashrates[1] || 0, // Average hashrate
+          maxHashrate: threadHashrates[2] || 0, // Max hashrate (may be null)
         }));
       }
       
+      console.warn('⚠️ No thread hashrate data found in XMRig API response');
       return this.getDefaultThreadStats();
-    } catch {
+    } catch (error) {
+      console.error('❌ Failed to get XMRig thread stats:', error);
       return this.getDefaultThreadStats();
     }
   }
