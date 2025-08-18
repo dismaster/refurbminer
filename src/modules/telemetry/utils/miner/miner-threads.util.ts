@@ -185,38 +185,80 @@ export class MinerThreadsUtil {
   
   /** ✅ Get XMRig thread statistics */
   private static async getXmrigThreadStats(): Promise<any[]> {
-    try {
-      const baseUrl = MinerApiConfigUtil.getXmrigApiUrl();
-      const response = await fetch(`${baseUrl}/1/summary`, {
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        signal: AbortSignal.timeout(5000),
-      });
-      if (!response.ok) return this.getDefaultThreadStats();
-
-      const json = await response.json();
-      
-      // XMRig provides thread hashrates in the main summary endpoint
-      // Structure: "threads": [[8.3, 6.76, null], [24.18, 23.79, null], ...]
-      if (json.hashrate?.threads && Array.isArray(json.hashrate.threads)) {
-        console.log('📊 XMRig thread hashrates found:', json.hashrate.threads);
+    const maxRetries = 3;
+    const timeoutMs = 10000; // Increased to 10 seconds
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const baseUrl = MinerApiConfigUtil.getXmrigApiUrl();
         
-        return json.hashrate.threads.map((threadHashrates: number[], index: number) => ({
-          coreId: index,
-          // First element is current hashrate, second is average, third is highest
-          hashrate: threadHashrates[0] || 0, // Current hashrate
-          averageHashrate: threadHashrates[1] || 0, // Average hashrate
-          maxHashrate: threadHashrates[2] || 0, // Max hashrate (may be null)
-        }));
+        if (attempt > 1) {
+          console.log(`🔄 XMRig threads retry attempt ${attempt}/${maxRetries}`);
+        }
+        
+        // Manual timeout control for better error handling
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+        
+        const response = await fetch(`${baseUrl}/1/summary`, {
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          signal: controller.signal,
+        });
+        
+        clearTimeout(timeoutId);
+        
+        if (!response.ok) {
+          if (attempt < maxRetries) {
+            console.warn(`⚠️ XMRig threads API status ${response.status} (attempt ${attempt}) - retrying...`);
+            await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+            continue;
+          }
+          return this.getDefaultThreadStats();
+        }
+
+        const json = await response.json();
+        
+        // XMRig provides thread hashrates in the main summary endpoint
+        // Structure: "threads": [[8.3, 6.76, null], [24.18, 23.79, null], ...]
+        if (json.hashrate?.threads && Array.isArray(json.hashrate.threads)) {
+          console.log('📊 XMRig thread hashrates found:', json.hashrate.threads);
+          
+          return json.hashrate.threads.map((threadHashrates: number[], index: number) => ({
+            coreId: index,
+            // First element is current hashrate, second is average, third is highest
+            hashrate: threadHashrates[0] || 0, // Current hashrate
+            averageHashrate: threadHashrates[1] || 0, // Average hashrate
+            maxHashrate: threadHashrates[2] || 0, // Max hashrate (may be null)
+          }));
+        }
+        
+        console.warn('⚠️ No thread hashrate data found in XMRig API response');
+        return this.getDefaultThreadStats();
+        
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        const isTimeout = errorMessage.includes('timeout') || errorMessage.includes('aborted');
+        
+        if (attempt < maxRetries) {
+          console.warn(`⚠️ XMRig threads attempt ${attempt} failed: ${errorMessage} - retrying...`);
+          // Wait before retry (exponential backoff)
+          await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+          continue;
+        }
+        
+        if (isTimeout) {
+          console.error(`🕐 XMRig threads timeout after ${maxRetries} attempts - API may be slow`);
+        } else {
+          console.error(`❌ Failed to get XMRig thread stats after ${maxRetries} attempts: ${errorMessage}`);
+        }
+        
+        return this.getDefaultThreadStats();
       }
-      
-      console.warn('⚠️ No thread hashrate data found in XMRig API response');
-      return this.getDefaultThreadStats();
-    } catch (error) {
-      console.error('❌ Failed to get XMRig thread stats:', error);
-      return this.getDefaultThreadStats();
     }
+    
+    return this.getDefaultThreadStats();
   }
 
   /** ✅ Parse CCMiner thread output */

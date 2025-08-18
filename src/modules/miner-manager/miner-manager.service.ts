@@ -41,6 +41,9 @@ export class MinerManagerService
   private lastRestartTime?: Date;
   private readonly RESTART_COOLDOWN = 5 * 60 * 1000; // 5 minutes between restarts
 
+  // Track miner software changes to trigger restarts
+  private currentMinerSoftware?: string;
+
   constructor(
     private readonly loggingService: LoggingService,
     private readonly flightsheetService: FlightsheetService,
@@ -171,6 +174,9 @@ export class MinerManagerService
       );
       await this.configService.syncConfigWithApi();
 
+      // Check if miner software changed and restart if needed
+      await this.checkMinerSoftwareChange();
+
       // CRITICAL: Always check schedules every minute
       await this.checkSchedules();
 
@@ -273,6 +279,106 @@ export class MinerManagerService
     } catch (error) {
       // Ignore cleanup errors
     }
+  }
+
+  /**
+   * Check if miner software has changed and restart if needed
+   */
+  private async checkMinerSoftwareChange(): Promise<void> {
+    try {
+      const config = this.configService.getConfig();
+      if (!config || !config.minerSoftware) {
+        return;
+      }
+
+      const newMinerSoftware = config.minerSoftware;
+
+      // If this is the first check, just store the current software
+      if (!this.currentMinerSoftware) {
+        this.currentMinerSoftware = newMinerSoftware;
+        this.loggingService.log(
+          `🔧 Initial miner software detected: ${newMinerSoftware}`,
+          'DEBUG',
+          'miner-manager',
+        );
+        return;
+      }
+
+      // Check if miner software has changed
+      if (this.currentMinerSoftware !== newMinerSoftware) {
+        this.loggingService.log(
+          `🔄 Miner software changed: ${this.currentMinerSoftware} → ${newMinerSoftware}`,
+          'INFO',
+          'miner-manager',
+        );
+
+        // Update the current software
+        this.currentMinerSoftware = newMinerSoftware;
+
+        // Stop the current miner and start the new one
+        if (this.isMinerRunning()) {
+          this.loggingService.log(
+            '⚠️ Stopping current miner due to software change...',
+            'INFO',
+            'miner-manager',
+          );
+          
+          const stopped = this.stopMiner();
+          if (!stopped) {
+            this.loggingService.log(
+              '❌ Failed to stop current miner for software change',
+              'ERROR',
+              'miner-manager',
+            );
+            return;
+          }
+        }
+
+        // Clear any cached endpoints since we're switching miner types
+        this.clearMinerApiCache();
+
+        // Start the new miner
+        this.loggingService.log(
+          `🚀 Starting new miner: ${newMinerSoftware}`,
+          'INFO',
+          'miner-manager',
+        );
+        
+        const started = await this.startMiner();
+        if (started) {
+          this.loggingService.log(
+            `✅ Successfully switched to ${newMinerSoftware}`,
+            'INFO',
+            'miner-manager',
+          );
+        } else {
+          this.loggingService.log(
+            `❌ Failed to start new miner: ${newMinerSoftware}`,
+            'ERROR',
+            'miner-manager',
+          );
+        }
+      }
+    } catch (error) {
+      this.loggingService.log(
+        `❌ Error checking miner software change: ${error instanceof Error ? error.message : String(error)}`,
+        'ERROR',
+        'miner-manager',
+      );
+    }
+  }
+
+  /**
+   * Clear cached miner API endpoints when switching miners
+   */
+  private clearMinerApiCache(): void {
+    // Cache clearing will be handled by the API utility automatically
+    // when it detects a different miner type
+    this.loggingService.log(
+      '🗑️ Miner API cache will be refreshed on next API call',
+      'DEBUG',
+      'miner-manager',
+    );
   }
 
   private async checkMinerHealth(): Promise<void> {

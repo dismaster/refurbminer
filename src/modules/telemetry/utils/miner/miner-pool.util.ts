@@ -77,60 +77,88 @@ export class MinerPoolUtil {
   
     /** ✅ Get XMRig pool info */
   private static async getXmrigPoolInfo(): Promise<any> {
-    try {
-      // Use dynamic endpoint discovery with multiple API attempts
-      const baseUrl = MinerApiConfigUtil.getXmrigApiUrl();
-      
-      console.log(`🔍 Attempting XMRig API connection to: ${baseUrl}`);
-      
-      // Try the main endpoint first
-      const response = await fetch(`${baseUrl}/1/summary`, {
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        signal: AbortSignal.timeout(5000), // 5 second timeout
-      });
-      
-      if (!response.ok) {
-        console.log(`❌ XMRig API responded with status ${response.status}`);
+    const maxRetries = 3;
+    const timeoutMs = 10000; // Increased to 10 seconds
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        // Use dynamic endpoint discovery with multiple API attempts
+        const baseUrl = MinerApiConfigUtil.getXmrigApiUrl();
+        
+        if (attempt === 1) {
+          console.log(`🔍 Attempting XMRig API connection to: ${baseUrl}`);
+        } else {
+          console.log(`🔄 XMRig API retry attempt ${attempt}/${maxRetries}`);
+        }
+        
+        // Try the main endpoint with increased timeout
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+        
+        const response = await fetch(`${baseUrl}/1/summary`, {
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          signal: controller.signal,
+        });
+        
+        clearTimeout(timeoutId);
+        
+        if (!response.ok) {
+          console.log(`❌ XMRig API responded with status ${response.status} (attempt ${attempt})`);
+          if (attempt === maxRetries) {
+            return this.getDefaultPoolInfo();
+          }
+          continue;
+        }
+        
+        const json = await response.json();
+        console.log(`✅ XMRig API responded successfully (attempt ${attempt})`);
+        
+        // Parse the actual API response structure based on your example
+        const poolData = {
+          name: json.connection?.pool || 'unknown',
+          url: json.connection?.pool || 'unknown',
+          user: 'unknown', // User not exposed in summary API
+          acceptedShares: parseInt(json.connection?.accepted || '0'),
+          rejectedShares: parseInt(json.connection?.rejected || '0'),
+          staleShares: 0, // Not available in XMRig API
+          ping: parseInt(json.connection?.ping || '0'),
+          uptime: parseInt(json.connection?.uptime || '0'),
+          difficulty: parseFloat(json.connection?.diff || '0') || 0,
+          // Additional pool info from the API
+          poolIp: json.connection?.ip || 'unknown',
+          tlsVersion: json.connection?.tls || 'none',
+          algorithm: json.connection?.algo || json.algo || 'unknown',
+          failures: parseInt(json.connection?.failures || '0'),
+        };
+
+        console.log(`✅ XMRig pool data parsed:`, poolData);
+        return poolData;
+        
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        const isTimeout = errorMessage.includes('timeout') || errorMessage.includes('aborted');
+        
+        if (attempt < maxRetries) {
+          console.warn(`⚠️ XMRig API attempt ${attempt} failed: ${errorMessage} - retrying...`);
+          // Wait before retry (exponential backoff)
+          await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+          continue;
+        }
+        
+        console.error(`❌ XMRig pool info failed after ${maxRetries} attempts: ${errorMessage}`);
+        
+        // Log additional debugging info for timeout errors
+        if (isTimeout) {
+          console.error(`🕐 Timeout occurred - consider checking XMRig API responsiveness`);
+        }
+        
         return this.getDefaultPoolInfo();
       }
-      
-      const json = await response.json();
-      console.log(`✅ XMRig API responded successfully`);
-      
-      // Parse the actual API response structure based on your example
-      const poolData = {
-        name: json.connection?.pool || 'unknown',
-        url: json.connection?.pool || 'unknown', 
-        user: 'unknown', // User not exposed in summary API
-        acceptedShares: parseInt(json.connection?.accepted || '0'),
-        rejectedShares: parseInt(json.connection?.rejected || '0'),
-        staleShares: 0, // Not available in XMRig API
-        ping: parseInt(json.connection?.ping || '0'),
-        uptime: parseInt(json.connection?.uptime || '0'),
-        difficulty: parseFloat(json.connection?.diff || '0') || 0,
-        // Additional pool info from the API
-        poolIp: json.connection?.ip || 'unknown',
-        tlsVersion: json.connection?.tls || 'none',
-        algorithm: json.connection?.algo || json.algo || 'unknown',
-        failures: parseInt(json.connection?.failures || '0'),
-      };
-
-      console.log(`✅ XMRig pool data parsed:`, poolData);
-      return poolData;
-      
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      console.error(`❌ XMRig pool info failed: ${errorMessage}`);
-      
-      // Log additional debugging info
-      if (process.env.DEBUG === 'true') {
-        console.debug('XMRig API error details:', error);
-      }
-      
-      return this.getDefaultPoolInfo();
     }
+    
+    return this.getDefaultPoolInfo();
   }
 
 /** ✅ Parse CCMiner output */
