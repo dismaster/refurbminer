@@ -4,10 +4,12 @@ import { ApiCommunicationService } from '../api-communication/api-communication.
 import { ConfigService } from '../config/config.service';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 import {
   EnvironmentConfigUtil,
   EnvironmentInfo,
 } from './utils/environment-config.util';
+import { MemoryInfoUtil } from '../telemetry/utils/hardware/memory-info.util';
 
 interface FlightsheetData {
   [key: string]: unknown;
@@ -157,6 +159,10 @@ export class FlightsheetService {
       'flightsheet',
     );
 
+    // IMPORTANT: Do NOT override any performance settings from backend
+    // The backend already provides optimized configurations for each system
+    // We only apply security settings for Termux
+
     // Only apply Termux-specific security settings if in Termux environment
     if (this.isTermuxEnvironment()) {
       // Ensure localhost binding for security in Termux
@@ -172,7 +178,7 @@ export class FlightsheetService {
     }
 
     this.loggingService.log(
-      `⚡ Using backend-provided XMRig configuration (autosave: ${optimizedConfig.autosave})`,
+      `⚡ Using backend-provided XMRig configuration as-is (autosave: ${optimizedConfig.autosave})`,
       'DEBUG',
       'flightsheet',
     );
@@ -190,6 +196,60 @@ export class FlightsheetService {
       process.env.ANDROID_DATA ||
       process.env.ANDROID_ROOT
     );
+  }
+
+  /**
+   * Check if running in a low-power environment (mobile devices, limited resources)
+   */
+  private isLowPowerEnvironment(): boolean {
+    // Termux is always considered low-power
+    if (this.isTermuxEnvironment()) {
+      return true;
+    }
+    
+    // Check for limited memory (less than 4GB)
+    const totalMemoryBytes = MemoryInfoUtil.getTotalMemory();
+    const totalMemoryGB = totalMemoryBytes / (1024 * 1024 * 1024);
+    
+    if (totalMemoryGB < 4) {
+      return true;
+    }
+    
+    // Check for limited CPU cores (fewer than 4)
+    const cpuCores = os.cpus().length;
+    if (cpuCores < 4) {
+      return true;
+    }
+    
+    return false;
+  }
+
+  /**
+   * Get optimal thread count based on system resources and environment
+   */
+  private getOptimalThreadCount(): number {
+    const cpuCores = os.cpus().length;
+    
+    // For mobile/low-power devices, use fewer threads to reduce power consumption
+    if (this.isTermuxEnvironment()) {
+      // Use 50% of cores for mobile devices to save battery
+      return Math.max(1, Math.floor(cpuCores * 0.5));
+    }
+    
+    // For low-power systems, use 75% of cores
+    if (this.isLowPowerEnvironment()) {
+      return Math.max(1, Math.floor(cpuCores * 0.75));
+    }
+    
+    // For powerful systems, we can use more threads, but leave some for the system
+    if (cpuCores >= 8) {
+      return Math.max(1, cpuCores - 1); // Leave one core for system
+    } else if (cpuCores >= 4) {
+      return Math.max(1, Math.floor(cpuCores * 0.75)); // Use 75% of cores
+    }
+    
+    // For systems with very few cores, use all but one
+    return Math.max(1, cpuCores - 1);
   }
 
   /**

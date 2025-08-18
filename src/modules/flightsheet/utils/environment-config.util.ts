@@ -105,59 +105,43 @@ export class EnvironmentConfigUtil {
 
   /**
    * Generate optimal XMRig configuration based on environment
-   * NOTE: This preserves thread configurations from backend while optimizing other settings
+   * NOTE: This preserves thread configurations and performance settings from backend while only optimizing security/compatibility settings
    */
   static generateOptimalXMRigConfig(baseConfig: any, environmentInfo: EnvironmentInfo): any {
     const optimizedConfig = { ...baseConfig };
 
-    // Apply RandomX mode optimization
-    if (optimizedConfig.randomx) {
-      optimizedConfig.randomx.mode = environmentInfo.recommendedRandomXMode;
-      
-      // For light mode, also disable 1GB pages
-      if (environmentInfo.recommendedRandomXMode === 'light') {
-        optimizedConfig.randomx['1gb-pages'] = false;
-      }
-    }
+    // CRITICAL: Do NOT override RandomX mode from backend - it knows best for the specific pool/algorithm
+    // The backend already provides optimized RandomX configuration
+    // if (optimizedConfig.randomx) {
+    //   optimizedConfig.randomx.mode = environmentInfo.recommendedRandomXMode;
+    //   if (environmentInfo.recommendedRandomXMode === 'light') {
+    //     optimizedConfig.randomx['1gb-pages'] = false;
+    //   }
+    // }
 
-    // Apply CPU configuration optimization
-    if (optimizedConfig.cpu) {
-      optimizedConfig.cpu['huge-pages'] = environmentInfo.shouldUseHugePages;
-      optimizedConfig.cpu['huge-pages-jit'] = environmentInfo.shouldUseHugePages;
-      
-      // Adjust memory pool usage based on available memory
-      optimizedConfig.cpu['memory-pool'] = environmentInfo.totalMemoryGB > 8;
-      
-      // Set thread yield for mobile devices to reduce power consumption  
-      optimizedConfig.cpu.yield = environmentInfo.isTermux;
-      
-      // Adjust priority for better performance on non-mobile devices
-      if (!environmentInfo.isTermux && environmentInfo.hasRoot) {
-        optimizedConfig.cpu.priority = 2; // Higher priority for mining
-      }
-      
-      // IMPORTANT: Do NOT modify thread configurations (rx, cn, etc.) 
-      // as these are controlled by the backend API through flightsheet
-      // ALSO: Do NOT add algorithm arrays that weren't in the original config
-    }
+    // CRITICAL: Do NOT override CPU configuration from backend - it provides optimal thread mapping
+    // The backend already provides optimized CPU settings including thread configuration
+    // if (optimizedConfig.cpu) {
+    //   optimizedConfig.cpu['huge-pages'] = environmentInfo.shouldUseHugePages;
+    //   optimizedConfig.cpu['huge-pages-jit'] = environmentInfo.shouldUseHugePages;
+    //   optimizedConfig.cpu['memory-pool'] = environmentInfo.totalMemoryGB > 8;
+    //   optimizedConfig.cpu.yield = environmentInfo.isTermux;
+    //   if (!environmentInfo.isTermux && environmentInfo.hasRoot) {
+    //     optimizedConfig.cpu.priority = 2;
+    //   }
+    // }
 
-    // Adjust API settings for different environments
-    if (optimizedConfig.http) {
-      // On Termux, may need to bind to localhost only for security
-      if (environmentInfo.isTermux) {
+    // Only apply Termux-specific security settings
+    if (environmentInfo.isTermux) {
+      // On Termux, bind to localhost only for security
+      if (optimizedConfig.http) {
         optimizedConfig.http.host = '127.0.0.1';
       }
-      // Note: This will cause flightsheet changes when backend sends "0.0.0.0"
-      // but it's necessary for Termux security
-    }
-
-    // Adjust logging and background settings
-    if (environmentInfo.isTermux) {
-      // More conservative settings for mobile
-      optimizedConfig.colors = false; // Reduce terminal overhead
-      optimizedConfig['print-time'] = 120; // Less frequent printing
+      
+      // More conservative logging settings for mobile to reduce overhead
+      optimizedConfig.colors = false;
+      optimizedConfig['print-time'] = 120;
       optimizedConfig['health-print-time'] = 120;
-      // Note: This will cause flightsheet changes when backend sends different values
     }
 
     return optimizedConfig;
