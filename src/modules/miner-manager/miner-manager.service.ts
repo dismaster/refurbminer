@@ -553,44 +553,64 @@ export class MinerManagerService
           'miner-manager',
         );
         
-        // Method 1: Direct in-memory capture using screen hardcopy to stdout
-        const screenOutput = execSync(
-          `timeout 5 screen -S ${this.minerScreen} -X hardcopy /dev/stdout 2>/dev/null || echo "screen_capture_failed"`,
-          {
-            encoding: 'utf8',
-            timeout: 10000,
-          },
-        );
-        
-        if (screenOutput && !screenOutput.includes('screen_capture_failed')) {
-          output = screenOutput;
-          this.loggingService.log(
-            `✅ Successfully captured miner output in-memory (${output.length} chars)`,
-            'DEBUG',
-            'miner-manager',
+        // Method 1: Direct file-based capture using screen hardcopy to temporary file
+        const tempOutput1 = `storage/temp-output1-${Date.now()}.txt`;
+        try {
+          execSync(
+            `screen -S ${this.minerScreen} -X hardcopy ${tempOutput1}`,
+            {
+              timeout: 5000,
+            },
           );
-        } else {
-          // Method 2: Alternative in-memory approach using screen -p to print buffer
+          
+          // Wait for file to be written
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          
+          if (fs.existsSync(tempOutput1)) {
+            output = fs.readFileSync(tempOutput1, 'utf8');
+            try {
+              fs.unlinkSync(tempOutput1);
+            } catch {
+              // Ignore cleanup errors
+            }
+            
+            this.loggingService.log(
+              `✅ Successfully captured miner output via method 1 (${output.length} chars)`,
+              'DEBUG',
+              'miner-manager',
+            );
+          }
+        } catch (error) {
+          // Method 2: Alternative approach with different timeout
           try {
-            const altOutput = execSync(
-              `timeout 3 screen -S ${this.minerScreen} -X eval 'hardcopy -h /dev/stdout' 2>/dev/null || echo "alt_capture_failed"`,
+            const tempOutput2 = `storage/temp-output2-${Date.now()}.txt`;
+            execSync(
+              `screen -S ${this.minerScreen} -X hardcopy ${tempOutput2}`,
               {
-                encoding: 'utf8',
-                timeout: 8000,
+                timeout: 3000,
               },
             );
             
-            if (altOutput && !altOutput.includes('alt_capture_failed')) {
-              output = altOutput;
+            // Wait for file to be written
+            await new Promise((resolve) => setTimeout(resolve, 300));
+            
+            if (fs.existsSync(tempOutput2)) {
+              output = fs.readFileSync(tempOutput2, 'utf8');
+              try {
+                fs.unlinkSync(tempOutput2);
+              } catch {
+                // Ignore cleanup errors
+              }
+              
               this.loggingService.log(
-                `✅ Successfully captured miner output with alternative in-memory method (${output.length} chars)`,
+                `✅ Successfully captured miner output via method 2 (${output.length} chars)`,
                 'DEBUG',
                 'miner-manager',
               );
             }
           } catch (altError) {
             this.loggingService.log(
-              `⚠️ Alternative in-memory capture method failed: ${altError instanceof Error ? altError.message : String(altError)}`,
+              `⚠️ Alternative capture method failed: ${altError instanceof Error ? altError.message : String(altError)}`,
               'DEBUG',
               'miner-manager',
             );
@@ -598,7 +618,7 @@ export class MinerManagerService
         }
       } catch (screenError) {
         this.loggingService.log(
-          `⚠️ In-memory capture failed: ${screenError instanceof Error ? screenError.message : String(screenError)}`,
+          `⚠️ Primary capture failed: ${screenError instanceof Error ? screenError.message : String(screenError)}`,
           'DEBUG',
           'miner-manager',
         );

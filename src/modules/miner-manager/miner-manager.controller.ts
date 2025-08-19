@@ -133,16 +133,24 @@ export class MinerManagerController {
       
       // If hardcopy file doesn't exist, try alternative method
       try {
-        const screenOutput = execSync(
-          `timeout 5 screen -S miner-session -X hardcopy /dev/stdout 2>/dev/null || echo "screen_capture_failed"`,
-          {
-            encoding: 'utf8',
-            timeout: 10000,
-          },
-        );
+        // Use a temporary file instead of /dev/stdout for better compatibility
+        const tempFile = `storage/temp-output-${Date.now()}.txt`;
         
-        if (screenOutput && !screenOutput.includes('screen_capture_failed')) {
-          return screenOutput;
+        execSync(`screen -S miner-session -X hardcopy ${tempFile}`, {
+          timeout: 5000,
+        });
+        
+        // Wait for file to be written
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        
+        if (fs.existsSync(tempFile)) {
+          const output = fs.readFileSync(tempFile, 'utf8');
+          try {
+            fs.unlinkSync(tempFile);
+          } catch {
+            // Ignore cleanup errors
+          }
+          return output;
         }
       } catch {
         // Fall through to return error message
