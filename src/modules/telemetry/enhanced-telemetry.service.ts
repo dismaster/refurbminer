@@ -229,7 +229,7 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
         'battery info retrieval',
         this.loggingService.log.bind(this.loggingService)
       );
-      // Create API telemetry object
+      // Create API telemetry object with explicit structure to prevent extra variables
       const apiTelemetry = {
         status: 'active',
         appVersion: this.appVersion,
@@ -261,23 +261,26 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
         network: network,
         battery: battery
       };
+
+      // Clean the telemetry object to remove any unwanted root-level variables
+      const cleanedTelemetry = this.cleanTelemetryStructure(apiTelemetry);
     
       // Get mining schedules with error handling
       const scheduleInfo = safeExecute(
         () => this.getMiningSchedule(),
         { mining: { enabled: false, periods: [] }, restarts: [] },
         'mining schedule retrieval',
-        this.loggingService.log.bind(this.loggingService)
+        this.loggingService.log.bind(this.loggingService),
       );
       
       // Create full telemetry object
       const fullTelemetry = {
-        ...apiTelemetry,
+        ...cleanedTelemetry,
         schedules: scheduleInfo,
         historicalHashrate: this.updateHistoricalHashrate(
           previousData?.historicalHashrate || [],
-          minerSummary?.hashrate
-        )
+          minerSummary?.hashrate,
+        ),
       };
     
       // Save telemetry data with error handling
@@ -308,6 +311,49 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
       );
       return null;
     }
+  }
+
+  /**
+   * Clean telemetry structure to remove unwanted root-level variables
+   * @param telemetry Raw telemetry object
+   * @returns Cleaned telemetry object with only allowed root-level fields
+   */
+  private cleanTelemetryStructure(telemetry: any): any {
+    // Define allowed root-level fields
+    const allowedRootFields = [
+      'status',
+      'appVersion',
+      'minerSoftware',
+      'pool',
+      'deviceInfo',
+      'network',
+      'battery',
+    ];
+
+    // Create clean object with only allowed fields
+    const cleanedTelemetry: any = {};
+
+    for (const field of allowedRootFields) {
+      if (telemetry[field] !== undefined) {
+        cleanedTelemetry[field] = telemetry[field];
+      }
+    }
+
+    // Log if we removed any unwanted fields
+    const originalFields = Object.keys(telemetry);
+    const removedFields = originalFields.filter(
+      (field) => !allowedRootFields.includes(field),
+    );
+
+    if (removedFields.length > 0) {
+      this.loggingService.log(
+        `🧹 Removed unwanted root-level telemetry fields: ${removedFields.join(', ')}`,
+        'DEBUG',
+        'telemetry',
+      );
+    }
+
+    return cleanedTelemetry;
   }
 
   private getPreviousTelemetry(): any {

@@ -283,6 +283,10 @@ export class FlightsheetService {
         'cpu.huge-pages',  // Huge pages setting
         'cpu.memory-pool', // Memory pool setting
         'cpu.yield',       // CPU yield setting
+        'http.host',       // Critical: API binding host
+        'http.port',       // Critical: API port
+        'http.enabled',    // Critical: API enabled state
+        'http.access-token', // Critical: API authentication
       ];
 
       for (const setting of criticalSettings) {
