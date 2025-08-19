@@ -40,9 +40,9 @@ export class MinerApiConfigUtil {
     const possibleHosts = [
       '127.0.0.1',    // Localhost first (most common for XMRig)
       'localhost',
+      '0.0.0.0',      // Wildcard binding (some configurations use this)
       '10.0.10.105',  // Your specific miner host
       '192.168.1.100', // Common local network
-      '0.0.0.0',      // Wildcard binding
     ];
 
     const possiblePorts = [4068, 8080, 3333]; // Common miner API ports
