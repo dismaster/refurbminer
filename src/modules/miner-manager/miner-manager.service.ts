@@ -154,7 +154,15 @@ export class MinerManagerService
       this.monitoringCycle++;
       const cycle = this.monitoringCycle % 3; // 3-minute cycle for additional operations
 
-      // CRITICAL: Always check flightsheet every minute as required
+      // CRITICAL: Always sync config FIRST to get latest miningCpus before flightsheet check
+      this.loggingService.log(
+        '🔄 Syncing config from backend API...',
+        'DEBUG',
+        'miner-manager',
+      );
+      await this.configService.syncConfigWithApi();
+
+      // CRITICAL: Check flightsheet AFTER config sync to use updated miningCpus
       this.loggingService.log(
         '🔄 Checking for flightsheet updates...',
         'DEBUG',
@@ -165,14 +173,6 @@ export class MinerManagerService
         await this.logMinerError('Flightsheet changed, restarting miner');
         void this.restartMiner();
       }
-
-      // CRITICAL: Always sync config every minute as required
-      this.loggingService.log(
-        '🔄 Syncing config from backend API...',
-        'DEBUG',
-        'miner-manager',
-      );
-      await this.configService.syncConfigWithApi();
 
       // Check if miner software changed and restart if needed
       await this.checkMinerSoftwareChange();
