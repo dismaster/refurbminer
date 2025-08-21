@@ -22,10 +22,10 @@ npm install
 ### 2. Build for Termux
 
 ```bash
-# Use the smart build script (automatically detects Termux)
-npm run build:smart
+# Standard build command (automatically detects Termux and chooses best method)
+npm run build
 
-# Or use the Termux-specific build command
+# Or explicitly use Termux-specific build
 npm run build:termux
 ```
 
@@ -49,13 +49,14 @@ Cannot find module './swc.android-arm64.node'
 
 ### Build Options
 
-- `npm run build:smart` - Automatically detects your environment and chooses the best build method
-- `npm run build:termux` - Specifically designed for Termux environments
+- `npm run build` - **Recommended**: Automatically detects your environment and chooses the best build method
+- `npm run build:termux` - Specifically designed for Termux environments  
 - `npm run build:tsc` - Uses TypeScript compiler (fallback for when SWC doesn't work)
+- `npm run build:webpack` - Forces Webpack + SWC build (may fail on Termux)
 
 ### Environment Detection
 
-The smart build script automatically detects:
+The smart build system (now the default `npm run build`) automatically detects:
 - Termux environment (checks for `$PREFIX` containing `com.termux`)
 - Android environment (checks for `$ANDROID_ROOT`)
 - SWC availability (falls back to TypeScript if SWC fails)
@@ -69,7 +70,8 @@ The smart build script automatically detects:
 ## Need Help?
 
 If you encounter issues:
-1. Try `npm run build:termux` directly
-2. Check that Node.js version is compatible (`node --version`)
-3. Ensure you have enough storage space for node_modules
-4. Try clearing npm cache: `npm cache clean --force`
+1. Try `npm run build` (the smart detection should handle most cases)
+2. For Termux-specific issues, try `npm run build:termux` directly
+3. Check that Node.js version is compatible (`node --version`)
+4. Ensure you have enough storage space for node_modules
+5. Try clearing npm cache: `npm cache clean --force`

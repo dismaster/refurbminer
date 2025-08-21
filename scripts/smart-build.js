@@ -48,7 +48,7 @@ function runBuild(environment) {
       case 'standard':
       default:
         console.log('🚀 Building with Webpack + SWC...');
-        execSync('npm run build', { stdio: 'inherit' });
+        execSync('npm run build:webpack', { stdio: 'inherit' });
         break;
     }
     
