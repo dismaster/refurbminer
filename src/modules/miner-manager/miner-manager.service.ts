@@ -44,6 +44,11 @@ export class MinerManagerService
   // Track miner software changes to trigger restarts
   private currentMinerSoftware?: string;
 
+  // Track benchmark mode activation for startup grace period
+  private benchmarkStartTime?: Date;
+  private lastBenchmarkStatus: boolean = false;
+  private readonly BENCHMARK_STARTUP_GRACE = 2 * 60 * 1000; // 2 minutes grace period for benchmark startup
+
   constructor(
     private readonly loggingService: LoggingService,
     private readonly flightsheetService: FlightsheetService,
@@ -410,16 +415,52 @@ export class MinerManagerService
         }
       }
 
+      const config = this.configService.getConfig();
       const shouldBeMining = this.shouldBeMining();
       const isMinerRunning = this.isMinerRunning();
 
+      // Track benchmark mode activation for grace period
+      const currentBenchmarkStatus = config?.benchmark ?? false;
+      if (currentBenchmarkStatus !== this.lastBenchmarkStatus) {
+        if (currentBenchmarkStatus) {
+          this.benchmarkStartTime = new Date();
+          this.loggingService.log(
+            '🚀 Benchmark mode activated - starting grace period for miner startup',
+            'INFO',
+            'miner-manager',
+          );
+        } else {
+          this.benchmarkStartTime = undefined;
+          this.loggingService.log(
+            '🔴 Benchmark mode deactivated',
+            'INFO',
+            'miner-manager',
+          );
+        }
+        this.lastBenchmarkStatus = currentBenchmarkStatus;
+      }
+
+      // Check if we're in benchmark startup grace period
+      const isInBenchmarkGracePeriod = this.benchmarkStartTime && 
+        (Date.now() - this.benchmarkStartTime.getTime()) < this.BENCHMARK_STARTUP_GRACE;
+
       this.loggingService.log(
-        `🔍 Health check: Should mine=${shouldBeMining}, Is running=${isMinerRunning}`,
+        `🔍 Health check: Should mine=${shouldBeMining}, Is running=${isMinerRunning}, Benchmark grace=${isInBenchmarkGracePeriod}`,
         'DEBUG',
         'miner-manager',
       );
 
       if (shouldBeMining && !isMinerRunning) {
+        // Skip error reporting if we're in benchmark startup grace period
+        if (isInBenchmarkGracePeriod) {
+          this.loggingService.log(
+            '⏳ Benchmark mode startup grace period active - skipping health check errors',
+            'DEBUG',
+            'miner-manager',
+          );
+          return;
+        }
+
         this.crashCount++;
         const error = `Miner not running when it should be (Detection ${this.crashCount}/${this.MAX_CRASHES})`;
         this.loggingService.log(`⚠️ ${error}`, 'WARN', 'miner-manager');
@@ -1031,10 +1072,24 @@ export class MinerManagerService
     // If benchmark is active, bypass all scheduling and always mine
     if (config.benchmark === true) {
       this.loggingService.log(
-        '🚀 Benchmark mode active - bypassing schedules and starting mining',
+        '🚀 Benchmark mode active - bypassing schedules and ensuring mining',
         'INFO',
         'miner-manager',
       );
+      
+      // Auto-start miner if benchmark mode is active but miner is not running
+      if (!this.isMinerRunning()) {
+        // Use setTimeout to avoid blocking the shouldBeMining call
+        setTimeout(() => {
+          this.loggingService.log(
+            '🚀 Auto-starting miner for benchmark mode',
+            'INFO',
+            'miner-manager',
+          );
+          void this.startMiner();
+        }, 1000);
+      }
+      
       return true;
     }
 
