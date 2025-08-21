@@ -14,6 +14,10 @@
 
 The RefurbMiner Client Version which submits collects device and miner data like hashrates, temperatures and settings.
 
+### 📱 Termux Support
+
+RefurbMiner now supports Android devices via Termux! For installation instructions on Termux, see [TERMUX.md](./TERMUX.md).
+
 ## Project setup
 
 ```bash
