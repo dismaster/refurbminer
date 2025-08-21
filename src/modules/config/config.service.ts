@@ -26,6 +26,7 @@ interface ApiConfigResponse {
   rigId?: string;
   name?: string;
   minerSoftware?: string;
+  benchmark?: boolean; // Boolean flag indicating if benchmark is active
   thresholds?: {
     maxCpuTemp?: number;
     maxBatteryTemp?: number;
@@ -48,6 +49,7 @@ interface Config {
   rigId: string;
   name: string;
   minerSoftware?: string; // Current selected miner software (xmrig, ccminer, etc.)
+  benchmark?: boolean; // Boolean flag indicating if benchmark is active
   thresholds: {
     maxCpuTemp: number;
     maxBatteryTemp: number;
@@ -314,6 +316,15 @@ export class ConfigService implements OnModuleInit {
         );
       }
 
+      // Log benchmark flag changes
+      if (apiConfig.benchmark !== undefined && apiConfig.benchmark !== currentConfig.benchmark) {
+        this.loggingService.log(
+          `🧪 Benchmark mode changing: ${currentConfig.benchmark ?? false} → ${apiConfig.benchmark}`,
+          'INFO',
+          'config',
+        );
+      }
+
       // PRESERVE the local minerId - never overwrite with API data
       // The miner ID should only be set during initial registration
       // API sync is only for configuration data (schedules, thresholds, etc.)
@@ -331,6 +342,7 @@ export class ConfigService implements OnModuleInit {
         rigId: apiConfig.rigId || currentConfig.rigId,
         name: apiConfig.name || currentConfig.name,
         minerSoftware: apiConfig.minerSoftware || currentConfig.minerSoftware, // Sync mining software from backend
+        benchmark: apiConfig.benchmark ?? currentConfig.benchmark ?? false, // Sync benchmark flag from backend
         thresholds: {
           maxCpuTemp:
             apiConfig.thresholds?.maxCpuTemp ??
@@ -591,6 +603,14 @@ export class ConfigService implements OnModuleInit {
   getMinerSoftware(): string | undefined {
     const config = this.getConfig();
     return config?.minerSoftware;
+  }
+
+  /**
+   * Get the benchmark flag
+   */
+  getBenchmarkFlag(): boolean {
+    const config = this.getConfig();
+    return config?.benchmark ?? false;
   }
 
   /**
@@ -917,6 +937,7 @@ export class ConfigService implements OnModuleInit {
         rigId: '',
         name: 'Unnamed Rig',
         minerSoftware: undefined, // Will be synced from backend API after registration
+        benchmark: false, // Default benchmark mode to false
         thresholds: {
           maxCpuTemp: 85,
           maxBatteryTemp: 45,

@@ -41,6 +41,7 @@ export class MinerManagerController {
     return {
       status: isRunning ? 'running' : 'stopped',
       shouldBeMining,
+      benchmark: config?.benchmark ?? false,
       scheduleStatus: this.minerManagerService.getScheduleStatus(),
       rigInfo: {
         rigId: config?.rigId || 'Unknown',

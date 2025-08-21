@@ -1028,6 +1028,16 @@ export class MinerManagerService
       return true;
     }
 
+    // If benchmark is active, bypass all scheduling and always mine
+    if (config.benchmark === true) {
+      this.loggingService.log(
+        '🚀 Benchmark mode active - bypassing schedules and starting mining',
+        'INFO',
+        'miner-manager',
+      );
+      return true;
+    }
+
     if (!config.schedules.scheduledMining.enabled) {
       this.loggingService.log(
         'ℹ️ Scheduled mining disabled, mining allowed at any time',
