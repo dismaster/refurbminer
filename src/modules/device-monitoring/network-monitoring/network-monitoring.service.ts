@@ -88,14 +88,82 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
     return false;
   }
 
-  /** 📝 Check DNS resolution */
-  checkDNSResolution(): boolean {
-    try {
-      const result = execSync('nslookup google.com', { encoding: 'utf8' });
-      return result.includes('Address');
-    } catch {
-      return false;
+  /** 📝 Check basic IP connectivity (without DNS) */
+  checkBasicIPConnectivity(): boolean {
+    const osType = this.osDetectionService.detectOS();
+    const pingCommand = osType === 'termux' ? 'ping -c 1 -W 2' : 'ping -c 1 -w 2';
+    
+    // Test well-known IP addresses that should always be reachable
+    const ipTargets = [
+      '8.8.8.8',        // Google DNS
+      '1.1.1.1',        // Cloudflare DNS
+      '208.67.222.222', // OpenDNS
+      '9.9.9.9',        // Quad9 DNS
+    ];
+
+    for (const ip of ipTargets) {
+      try {
+        const result = execSync(`${pingCommand} ${ip}`, { encoding: 'utf8' });
+        if (result.includes('1 received') || result.includes('1 packets received')) {
+          this.loggingService.log(
+            `✅ Basic IP connectivity confirmed (${ip})`,
+            'DEBUG',
+            'network-monitoring'
+          );
+          return true;
+        }
+      } catch {
+        continue;
+      }
     }
+    
+    this.loggingService.log(
+      '❌ No basic IP connectivity found',
+      'DEBUG',
+      'network-monitoring'
+    );
+    return false;
+  }
+
+  /** 📝 Check DNS resolution with fallback methods */
+  checkDNSResolution(): boolean {
+    const dnsTests = [
+      () => {
+        const result = execSync('nslookup google.com', { encoding: 'utf8' });
+        return result.includes('Address');
+      },
+      () => {
+        const result = execSync('nslookup 8.8.8.8', { encoding: 'utf8' });
+        return result.includes('name =') || result.includes('Address');
+      },
+      () => {
+        // Test if we can resolve a simple hostname
+        const result = execSync('getent hosts google.com', { encoding: 'utf8' });
+        return result.includes('google.com');
+      }
+    ];
+
+    for (const test of dnsTests) {
+      try {
+        if (test()) {
+          this.loggingService.log(
+            '✅ DNS resolution working',
+            'DEBUG',
+            'network-monitoring'
+          );
+          return true;
+        }
+      } catch {
+        continue;
+      }
+    }
+    
+    this.loggingService.log(
+      '⚠️ DNS resolution failed with all methods',
+      'DEBUG',
+      'network-monitoring'
+    );
+    return false;
   }
 
   /** 📝 Check WiFi signal strength (Termux only) */
@@ -129,7 +197,10 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
     }
     
     // Continue with existing connectivity checks
-    if (!this.checkNetworkConnectivity()) {
+    // First check basic IP connectivity
+    const hasIPConnectivity = this.checkBasicIPConnectivity();
+    
+    if (!hasIPConnectivity) {
       connectivityLost = true;
       
       // Increment retry counter and apply exponential backoff
@@ -169,9 +240,17 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    if (!connectivityLost && !this.checkDNSResolution()) {
-      dnsResolutionFailed = true;
-      this.loggingService.log('⚠️ DNS resolution failed', 'WARN', 'network-monitoring');
+    // Only check DNS if we have basic IP connectivity but suspect DNS issues
+    // For Termux, we're less strict - if IP works, DNS issues are less critical
+    if (hasIPConnectivity && !this.checkDNSResolution()) {
+      if (osType !== 'termux') {
+        // On regular systems, DNS failure is more concerning
+        dnsResolutionFailed = true;
+        this.loggingService.log('⚠️ DNS resolution failed on non-Termux system', 'WARN', 'network-monitoring');
+      } else {
+        // On Termux, just log it but don't trigger recovery
+        this.loggingService.log('ℹ️ DNS resolution failed on Termux (IP connectivity working)', 'INFO', 'network-monitoring');
+      }
     }
 
     if (osType === 'termux') {
