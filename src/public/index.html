@@ -64,6 +64,9 @@
                     <div class="dashboard-grid">
                         <div class="metric-card soft-glow stat-gradient-1">
                             <div class="metric-label">Mining Status <span class="status-indicator" id="status-indicator"></span></div>
+                            <div class="metric-label benchmark-status" id="benchmark-status-container" style="margin-top: 0.5rem; display: none;">
+                                <i class="fas fa-flask"></i> Benchmark Mode <span class="benchmark-indicator active" id="benchmark-indicator">ACTIVE</span>
+                            </div>
                             <div class="control-buttons" style="justify-content: center; align-items: center;">
                                 <button id="start-miner" class="btn-primary">
                                     <i class="fas fa-play"></i> Start
@@ -805,6 +808,32 @@ function updateDashboard(data, healthData, statusData) {
     if (statusIndicator) {
         statusIndicator.className = `status-indicator ${status === 'active' ? 'status-active' : 'status-inactive'}`;
         statusIndicator.setAttribute('data-status', currentStatus);
+    }
+
+    // Update benchmark status
+    const benchmarkContainer = document.getElementById('benchmark-status-container');
+    const benchmarkIndicator = document.getElementById('benchmark-indicator');
+    
+    if (statusData && statusData.benchmark === true) {
+        // Show benchmark indicator when benchmark is active
+        benchmarkContainer.style.display = 'flex';
+        benchmarkIndicator.textContent = 'ACTIVE';
+        benchmarkIndicator.className = 'benchmark-indicator active';
+        
+        // Log benchmark activation if this is a change
+        const wasBenchmarkActive = benchmarkContainer.getAttribute('data-benchmark') === 'true';
+        if (!wasBenchmarkActive) {
+            addActivity('🧪 Benchmark mode activated - bypassing schedules', 'info');
+            benchmarkContainer.setAttribute('data-benchmark', 'true');
+        }
+    } else {
+        // Hide benchmark indicator when not in benchmark mode
+        const wasBenchmarkActive = benchmarkContainer.getAttribute('data-benchmark') === 'true';
+        if (wasBenchmarkActive) {
+            addActivity('Benchmark mode deactivated', 'info');
+        }
+        benchmarkContainer.style.display = 'none';
+        benchmarkContainer.setAttribute('data-benchmark', 'false');
     }
 
     // Control buttons

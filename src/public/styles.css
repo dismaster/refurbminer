@@ -29,6 +29,16 @@
   --info-box-text: #333333; /* Ensure info-box text is dark in light mode */
 }
 
+/* Light mode benchmark indicator */
+.light-mode .benchmark-indicator {
+  background: linear-gradient(135deg, #f39c12 0%, #d68910 100%);
+  box-shadow: 0 2px 4px rgba(243, 156, 18, 0.3);
+}
+
+.light-mode .benchmark-status {
+  color: var(--text-color);
+}
+
 /* Base styles */
 body {
   margin: 0;
@@ -374,6 +384,37 @@ body::-webkit-scrollbar {
 /* Danger text styles */
 .danger-text { color: var(--danger-color); }
 
+/* Benchmark status styles */
+.benchmark-status {
+  font-size: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  opacity: 0.9;
+}
+
+.benchmark-indicator {
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.25rem;
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  background: linear-gradient(135deg, #f39c12 0%, #e67e22 100%);
+  color: white;
+  box-shadow: 0 2px 4px rgba(243, 156, 18, 0.3);
+  animation: pulse-glow 2s infinite;
+}
+
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 2px 4px rgba(243, 156, 18, 0.3);
+  }
+  50% {
+    box-shadow: 0 2px 8px rgba(243, 156, 18, 0.6), 0 0 12px rgba(243, 156, 18, 0.4);
+  }
+}
+
 /* Media queries for responsive design */
 @media (max-width: 768px) {
   .shares-info {
@@ -561,6 +602,16 @@ h5.text-theme {
   background: rgba(14, 227, 172, 0.05);
   border: 1px solid rgba(14, 227, 172, 0.1);
   color: #ffffff;
+}
+
+/* Benchmark indicator styling for dark mode */
+.dark-mode .benchmark-indicator {
+  background: linear-gradient(135deg, #f39c12 0%, #e67e22 100%);
+  box-shadow: 0 2px 8px rgba(243, 156, 18, 0.4), 0 0 12px rgba(243, 156, 18, 0.2);
+}
+
+.dark-mode .benchmark-status {
+  color: var(--text-color);
 }
 
 /* Modern scrollbar for dark mode */
