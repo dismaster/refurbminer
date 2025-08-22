@@ -48,6 +48,9 @@ export class MinerManagerService
   private benchmarkStartTime?: Date;
   private lastBenchmarkStatus: boolean = false;
   private readonly BENCHMARK_STARTUP_GRACE = 2 * 60 * 1000; // 2 minutes grace period for benchmark startup
+  
+  // Prevent multiple simultaneous auto-starts
+  private isAutoStarting: boolean = false;
 
   constructor(
     private readonly loggingService: LoggingService,
@@ -1078,7 +1081,8 @@ export class MinerManagerService
       );
       
       // Auto-start miner if benchmark mode is active but miner is not running
-      if (!this.isMinerRunning()) {
+      if (!this.isMinerRunning() && !this.isAutoStarting) {
+        this.isAutoStarting = true;
         // Use setTimeout to avoid blocking the shouldBeMining call
         setTimeout(() => {
           this.loggingService.log(
@@ -1086,7 +1090,9 @@ export class MinerManagerService
             'INFO',
             'miner-manager',
           );
-          void this.startMiner();
+          void this.startMiner().finally(() => {
+            this.isAutoStarting = false;
+          });
         }, 1000);
       }
       
@@ -1660,6 +1666,17 @@ export class MinerManagerService
   }
 
   private async checkSchedules() {
+    // First check if benchmark mode is active - if so, skip all schedule logic
+    const config = this.configService.getConfig();
+    if (config && config.benchmark === true) {
+      this.loggingService.log(
+        '🚀 Benchmark mode active - skipping schedule checks',
+        'DEBUG',
+        'miner-manager',
+      );
+      return;
+    }
+
     // Optimize schedule checking by caching config and only checking when necessary
     const now = new Date();
     const currentTime = now.toTimeString().split(' ')[0].substring(0, 5);
@@ -1676,7 +1693,6 @@ export class MinerManagerService
     
     this.lastScheduleCheck = now;
     
-    const config = this.configService.getConfig();
     if (!config) {
       this.loggingService.log(
         '⚠️ Cannot check schedules: No config found',

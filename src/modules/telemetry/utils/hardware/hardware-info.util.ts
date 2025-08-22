@@ -295,7 +295,48 @@ export class HardwareInfoUtil {
   static getModel(systemType: string): string {
     try {
       if (systemType === 'termux') {
-        return this.runCommandWithSuFallback('getprop ro.product.model');
+        // Use hardware-specific properties first for more accurate detection
+        // These are less likely to be affected by custom ROMs
+        // Ordered by user-friendliness: shorter, cleaner names first
+        const hardwareProperties = [
+          'ro.boot.product.model',
+          'ro.boot.em.model',
+          'ril.product_code',
+          'vendor.ril.product_code'
+        ];
+        
+        // Try hardware-specific properties first
+        for (const prop of hardwareProperties) {
+          try {
+            const model = this.runCommandWithSuFallback(`getprop ${prop}`);
+            if (model && model !== '' && !model.includes('no such property')) {
+              return model;
+            }
+          } catch {
+            // Continue to next property
+          }
+        }
+        
+        // Fallback to standard properties if hardware-specific ones fail
+        const standardProperties = [
+          'ro.product.model',
+          'ro.product.device',
+          'ro.product.name'
+        ];
+        
+        for (const prop of standardProperties) {
+          try {
+            const model = this.runCommandWithSuFallback(`getprop ${prop}`);
+            if (model && model !== '') {
+              return model;
+            }
+          } catch {
+            // Continue to next property
+          }
+        }
+        
+        // Final fallback
+        return 'Unknown Android Device';
       }
       if (fs.existsSync('/sys/firmware/devicetree/base/model')) {
         return execSync(

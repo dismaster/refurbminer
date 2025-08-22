@@ -166,52 +166,108 @@ export class OsDetectionService {
     }
     try {
       if (this.detectOS() === 'termux') {
-        // Prefer Android property for model
+        // Use hardware-specific properties first for more accurate detection
+        // These are less likely to be affected by custom ROMs
+        // Ordered by user-friendliness: shorter, cleaner names first
+        const hardwareProperties = [
+          'ro.boot.product.model',
+          'ro.boot.em.model', 
+          'ril.product_code',
+          'vendor.ril.product_code'
+        ];
+        
+        this.loggingService.log(
+          '🔍 Attempting hardware-specific model detection for Termux',
+          'DEBUG',
+          'os-detection',
+        );
+        
+        for (const prop of hardwareProperties) {
+          let model = '';
+          try {
+            model = execSync(`getprop ${prop}`, { encoding: 'utf8' }).trim();
+            if (model && model !== '' && !model.includes('no such property')) {
+              this.loggingService.log(
+                `✅ Found hardware model from ${prop}: ${model}`,
+                'INFO',
+                'os-detection',
+              );
+              this.cachedHardwareModel = model;
+              return this.cachedHardwareModel;
+            }
+          } catch {}
+          
+          // Try with su if available
+          if (!model && this.isSuAvailable()) {
+            try {
+              model = execSync(`su -c "getprop ${prop}"`, { encoding: 'utf8' }).trim();
+              if (model && model !== '' && !model.includes('no such property')) {
+                this.loggingService.log(
+                  `✅ Found hardware model from ${prop} (with su): ${model}`,
+                  'INFO',
+                  'os-detection',
+                );
+                this.cachedHardwareModel = model;
+                return this.cachedHardwareModel;
+              }
+            } catch {}
+          }
+        }
+        
+        // Fallback to standard Android properties if hardware-specific ones fail
+        const standardProperties = [
+          'ro.product.model',
+          'ro.product.device',
+          'ro.product.name'
+        ];
+        
+        this.loggingService.log(
+          '⚠️ Hardware-specific properties not found, falling back to standard properties',
+          'WARN',
+          'os-detection',
+        );
+        
         const suspicious = /superuser|rooted|no\s*are/i;
-        let model = '';
-        try {
-          model = execSync('getprop ro.product.model', { encoding: 'utf8' }).trim();
-        } catch {}
-        if (!model && this.isSuAvailable()) {
+        
+        for (const prop of standardProperties) {
+          let model = '';
           try {
-            model = execSync('su -c "getprop ro.product.model"', { encoding: 'utf8' }).trim();
+            model = execSync(`getprop ${prop}`, { encoding: 'utf8' }).trim();
+            if (model && !suspicious.test(model)) {
+              this.loggingService.log(
+                `✅ Found model from fallback ${prop}: ${model}`,
+                'INFO',
+                'os-detection',
+              );
+              this.cachedHardwareModel = model;
+              return this.cachedHardwareModel;
+            }
           } catch {}
+          
+          if (!model && this.isSuAvailable()) {
+            try {
+              model = execSync(`su -c "getprop ${prop}"`, { encoding: 'utf8' }).trim();
+              if (model && !suspicious.test(model)) {
+                this.loggingService.log(
+                  `✅ Found model from fallback ${prop} (with su): ${model}`,
+                  'INFO',
+                  'os-detection',
+                );
+                this.cachedHardwareModel = model;
+                return this.cachedHardwareModel;
+              }
+            } catch {}
+          }
         }
-        if (model && !suspicious.test(model)) {
-          this.cachedHardwareModel = model;
-          return this.cachedHardwareModel;
-        }
-        // Fallback to device
-        let device = '';
-        try {
-          device = execSync('getprop ro.product.device', { encoding: 'utf8' }).trim();
-        } catch {}
-        if (!device && this.isSuAvailable()) {
-          try {
-            device = execSync('su -c "getprop ro.product.device"', { encoding: 'utf8' }).trim();
-          } catch {}
-        }
-        if (device && !suspicious.test(device)) {
-          this.cachedHardwareModel = device;
-          return this.cachedHardwareModel;
-        }
-        // Fallback to product
-        let product = '';
-        try {
-          product = execSync('getprop ro.product.name', { encoding: 'utf8' }).trim();
-        } catch {}
-        if (!product && this.isSuAvailable()) {
-          try {
-            product = execSync('su -c "getprop ro.product.name"', { encoding: 'utf8' }).trim();
-          } catch {}
-        }
-        if (product && !suspicious.test(product)) {
-          this.cachedHardwareModel = product;
-          return this.cachedHardwareModel;
-        }
-        // Fallback to arch
+        
+        // Final fallback to architecture
         try {
           const arch = execSync('uname -m', { encoding: 'utf8' }).trim();
+          this.loggingService.log(
+            `⚠️ Using architecture as final fallback: ${arch}`,
+            'WARN',
+            'os-detection',
+          );
           this.cachedHardwareModel = arch || os.arch();
           return this.cachedHardwareModel;
         } catch {
