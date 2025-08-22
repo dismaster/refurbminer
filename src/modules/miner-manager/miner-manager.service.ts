@@ -52,6 +52,12 @@ export class MinerManagerService
   // Prevent multiple simultaneous auto-starts
   private isAutoStarting: boolean = false;
 
+  // Smart error tracking to prevent spam to API backend
+  private errorTracker = new Map<string, { count: number; firstSeen: Date; lastSeen: Date; lastReported?: Date }>();
+  private readonly ERROR_REPORT_THRESHOLD = 3; // Report after 3 consecutive occurrences
+  private readonly ERROR_REPORT_COOLDOWN = 5 * 60 * 1000; // 5 minutes between reports of same error
+  private readonly ERROR_TRACKER_CLEANUP_INTERVAL = 30 * 60 * 1000; // Clean old errors after 30 minutes
+
   constructor(
     private readonly loggingService: LoggingService,
     private readonly flightsheetService: FlightsheetService,
@@ -826,12 +832,15 @@ export class MinerManagerService
     for (const line of lines) {
       for (const pattern of errorPatterns) {
         if (pattern.test(line)) {
+          const errorKey = line.trim();
           this.loggingService.log(
-            `🔍 Detected ${minerSoftware} error in output: ${line.trim()}`,
+            `🔍 Detected ${minerSoftware} error in output: ${errorKey}`,
             'WARN',
             'miner-manager',
           );
-          await this.logMinerError(`${minerSoftware} output error: ${line.trim()}`);
+          
+          // Use smart error tracking instead of immediate API logging
+          await this.trackAndReportError(errorKey, `${minerSoftware} output error: ${errorKey}`);
           hasErrors = true;
           break;
         }
@@ -1884,6 +1893,97 @@ export class MinerManagerService
   private timeToMinutes(time: string): number {
     const [hours, minutes] = time.split(':').map(Number);
     return hours * 60 + minutes;
+  }
+
+  /**
+   * Smart error tracking to prevent API spam
+   * Only reports errors to API after multiple occurrences and with cooldown
+   */
+  private async trackAndReportError(errorKey: string, fullMessage: string): Promise<void> {
+    const now = new Date();
+    
+    // Clean up old error entries periodically
+    if (Math.random() < 0.1) { // 10% chance on each call
+      this.cleanupOldErrorEntries(now);
+    }
+    
+    // Get or create error tracking entry
+    let errorEntry = this.errorTracker.get(errorKey);
+    if (!errorEntry) {
+      errorEntry = {
+        count: 0,
+        firstSeen: now,
+        lastSeen: now,
+      };
+      this.errorTracker.set(errorKey, errorEntry);
+    }
+    
+    // Update error tracking
+    errorEntry.count++;
+    errorEntry.lastSeen = now;
+    
+    // Log locally for debugging
+    this.loggingService.log(
+      `📊 Error tracking: "${errorKey}" - Count: ${errorEntry.count}/${this.ERROR_REPORT_THRESHOLD}`,
+      'DEBUG',
+      'miner-manager',
+    );
+    
+    // Check if we should report to API
+    const shouldReport = this.shouldReportError(errorEntry, now);
+    
+    if (shouldReport) {
+      this.loggingService.log(
+        `📤 Reporting error to API after ${errorEntry.count} occurrences: ${errorKey}`,
+        'INFO',
+        'miner-manager',
+      );
+      
+      errorEntry.lastReported = now;
+      await this.logMinerError(fullMessage);
+    } else {
+      this.loggingService.log(
+        `⏳ Error not yet reported (${errorEntry.count}/${this.ERROR_REPORT_THRESHOLD}): ${errorKey}`,
+        'DEBUG',
+        'miner-manager',
+      );
+    }
+  }
+
+  /**
+   * Determine if error should be reported to API based on tracking rules
+   */
+  private shouldReportError(errorEntry: { count: number; firstSeen: Date; lastSeen: Date; lastReported?: Date }, now: Date): boolean {
+    // Report if we've reached the threshold
+    if (errorEntry.count >= this.ERROR_REPORT_THRESHOLD) {
+      // Check cooldown if already reported before
+      if (errorEntry.lastReported) {
+        const timeSinceLastReport = now.getTime() - errorEntry.lastReported.getTime();
+        if (timeSinceLastReport < this.ERROR_REPORT_COOLDOWN) {
+          return false; // Still in cooldown period
+        }
+      }
+      return true; // Ready to report
+    }
+    
+    return false; // Haven't reached threshold yet
+  }
+
+  /**
+   * Clean up old error entries to prevent memory leaks
+   */
+  private cleanupOldErrorEntries(now: Date): void {
+    for (const [errorKey, errorEntry] of this.errorTracker.entries()) {
+      const timeSinceLastSeen = now.getTime() - errorEntry.lastSeen.getTime();
+      if (timeSinceLastSeen > this.ERROR_TRACKER_CLEANUP_INTERVAL) {
+        this.errorTracker.delete(errorKey);
+        this.loggingService.log(
+          `🧹 Cleaned up old error entry: ${errorKey}`,
+          'DEBUG',
+          'miner-manager',
+        );
+      }
+    }
   }
 
   private async logMinerError(message: string, stack?: string): Promise<void> {
