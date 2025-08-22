@@ -13,7 +13,7 @@
     "build": "node scripts/smart-build.js",
     "build:smart": "node scripts/smart-build.js",
     "build:webpack": "nest build --builder webpack --webpackPath webpack.config.js",
-    "build:tsc": "tsc -p tsconfig.build.json && npm run postbuild",
+    "build:tsc": "npx tsc -p tsconfig.build.json && npm run postbuild",
     "build:termux": "npm run prebuild:shell && npm run build:tsc",
     "build:only": "nest build --builder webpack --webpackPath webpack.config.js",
     "postbuild": "node scripts/copy-public.js",
