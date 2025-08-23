@@ -277,14 +277,71 @@ export class HardwareInfoUtil {
       if (systemType === 'termux') {
         return this.runCommandWithSuFallback('getprop ro.product.brand');
       }
+      
+      // Enhanced Radxa and ARM board detection
       if (fs.existsSync('/sys/firmware/devicetree/base/model')) {
-        return execSync(
-          "cat /sys/firmware/devicetree/base/model | awk '{print $1}'",
-          { encoding: 'utf8' },
-        )
-          .trim()
-          .toUpperCase();
+        const modelContent = fs.readFileSync('/sys/firmware/devicetree/base/model', 'utf8').trim().replace(/\0/g, '');
+        
+        // Check for Radxa devices
+        if (modelContent.toLowerCase().includes('radxa') || modelContent.toLowerCase().includes('rock')) {
+          return 'Radxa';
+        }
+        
+        // Check for Raspberry Pi
+        if (modelContent.toLowerCase().includes('raspberry')) {
+          return 'Raspberry Pi Foundation';
+        }
+        
+        // Check for Orange Pi
+        if (modelContent.toLowerCase().includes('orange')) {
+          return 'Orange Pi';
+        }
+        
+        // Check for other common ARM board manufacturers
+        if (modelContent.toLowerCase().includes('rockchip')) {
+          return 'Rockchip';
+        }
+        
+        // For unknown SoC identifiers like SUN55IW3, try other detection methods
+        if (modelContent.match(/^[A-Z0-9]+$/)) {
+          // This looks like a SoC identifier, try alternative detection
+          return this.detectBrandFromSystem();
+        }
+        
+        // Fallback to first word if it looks like a brand name
+        const firstWord = modelContent.split(/\s+/)[0].trim();
+        if (firstWord.length > 2 && !firstWord.match(/^[A-Z0-9]+$/)) {
+          return firstWord;
+        }
       }
+      
+      // Try alternative detection methods
+      return this.detectBrandFromSystem();
+    } catch {
+      return 'Unknown';
+    }
+  }
+
+  /** ✅ Alternative brand detection from system files and commands */
+  private static detectBrandFromSystem(): string {
+    try {
+      // Try DMI information (works on many x86 and some ARM systems)
+      if (fs.existsSync('/sys/class/dmi/id/board_vendor')) {
+        const vendor = fs.readFileSync('/sys/class/dmi/id/board_vendor', 'utf8').trim();
+        if (vendor && vendor !== 'To be filled by O.E.M.' && vendor !== 'Unknown') {
+          return vendor;
+        }
+      }
+      
+      // Try system vendor
+      if (fs.existsSync('/sys/class/dmi/id/sys_vendor')) {
+        const vendor = fs.readFileSync('/sys/class/dmi/id/sys_vendor', 'utf8').trim();
+        if (vendor && vendor !== 'To be filled by O.E.M.' && vendor !== 'Unknown') {
+          return vendor;
+        }
+      }
+      
+      // Try lsb_release as final fallback
       return execSync('lsb_release -si', { encoding: 'utf8' }).trim();
     } catch {
       return 'Unknown';
@@ -338,14 +395,110 @@ export class HardwareInfoUtil {
         // Final fallback
         return 'Unknown Android Device';
       }
+      
+      // Enhanced ARM board model detection
       if (fs.existsSync('/sys/firmware/devicetree/base/model')) {
-        return execSync(
-          "cat /sys/firmware/devicetree/base/model | awk '{print $2, $3}'",
-          { encoding: 'utf8' },
-        )
-          .trim()
-          .toUpperCase();
+        const modelContent = fs.readFileSync('/sys/firmware/devicetree/base/model', 'utf8').trim().replace(/\0/g, '');
+        
+        // For Radxa devices, try to extract the specific model
+        if (modelContent.toLowerCase().includes('radxa') || modelContent.toLowerCase().includes('rock')) {
+          // Try to get more specific model information from compatible string
+          if (fs.existsSync('/sys/firmware/devicetree/base/compatible')) {
+            const compatible = fs.readFileSync('/sys/firmware/devicetree/base/compatible', 'utf8').trim().replace(/\0/g, '');
+            const compatibleParts = compatible.split(',');
+            
+            // Look for Radxa-specific identifiers
+            for (const part of compatibleParts) {
+              if (part.includes('radxa') || part.includes('rock')) {
+                // Extract model from compatible string (e.g., "radxa,rock-5a" -> "Rock 5A")
+                const modelMatch = part.match(/radxa,(.+)|rock.?(.+)/i);
+                if (modelMatch) {
+                  const model = (modelMatch[1] || modelMatch[2])
+                    .replace(/-/g, ' ')
+                    .replace(/\b\w/g, l => l.toUpperCase());
+                  return model;
+                }
+              }
+            }
+          }
+          
+          // Fallback to parsing the model string directly
+          if (modelContent.toLowerCase().includes('radxa')) {
+            return modelContent;
+          }
+          
+          // If we detect it's a Radxa but can't get specific model, try alternative detection
+          return this.detectRadxaModel();
+        }
+        
+        // For other devices, clean up the model content
+        if (modelContent && !modelContent.match(/^[A-Z0-9]+$/)) {
+          return modelContent;
+        }
+        
+        // If model content looks like SoC identifier, try alternative detection
+        if (modelContent.match(/^[A-Z0-9]+$/)) {
+          return this.detectModelFromSystem();
+        }
       }
+      
+      // Try alternative detection methods
+      return this.detectModelFromSystem();
+    } catch {
+      return 'Unknown';
+    }
+  }
+
+  /** ✅ Detect Radxa model from system information */
+  private static detectRadxaModel(): string {
+    try {
+      // Try to detect from CPU info which might contain board info
+      if (fs.existsSync('/proc/cpuinfo')) {
+        const cpuInfo = fs.readFileSync('/proc/cpuinfo', 'utf8');
+        const hardwareMatch = cpuInfo.match(/Hardware\s*:\s*(.+)/i);
+        if (hardwareMatch) {
+          const hardware = hardwareMatch[1].trim();
+          // Map common Radxa SoC identifiers to models
+          if (hardware.includes('SUN55IW3')) {
+            return 'Cubie A5E'; // Based on your telemetry data
+          }
+        }
+      }
+      
+      // Try board name from DMI
+      if (fs.existsSync('/sys/class/dmi/id/board_name')) {
+        const boardName = fs.readFileSync('/sys/class/dmi/id/board_name', 'utf8').trim();
+        if (boardName && boardName !== 'Unknown') {
+          return boardName;
+        }
+      }
+      
+      return 'Unknown Radxa Model';
+    } catch {
+      return 'Unknown Radxa Model';
+    }
+  }
+
+  /** ✅ Alternative model detection from system files */
+  private static detectModelFromSystem(): string {
+    try {
+      // Try DMI product name
+      if (fs.existsSync('/sys/class/dmi/id/product_name')) {
+        const productName = fs.readFileSync('/sys/class/dmi/id/product_name', 'utf8').trim();
+        if (productName && productName !== 'To be filled by O.E.M.' && productName !== 'Unknown') {
+          return productName;
+        }
+      }
+      
+      // Try board name
+      if (fs.existsSync('/sys/class/dmi/id/board_name')) {
+        const boardName = fs.readFileSync('/sys/class/dmi/id/board_name', 'utf8').trim();
+        if (boardName && boardName !== 'To be filled by O.E.M.' && boardName !== 'Unknown') {
+          return boardName;
+        }
+      }
+      
+      // Final fallback to architecture
       return os.arch().toUpperCase();
     } catch {
       return 'Unknown';

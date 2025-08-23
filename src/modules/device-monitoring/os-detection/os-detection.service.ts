@@ -121,29 +121,59 @@ export class OsDetectionService {
         this.cachedHardwareBrand = 'android';
         return this.cachedHardwareBrand;
       }
+      // Enhanced detection for ARM boards including Radxa
       if (fs.existsSync('/sys/firmware/devicetree/base/model')) {
         try {
-          this.cachedHardwareBrand = execSync(
-            "sudo cat /sys/firmware/devicetree/base/model | awk '{print $1}'",
-            { encoding: 'utf8' },
-          ).trim().toUpperCase();
-          return this.cachedHardwareBrand;
-        } catch (sudoError) {
-          try {
-            this.cachedHardwareBrand = execSync(
-              "cat /sys/firmware/devicetree/base/model | awk '{print $1}'",
-              { encoding: 'utf8' },
-            ).trim().toUpperCase();
+          const modelContent = fs.readFileSync('/sys/firmware/devicetree/base/model', 'utf8').trim().replace(/\0/g, '');
+          
+          // Check for specific board manufacturers
+          if (modelContent.toLowerCase().includes('radxa') || modelContent.toLowerCase().includes('rock')) {
+            this.cachedHardwareBrand = 'Radxa';
             return this.cachedHardwareBrand;
-          } catch (normalError) {
-            this.loggingService.log(
-              `Permission denied accessing devicetree: ${normalError.message}`,
-              'WARN',
-              'os-detection',
-            );
           }
+          
+          if (modelContent.toLowerCase().includes('raspberry')) {
+            this.cachedHardwareBrand = 'Raspberry Pi Foundation';
+            return this.cachedHardwareBrand;
+          }
+          
+          if (modelContent.toLowerCase().includes('orange')) {
+            this.cachedHardwareBrand = 'Orange Pi';
+            return this.cachedHardwareBrand;
+          }
+          
+          // For unknown SoC identifiers, try alternative detection
+          if (modelContent.match(/^[A-Z0-9]+$/)) {
+            const altBrand = this.detectBrandFromSystem();
+            if (altBrand !== 'Unknown') {
+              this.cachedHardwareBrand = altBrand;
+              return this.cachedHardwareBrand;
+            }
+          }
+          
+          // Use first word if it looks like a brand name
+          const firstWord = modelContent.split(/\s+/)[0].trim();
+          if (firstWord.length > 2 && !firstWord.match(/^[A-Z0-9]+$/)) {
+            this.cachedHardwareBrand = firstWord;
+            return this.cachedHardwareBrand;
+          }
+        } catch (error) {
+          this.loggingService.log(
+            `Error reading devicetree model: ${error.message}`,
+            'WARN',
+            'os-detection',
+          );
         }
       }
+      
+      // Try alternative detection methods
+      const altBrand = this.detectBrandFromSystem();
+      if (altBrand !== 'Unknown') {
+        this.cachedHardwareBrand = altBrand;
+        return this.cachedHardwareBrand;
+      }
+      
+      // Final fallback to lsb_release
       this.cachedHardwareBrand = execSync('lsb_release -si', {
         encoding: 'utf8',
       }).trim();
@@ -159,7 +189,55 @@ export class OsDetectionService {
     }
   }
 
-  /** ✅ Detects hardware model (e.g., Pi 5, ARM64) */
+  /** ✅ Alternative brand detection from system files */
+  private detectBrandFromSystem(): string {
+    try {
+      // Try DMI information
+      if (fs.existsSync('/sys/class/dmi/id/board_vendor')) {
+        const vendor = fs.readFileSync('/sys/class/dmi/id/board_vendor', 'utf8').trim();
+        if (vendor && vendor !== 'To be filled by O.E.M.' && vendor !== 'Unknown') {
+          return vendor;
+        }
+      }
+      
+      if (fs.existsSync('/sys/class/dmi/id/sys_vendor')) {
+        const vendor = fs.readFileSync('/sys/class/dmi/id/sys_vendor', 'utf8').trim();
+        if (vendor && vendor !== 'To be filled by O.E.M.' && vendor !== 'Unknown') {
+          return vendor;
+        }
+      }
+      
+      return 'Unknown';
+    } catch {
+      return 'Unknown';
+    }
+  }
+
+  /** ✅ Alternative model detection from system files */
+  private detectModelFromSystem(): string {
+    try {
+      // Try DMI product name
+      if (fs.existsSync('/sys/class/dmi/id/product_name')) {
+        const productName = fs.readFileSync('/sys/class/dmi/id/product_name', 'utf8').trim();
+        if (productName && productName !== 'To be filled by O.E.M.' && productName !== 'Unknown') {
+          return productName;
+        }
+      }
+      
+      // Try board name
+      if (fs.existsSync('/sys/class/dmi/id/board_name')) {
+        const boardName = fs.readFileSync('/sys/class/dmi/id/board_name', 'utf8').trim();
+        if (boardName && boardName !== 'To be filled by O.E.M.' && boardName !== 'Unknown') {
+          return boardName;
+        }
+      }
+      
+      // Final fallback to architecture
+      return os.arch().toUpperCase();
+    } catch {
+      return 'Unknown';
+    }
+  }  /** ✅ Detects hardware model (e.g., Pi 5, ARM64) */
   getHardwareModel(): string {
     if (this.cachedHardwareModel !== null) {
       return this.cachedHardwareModel;
@@ -275,28 +353,79 @@ export class OsDetectionService {
           return this.cachedHardwareModel;
         }
       }
+      // Enhanced ARM board model detection
       if (fs.existsSync('/sys/firmware/devicetree/base/model')) {
         try {
-          this.cachedHardwareModel = execSync(
-            "sudo cat /sys/firmware/devicetree/base/model | awk '{print $2, $3}'",
-            { encoding: 'utf8' },
-          ).trim().toUpperCase();
-          return this.cachedHardwareModel;
-        } catch (sudoError) {
-          try {
-            this.cachedHardwareModel = execSync(
-              "cat /sys/firmware/devicetree/base/model | awk '{print $2, $3}'",
-              { encoding: 'utf8' },
-            ).trim().toUpperCase();
+          const modelContent = fs.readFileSync('/sys/firmware/devicetree/base/model', 'utf8').trim().replace(/\0/g, '');
+          
+          // For Radxa devices, try to extract the specific model
+          if (modelContent.toLowerCase().includes('radxa') || modelContent.toLowerCase().includes('rock')) {
+            // Try to get more specific model information from compatible string
+            if (fs.existsSync('/sys/firmware/devicetree/base/compatible')) {
+              const compatible = fs.readFileSync('/sys/firmware/devicetree/base/compatible', 'utf8').trim().replace(/\0/g, '');
+              const compatibleParts = compatible.split(',');
+              
+              // Look for Radxa-specific identifiers
+              for (const part of compatibleParts) {
+                if (part.includes('radxa') || part.includes('rock')) {
+                  // Extract model from compatible string (e.g., "radxa,rock-5a" -> "Rock 5A")
+                  const modelMatch = part.match(/radxa,(.+)|rock.?(.+)/i);
+                  if (modelMatch) {
+                    const model = (modelMatch[1] || modelMatch[2])
+                      .replace(/-/g, ' ')
+                      .replace(/\b\w/g, l => l.toUpperCase());
+                    this.cachedHardwareModel = model;
+                    return this.cachedHardwareModel;
+                  }
+                }
+              }
+            }
+            
+            // Try to detect specific Radxa model from SoC identifier
+            if (modelContent.includes('SUN55IW3')) {
+              this.cachedHardwareModel = 'Cubie A5E';
+              return this.cachedHardwareModel;
+            }
+            
+            // Fallback to parsing the model string directly
+            if (modelContent.toLowerCase().includes('radxa')) {
+              this.cachedHardwareModel = modelContent;
+              return this.cachedHardwareModel;
+            }
+            
+            // If we detect it's a Radxa but can't get specific model
+            this.cachedHardwareModel = 'Unknown Radxa Model';
             return this.cachedHardwareModel;
-          } catch (normalError) {
-            this.loggingService.log(
-              `Permission denied accessing devicetree for model: ${normalError.message}`,
-              'WARN',
-              'os-detection',
-            );
           }
+          
+          // For other devices, clean up the model content
+          if (modelContent && !modelContent.match(/^[A-Z0-9]+$/)) {
+            this.cachedHardwareModel = modelContent;
+            return this.cachedHardwareModel;
+          }
+          
+          // If model content looks like SoC identifier, try alternative detection
+          if (modelContent.match(/^[A-Z0-9]+$/)) {
+            const altModel = this.detectModelFromSystem();
+            if (altModel !== 'Unknown') {
+              this.cachedHardwareModel = altModel;
+              return this.cachedHardwareModel;
+            }
+          }
+        } catch (error) {
+          this.loggingService.log(
+            `Error reading devicetree for model: ${error.message}`,
+            'WARN',
+            'os-detection',
+          );
         }
+      }
+      
+      // Try alternative detection methods
+      const altModel = this.detectModelFromSystem();
+      if (altModel !== 'Unknown') {
+        this.cachedHardwareModel = altModel;
+        return this.cachedHardwareModel;
       }
       this.cachedHardwareModel = os.arch().toUpperCase();
       return this.cachedHardwareModel;
