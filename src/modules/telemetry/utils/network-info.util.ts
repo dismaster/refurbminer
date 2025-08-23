@@ -910,6 +910,16 @@ export class NetworkInfoUtil {
 
       // Get interface details with MAC addresses
       const interfaceDetails = this.getInterfaceDetails('termux');
+      
+      // If we have primary IP and primary interface from ip route get, assign the IP to the correct interface
+      if (primaryIp !== 'Unknown' && interfaces.length > 0) {
+        const primaryInterfaceName = interfaces[0]; // First interface is the primary one from ip route get
+        const primaryInterfaceDetail = interfaceDetails.find(detail => detail.name === primaryInterfaceName);
+        if (primaryInterfaceDetail) {
+          primaryInterfaceDetail.ipAddress = primaryIp;
+        }
+      }
+      
       const filteredInterfaceDetails = this.filterRelevantInterfaces(interfaceDetails);
 
       // Get external IP
