@@ -153,18 +153,20 @@ export class NetworkInfoUtil {
 
     // Add MAC address information
     const interfaceDetails = this.getInterfaceDetails(systemType);
-    baseInfo.interfaceDetails = interfaceDetails;
+    baseInfo.interfaceDetails = this.filterRelevantInterfaces(interfaceDetails);
 
-    // Set primary MAC address (from primary interface)
-    const primaryInterface =
-      baseInfo.interfaces[0] !== 'Unknown' ? baseInfo.interfaces[0] : null;
-    if (primaryInterface && interfaceDetails.length > 0) {
-      const primaryDetail = interfaceDetails.find(
-        (detail) => detail.name === primaryInterface,
-      );
-      baseInfo.macAddress = primaryDetail?.macAddress || 'Unknown';
-    } else {
-      baseInfo.macAddress = 'Unknown';
+    // Set primary MAC address (from primary interface) - only if not already set by system-specific function
+    if (!baseInfo.macAddress || baseInfo.macAddress === 'Unknown') {
+      const primaryInterface =
+        baseInfo.interfaces[0] !== 'Unknown' ? baseInfo.interfaces[0] : null;
+      if (primaryInterface && interfaceDetails.length > 0) {
+        const primaryDetail = interfaceDetails.find(
+          (detail) => detail.name === primaryInterface,
+        );
+        baseInfo.macAddress = primaryDetail?.macAddress || 'Unknown';
+      } else {
+        baseInfo.macAddress = 'Unknown';
+      }
     }
 
     // Add traffic metrics for the primary interface
@@ -181,6 +183,45 @@ export class NetworkInfoUtil {
     }
     
     return baseInfo;
+  }
+
+  /** ✅ Filter out irrelevant network interfaces to reduce payload size */
+  private static filterRelevantInterfaces(interfaceDetails: InterfaceDetail[]): InterfaceDetail[] {
+    return interfaceDetails.filter((detail) => {
+      // Include ethernet interfaces
+      if (detail.type === 'ethernet') return true;
+      
+      // Include wifi interfaces
+      if (detail.type === 'wifi') return true;
+      
+      // Include interfaces that are currently up (even if type is unknown)
+      if (detail.state === 'up') return true;
+      
+      // Include interfaces with valid MAC addresses that might be relevant
+      if (detail.macAddress !== 'Unknown' && detail.macAddress !== '00:00:00:00:00:00') {
+        // But exclude clearly irrelevant interface names
+        const irrelevantPatterns = [
+          /^rmnet\d+$/,        // Mobile network interfaces
+          /^umts_dm\d+$/,      // UMTS data modem interfaces
+          /^ip_vti\d+/,        // VTI tunnel interfaces
+          /^ip6_vti\d+/,       // IPv6 VTI tunnel interfaces
+          /^sit\d+/,           // IPv6-in-IPv4 tunnel interfaces
+          /^ip6tnl\d+/,        // IPv6 tunnel interfaces
+          /^tun\d+$/,          // Generic tunnel interfaces
+          /^tap\d+$/,          // TAP interfaces
+        ];
+        
+        // Exclude if name matches any irrelevant pattern
+        if (irrelevantPatterns.some(pattern => pattern.test(detail.name))) {
+          return false;
+        }
+        
+        return true;
+      }
+      
+      // Exclude everything else (down interfaces with no MAC, tunnels, etc.)
+      return false;
+    });
   }
 
   /** ✅ Get detailed interface information including MAC addresses */
@@ -292,12 +333,15 @@ export class NetworkInfoUtil {
     try {
       // Primary method: Use 'ip link show' for better MAC address detection
       try {
+        console.debug('🔍 Termux: Trying ip link show for MAC addresses...');
         const ipLinkOutput = execSync('ip link show', {
           encoding: 'utf8',
           timeout: 3000,
           stdio: ['pipe', 'pipe', 'ignore'], // Suppress stderr
         });
 
+        console.debug('📋 Termux: ip link show output length:', ipLinkOutput.length);
+        
         // Parse ip link show output
         const lines = ipLinkOutput.split('\n');
         let currentInterface: InterfaceDetail | null = null;
@@ -328,12 +372,14 @@ export class NetworkInfoUtil {
               state: flags.includes('UP') ? 'up' : 'down',
               type: this.determineInterfaceType(interfaceName),
             };
+            console.debug('🔍 Termux: Found interface:', interfaceName, 'state:', currentInterface.state);
           }
           
           // Look for MAC address line (e.g., "link/ether 70:19:88:87:ff:d5 brd ff:ff:ff:ff:ff:ff")
           const macMatch = trimmed.match(/link\/ether\s+([a-fA-F0-9:]{17})/);
           if (macMatch && currentInterface) {
             currentInterface.macAddress = macMatch[1].toUpperCase();
+            console.debug('✅ Termux: Found MAC for', currentInterface.name, ':', currentInterface.macAddress);
           }
         }
 
@@ -700,18 +746,25 @@ export class NetworkInfoUtil {
 
       // Primary method: Get gateway from routing table using multiple ip route methods
       try {
+        console.debug('🔍 Termux: Trying gateway detection...');
         // Method 1: Try 'ip route get' to a reliable external IP (most accurate)
         try {
+          console.debug('🎯 Termux: Trying ip route get 8.8.8.8...');
           const routeGetOutput = execSync('ip route get 8.8.8.8', {
             encoding: 'utf8',
             timeout: 2000,
             stdio: ['pipe', 'pipe', 'ignore'], // Suppress stderr
           });
           
+          console.debug('📋 Termux: ip route get output:', routeGetOutput.trim());
+          
           // Parse output like: "8.8.8.8 via 10.0.10.1 dev eth0 src 10.0.10.187"
           const getViaMatch = routeGetOutput.match(/via\s+([0-9.]+)/);
           if (getViaMatch) {
             gateway = getViaMatch[1];
+            console.debug('✅ Termux: Found gateway via ip route get:', gateway);
+          } else {
+            console.debug('❌ Termux: No via match found in ip route get output');
           }
         } catch (routeGetError) {
           console.debug('ip route get failed, trying ip route show:', routeGetError);
@@ -811,16 +864,21 @@ export class NetworkInfoUtil {
 
       // Get interface details with MAC addresses
       const interfaceDetails = this.getInterfaceDetails('termux');
+      const filteredInterfaceDetails = this.filterRelevantInterfaces(interfaceDetails);
+      console.debug('🔍 Termux: Interface details count:', interfaceDetails.length, '→ filtered:', filteredInterfaceDetails.length);
+      console.debug('🔍 Termux: Interfaces array:', interfaces);
 
       // Get external IP
       externalIp = this.getCachedExternalIp() || 'Unknown';
+
+      console.debug('🔍 Termux: Final values - Gateway:', gateway, 'Primary IP:', primaryIp);
 
       return {
         primaryIp,
         macAddress: this.getPrimaryMacAddress(interfaceDetails),
         gateway,
         interfaces,
-        interfaceDetails: interfaceDetails.slice(0, this.MAX_INTERFACES),
+        interfaceDetails: filteredInterfaceDetails,
         dns: this.getDnsServers(),
         externalIp,
         timestamp: Date.now(),
