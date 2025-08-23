@@ -9,6 +9,10 @@ export interface NetworkInfo {
   externalIp: string;
   gateway: string;
   interfaces: string[];
+  macAddress?: string; // Primary interface MAC address
+  interfaceDetails?: InterfaceDetail[]; // Detailed info per interface
+  dns?: string[]; // DNS servers
+  timestamp?: number; // When this info was collected
   ping?: {
     refurbminer: number;
   };
@@ -19,6 +23,15 @@ export interface NetworkInfo {
     txSpeed: number;
     timestamp: number;
   };
+}
+
+// Interface details with MAC addresses
+export interface InterfaceDetail {
+  name: string;
+  macAddress: string;
+  ipAddress?: string;
+  state: 'up' | 'down' | 'unknown';
+  type: 'ethernet' | 'wifi' | 'loopback' | 'unknown';
 }
 
 // Export other interfaces that might be needed
@@ -99,11 +112,14 @@ export class NetworkInfoUtil {
   private static readonly TRAFFIC_CACHE_TTL = 30000; // 30 seconds
   
   // Keep track of previous traffic data for speed calculations (per interface)
-  private static interfaceDataMap = new Map<string, { 
-    rxBytes: number, 
-    txBytes: number, 
-    timestamp: number 
-  }>();
+  private static interfaceDataMap = new Map<
+    string,
+    {
+      rxBytes: number;
+      txBytes: number;
+      timestamp: number;
+    }
+  >();
     // Cache for external IP to reduce API calls
   private static externalIpCache: ExternalIpCache | null = null;
   private static readonly EXTERNAL_IP_CACHE_TTL = 300000; // 5 minutes  // Maximum number of interfaces to track
@@ -134,9 +150,24 @@ export class NetworkInfoUtil {
     baseInfo.ping = {
       refurbminer: this.getPingLatency('refurbminer.de')
     };
-    
+
+    // Add MAC address information
+    const interfaceDetails = this.getInterfaceDetails(systemType);
+    baseInfo.interfaceDetails = interfaceDetails;
+
+    // Set primary MAC address (from primary interface)
+    const primaryInterface =
+      baseInfo.interfaces[0] !== 'Unknown' ? baseInfo.interfaces[0] : null;
+    if (primaryInterface && interfaceDetails.length > 0) {
+      const primaryDetail = interfaceDetails.find(
+        (detail) => detail.name === primaryInterface,
+      );
+      baseInfo.macAddress = primaryDetail?.macAddress || 'Unknown';
+    } else {
+      baseInfo.macAddress = 'Unknown';
+    }
+
     // Add traffic metrics for the primary interface
-    const primaryInterface = baseInfo.interfaces[0] !== 'Unknown' ? baseInfo.interfaces[0] : null;
     if (primaryInterface) {
       baseInfo.traffic = this.getNetworkTraffic(primaryInterface);
     } else {
@@ -145,40 +176,328 @@ export class NetworkInfoUtil {
         txBytes: 0,
         rxSpeed: 0,
         txSpeed: 0,
-        timestamp: Date.now()
+        timestamp: Date.now(),
       };
     }
     
     return baseInfo;
   }
 
+  /** ✅ Get detailed interface information including MAC addresses */
+  private static getInterfaceDetails(systemType: string): InterfaceDetail[] {
+    switch (systemType) {
+      case 'termux':
+        return this.getTermuxInterfaceDetails();
+      case 'raspberry-pi':
+      case 'linux':
+        return this.getLinuxInterfaceDetails();
+      default:
+        return this.getDefaultInterfaceDetails();
+    }
+  }
+
+  /** ✅ Get Linux interface details with MAC addresses */
+  private static getLinuxInterfaceDetails(): InterfaceDetail[] {
+    const details: InterfaceDetail[] = [];
+
+    try {
+      // Get all network interfaces
+      const interfaces = execSync('ls /sys/class/net', {
+        encoding: 'utf8',
+        timeout: 2000,
+      })
+        .trim()
+        .split('\n');
+
+      for (const interfaceName of interfaces.slice(0, this.MAX_INTERFACES)) {
+        try {
+          const detail: InterfaceDetail = {
+            name: interfaceName,
+            macAddress: 'Unknown',
+            state: 'unknown',
+            type: 'unknown',
+          };
+
+          // Get MAC address
+          try {
+            const macAddress = execSync(
+              `cat /sys/class/net/${interfaceName}/address`,
+              {
+                encoding: 'utf8',
+                timeout: 1000,
+              },
+            ).trim();
+            if (macAddress && macAddress !== '00:00:00:00:00:00') {
+              detail.macAddress = macAddress.toUpperCase();
+            }
+          } catch {
+            // MAC address not available for this interface
+          }
+
+          // Get IP address using ip command
+          try {
+            const ipOutput = execSync(`ip -4 addr show ${interfaceName}`, {
+              encoding: 'utf8',
+              timeout: 1000,
+            });
+            const ipMatch = ipOutput.match(/inet\s+([0-9.]+)/);
+            if (ipMatch && ipMatch[1]) {
+              detail.ipAddress = ipMatch[1];
+            }
+          } catch {
+            // IP address not available
+          }
+
+          // Get interface state
+          try {
+            const operstate = execSync(
+              `cat /sys/class/net/${interfaceName}/operstate`,
+              {
+                encoding: 'utf8',
+                timeout: 1000,
+              },
+            )
+              .trim()
+              .toLowerCase();
+            detail.state =
+              operstate === 'up'
+                ? 'up'
+                : operstate === 'down'
+                  ? 'down'
+                  : 'unknown';
+          } catch {
+            detail.state = 'unknown';
+          }
+
+          // Determine interface type
+          detail.type = this.determineInterfaceType(interfaceName);
+
+          details.push(detail);
+        } catch (error) {
+          // Skip interfaces that can't be read
+          console.debug(`Failed to read interface ${interfaceName}:`, error);
+        }
+      }
+    } catch (error) {
+      console.debug('Failed to get Linux interface details:', error);
+    }
+
+    return details;
+  }
+
+  /** ✅ Get Termux interface details with MAC addresses */
+  private static getTermuxInterfaceDetails(): InterfaceDetail[] {
+    const details: InterfaceDetail[] = [];
+
+    try {
+      // Try ifconfig first
+      try {
+        const ifconfigOutput = execSync('ifconfig 2>/dev/null', {
+          encoding: 'utf8',
+          timeout: 3000,
+        });
+        const sections = ifconfigOutput.split(/\n\n+/);
+
+        for (const section of sections) {
+          if (section.includes('lo:') || section.includes('lo ')) continue; // Skip loopback
+
+          const detail: InterfaceDetail = {
+            name: 'Unknown',
+            macAddress: 'Unknown',
+            state: 'unknown',
+            type: 'unknown',
+          };
+
+          // Extract interface name
+          const interfaceMatch = section.match(/^([a-zA-Z0-9]+)[\s:]/);
+          if (interfaceMatch) {
+            detail.name = interfaceMatch[1];
+          }
+
+          // Extract MAC address (HWaddr or ether)
+          const macMatch = section.match(
+            /(?:HWaddr|ether)\s+([a-fA-F0-9:]{17})/,
+          );
+          if (macMatch) {
+            detail.macAddress = macMatch[1].toUpperCase();
+          }
+
+          // Extract IP address
+          const ipMatch = section.match(/inet\s+(?:addr:)?([0-9.]+)/);
+          if (ipMatch) {
+            detail.ipAddress = ipMatch[1];
+          }
+
+          // Check if interface is up
+          if (section.includes('UP') || section.includes('RUNNING')) {
+            detail.state = 'up';
+          } else if (section.includes('DOWN')) {
+            detail.state = 'down';
+          }
+
+          // Determine interface type
+          if (detail.name !== 'Unknown') {
+            detail.type = this.determineInterfaceType(detail.name);
+          }
+
+          if (detail.name !== 'Unknown') {
+            details.push(detail);
+          }
+        }
+      } catch (ifconfigError) {
+        console.debug('ifconfig failed in Termux:', ifconfigError);
+      }
+
+      // If we have WiFi info, try to get additional details via Termux API
+      if (details.some((d) => d.type === 'wifi')) {
+        try {
+          const wifiInfo = JSON.parse(
+            execSync('termux-wifi-connectioninfo', {
+              encoding: 'utf8',
+              timeout: 3000,
+            }),
+          ) as { bssid?: string };
+
+          if (wifiInfo?.bssid) {
+            // Find wifi interface and update MAC if needed
+            const wifiInterface = details.find((d) => d.type === 'wifi');
+            if (wifiInterface && wifiInterface.macAddress === 'Unknown') {
+              // Note: BSSID is the router's MAC, not the device's MAC
+              // But we can use it as additional info
+              wifiInterface.macAddress = wifiInfo.bssid.toUpperCase();
+            }
+          }
+        } catch (apiError) {
+          console.debug('Termux WiFi API not available:', apiError);
+        }
+      }
+    } catch (error) {
+      console.debug('Failed to get Termux interface details:', error);
+    }
+
+    return details;
+  }
+
+  /** ✅ Get default interface details (fallback) */
+  private static getDefaultInterfaceDetails(): InterfaceDetail[] {
+    return [
+      {
+        name: 'Unknown',
+        macAddress: 'Unknown',
+        state: 'unknown',
+        type: 'unknown',
+      },
+    ];
+  }
+
+  /** ✅ Get primary MAC address from interface details */
+  private static getPrimaryMacAddress(
+    interfaceDetails: InterfaceDetail[],
+  ): string {
+    // Find first non-loopback interface with a valid MAC
+    const validInterface = interfaceDetails.find(
+      (detail) =>
+        detail.type !== 'loopback' &&
+        detail.macAddress !== 'Unknown' &&
+        detail.macAddress !== '00:00:00:00:00:00',
+    );
+
+    return validInterface?.macAddress || 'Unknown';
+  }
+
+  /** ✅ Get DNS servers */
+  private static getDnsServers(): string[] {
+    try {
+      const dnsOutput = execSync('cat /etc/resolv.conf', {
+        encoding: 'utf8',
+        timeout: 2000,
+      });
+
+      const dnsServers: string[] = [];
+      const lines = dnsOutput.split('\n');
+
+      for (const line of lines) {
+        if (line.startsWith('nameserver ')) {
+          const server = line.split(' ')[1];
+          if (server && !server.startsWith('127.')) {
+            dnsServers.push(server);
+          }
+        }
+      }
+
+      return dnsServers.length > 0 ? dnsServers : ['Unknown'];
+    } catch {
+      return ['Unknown'];
+    }
+  }
+
+  /** ✅ Determine interface type based on name */
+  private static determineInterfaceType(
+    interfaceName: string,
+  ): 'ethernet' | 'wifi' | 'loopback' | 'unknown' {
+    const name = interfaceName.toLowerCase();
+
+    if (name.includes('lo') || name === 'loopback') {
+      return 'loopback';
+    } else if (
+      name.includes('wlan') ||
+      name.includes('wifi') ||
+      name.includes('wlp')
+    ) {
+      return 'wifi';
+    } else if (
+      name.includes('eth') ||
+      name.includes('enp') ||
+      name.includes('eno') ||
+      name.includes('ens')
+    ) {
+      return 'ethernet';
+    } else {
+      return 'unknown';
+    }
+  }
+
   /** ✅ Get network info on Linux / Raspberry Pi */
-  private static getLinuxNetworkInfo() {
+  private static getLinuxNetworkInfo(): NetworkInfo {
     try {
       // Get all IPv4 addresses excluding loopback
       const ipOutput = execSync(
-        "ip -4 addr show | grep inet | grep -v '127.0.0.1' | awk '{print $2}'", 
-        { encoding: 'utf8', timeout: NETWORK_CONSTANTS.HTTP_TIMEOUT }
-      ).split('\n').filter(Boolean);
+        "ip -4 addr show | grep inet | grep -v '127.0.0.1' | awk '{print $2}'",
+        { encoding: 'utf8', timeout: NETWORK_CONSTANTS.HTTP_TIMEOUT },
+      )
+        .split('\n')
+        .filter(Boolean);
 
-      const gateway = execSync(
-        "ip route | awk '/default/ {print $3}'", 
-        { encoding: 'utf8', timeout: 2000 }
-      ).trim();
+      const gateway = execSync("ip route | awk '/default/ {print $3}'", {
+        encoding: 'utf8',
+        timeout: 2000,
+      }).trim();
 
-      const interfaces = execSync(
-        "ls /sys/class/net", 
-        { encoding: 'utf8', timeout: 2000 }
-      ).trim().split('\n');
+      const interfaces = execSync('ls /sys/class/net', {
+        encoding: 'utf8',
+        timeout: 2000,
+      })
+        .trim()
+        .split('\n');
 
       // Get external IP (cached or fresh)
       const externalIp = this.getCachedExternalIp();
 
+      // Get interface details with MAC addresses
+      const interfaceDetails = this.getInterfaceDetails('linux');
+
       return {
         primaryIp: ipOutput.length > 0 ? ipOutput[0].split('/')[0] : 'Unknown',
-        externalIp: externalIp || 'Unknown',
+        macAddress: this.getPrimaryMacAddress(interfaceDetails),
         gateway: gateway || 'Unknown',
-        interfaces: interfaces.length > 0 ? interfaces.slice(0, this.MAX_INTERFACES) : ['Unknown']
+        interfaces:
+          interfaces.length > 0
+            ? interfaces.slice(0, this.MAX_INTERFACES)
+            : ['Unknown'],
+        interfaceDetails: interfaceDetails.slice(0, this.MAX_INTERFACES),
+        dns: this.getDnsServers(),
+        externalIp: externalIp || 'Unknown',
+        timestamp: Date.now(),
       };
     } catch {
       return this.getDefaultNetworkInfo();
@@ -186,28 +505,31 @@ export class NetworkInfoUtil {
   }
 
   /** ✅ Get network info on Termux (Android) */
-  private static getTermuxNetworkInfo() {
+  private static getTermuxNetworkInfo(): NetworkInfo {
     try {
       let primaryIp = 'Unknown';
       let gateway = 'Unknown';
       let externalIp = 'Unknown';
-      let interfaces: string[] = [];
+      const interfaces: string[] = [];
 
       // Try to get interface and IP from ifconfig with suppressed stderr
       try {
-        const ifconfigOutput = execSync('ifconfig 2>/dev/null', { encoding: 'utf8', timeout: 3000 });
+        const ifconfigOutput = execSync('ifconfig 2>/dev/null', {
+          encoding: 'utf8',
+          timeout: 3000,
+        });
         const sections = ifconfigOutput.split(/\n\n+/);
-        
+
         for (const section of sections) {
           if (section.includes('lo:')) continue; // Skip loopback
 
           // Extract interface name
           const interfaceMatch = section.match(/^([a-zA-Z0-9]+):/);
           const ifaceName = interfaceMatch ? interfaceMatch[1] : null;
-          
+
           if (ifaceName) {
             interfaces.push(ifaceName);
-            
+
             // Extract IP address
             const ipMatch = section.match(/inet\s+(\d+\.\d+\.\d+\.\d+)/);
             if (ipMatch && ipMatch[1] && primaryIp === 'Unknown') {
@@ -216,64 +538,74 @@ export class NetworkInfoUtil {
           }
         }
       } catch (ifconfigError) {
-        console.debug('ifconfig failed:', ifconfigError.message);
+        console.debug(
+          'ifconfig failed:',
+          (ifconfigError as Error)?.message || 'Unknown error',
+        );
       }
 
       // If ifconfig didn't give us an IP, try termux-wifi-connectioninfo
       if (primaryIp === 'Unknown') {
         try {
           const wifiInfo = JSON.parse(
-            execSync('termux-wifi-connectioninfo', { encoding: 'utf8', timeout: 3000 })
-          );
-          
-          if (wifiInfo && wifiInfo.ip) {
+            execSync('termux-wifi-connectioninfo', {
+              encoding: 'utf8',
+              timeout: 3000,
+            }),
+          ) as { ip?: string; gateway?: string };
+
+          if (wifiInfo?.ip) {
             primaryIp = wifiInfo.ip;
             gateway = wifiInfo.gateway || 'Unknown';
             if (!interfaces.includes('wlan0')) interfaces.push('wlan0');
           }
         } catch (wifiError) {
-          console.debug('Termux API not available:', wifiError.message);
+          console.debug(
+            'Termux API not available:',
+            (wifiError as Error)?.message || 'Unknown error',
+          );
         }
       }
 
-      // Try to get gateway using traceroute
-      if (gateway === 'Unknown') {
-        gateway = this.getGatewayFromTraceroute();
-      }
+      // Get interface details with MAC addresses
+      const interfaceDetails = this.getInterfaceDetails('termux');
 
-      // Get external IP (cached or fresh)
-      externalIp = this.getCachedExternalIp();
-
-      // If we still don't have interfaces, add a default
-      if (interfaces.length === 0) {
-        interfaces.push('Unknown');
-      }
-
-      // Limit number of interfaces to prevent memory growth
-      if (interfaces.length > this.MAX_INTERFACES) {
-        interfaces = interfaces.slice(0, this.MAX_INTERFACES);
-      }
+      // Get external IP
+      externalIp = this.getCachedExternalIp() || 'Unknown';
 
       return {
         primaryIp,
-        externalIp: externalIp || 'Unknown',
-        gateway: gateway || 'Unknown',
-        interfaces
+        macAddress: this.getPrimaryMacAddress(interfaceDetails),
+        gateway,
+        interfaces,
+        interfaceDetails: interfaceDetails.slice(0, this.MAX_INTERFACES),
+        dns: this.getDnsServers(),
+        externalIp,
+        timestamp: Date.now(),
       };
-
-    } catch (error) {
-      console.error('Failed to get Termux network info:', error.message);
+    } catch {
       return this.getDefaultNetworkInfo();
     }
   }
 
   /** ✅ Default fallback network info */
-  private static getDefaultNetworkInfo() {
+  private static getDefaultNetworkInfo(): NetworkInfo {
     return {
       primaryIp: 'Unknown',
-      externalIp: 'Unknown',
+      macAddress: 'Unknown',
       gateway: 'Unknown',
-      interfaces: ['Unknown']
+      interfaces: ['Unknown'],
+      interfaceDetails: [
+        {
+          name: 'Unknown',
+          macAddress: 'Unknown',
+          state: 'unknown',
+          type: 'unknown',
+        },
+      ],
+      dns: ['Unknown'],
+      externalIp: 'Unknown',
+      timestamp: Date.now(),
     };
   }
 

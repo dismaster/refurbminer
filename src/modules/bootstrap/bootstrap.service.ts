@@ -207,6 +207,11 @@ export class BootstrapService implements OnModuleInit {
             envContent += '\n##### API settings\n';
           }
         }
+
+        // Ensure proper newline before adding variable if file doesn't end with newline
+        if (envContent.length > 0 && !envContent.endsWith('\n')) {
+          envContent += '\n';
+        }
         
         envContent += `${key}=${defaultValue}\n`;
         needsUpdate = true;
