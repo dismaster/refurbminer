@@ -36,7 +36,11 @@ function runBuild(environment) {
     switch (environment) {
       case 'termux':
         console.log('📱 Building for Termux environment...');
-        execSync('npm run build:termux', { stdio: 'inherit' });
+        // Use webpack for Termux since TypeScript compilation hangs
+        console.log('🔧 Using Webpack build for Termux due to tsc compatibility issues...');
+        execSync('npm run prebuild:shell', { stdio: 'inherit' });
+        execSync('npm run build:webpack', { stdio: 'inherit' });
+        execSync('npm run postbuild', { stdio: 'inherit' });
         break;
         
       case 'android':
