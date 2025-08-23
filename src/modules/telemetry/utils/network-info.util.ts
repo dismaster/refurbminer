@@ -408,6 +408,111 @@ export class NetworkInfoUtil {
   /** ✅ Get DNS servers */
   private static getDnsServers(): string[] {
     try {
+      // Detect system type for appropriate DNS method
+      let systemType = 'linux'; // default
+      try {
+        // Check if we're in Termux
+        execSync('command -v termux-info', { stdio: 'ignore', timeout: 1000 });
+        systemType = 'termux';
+      } catch {
+        // Not Termux, assume Linux
+      }
+      
+      if (systemType === 'termux') {
+        return this.getTermuxDnsServers();
+      } else {
+        return this.getLinuxDnsServers();
+      }
+    } catch {
+      return ['Unknown'];
+    }
+  }
+
+  /** ✅ Get DNS servers on Termux */
+  private static getTermuxDnsServers(): string[] {
+    const dnsServers: string[] = [];
+
+    try {
+      // Method 1: Try getprop for Android DNS settings
+      try {
+        const dns1 = execSync('getprop net.dns1', {
+          encoding: 'utf8',
+          timeout: 2000,
+        }).trim();
+        const dns2 = execSync('getprop net.dns2', {
+          encoding: 'utf8',
+          timeout: 2000,
+        }).trim();
+
+        if (dns1 && dns1 !== '' && !dns1.startsWith('127.')) {
+          dnsServers.push(dns1);
+        }
+        if (dns2 && dns2 !== '' && !dns2.startsWith('127.')) {
+          dnsServers.push(dns2);
+        }
+      } catch {
+        // getprop might not be available
+      }
+
+      // Method 2: Try to read from /system/etc/resolv.conf (Android)
+      if (dnsServers.length === 0) {
+        try {
+          const resolveOutput = execSync('cat /system/etc/resolv.conf', {
+            encoding: 'utf8',
+            timeout: 2000,
+          });
+          
+          const lines = resolveOutput.split('\n');
+          for (const line of lines) {
+            if (line.startsWith('nameserver ')) {
+              const server = line.split(' ')[1];
+              if (server && !server.startsWith('127.')) {
+                dnsServers.push(server);
+              }
+            }
+          }
+        } catch {
+          // /system/etc/resolv.conf might not exist
+        }
+      }
+
+      // Method 3: Try nslookup to detect working DNS
+      if (dnsServers.length === 0) {
+        try {
+          // Common public DNS servers to test
+          const testDns = ['8.8.8.8', '1.1.1.1', '9.9.9.9'];
+          for (const dns of testDns) {
+            try {
+              execSync(`nslookup google.com ${dns}`, {
+                encoding: 'utf8',
+                timeout: 3000,
+              });
+              dnsServers.push(dns);
+              break; // Use first working DNS
+            } catch {
+              // This DNS doesn't work, try next
+            }
+          }
+        } catch {
+          // nslookup not available
+        }
+      }
+
+      // Fallback: Common public DNS
+      if (dnsServers.length === 0) {
+        dnsServers.push('8.8.8.8', '1.1.1.1');
+      }
+
+    } catch (error) {
+      console.debug('Failed to get Termux DNS servers:', error);
+    }
+
+    return dnsServers.length > 0 ? dnsServers : ['Unknown'];
+  }
+
+  /** ✅ Get DNS servers on Linux */
+  private static getLinuxDnsServers(): string[] {
+    try {
       const dnsOutput = execSync('cat /etc/resolv.conf', {
         encoding: 'utf8',
         timeout: 2000,
