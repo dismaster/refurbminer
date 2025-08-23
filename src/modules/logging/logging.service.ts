@@ -1,4 +1,4 @@
-import { Injectable, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, Inject, forwardRef, Optional } from '@nestjs/common';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as dotenv from 'dotenv';
@@ -60,13 +60,15 @@ export class LoggingService {
   private readonly IMMEDIATE_SEND_LEVELS: LogLevel[] = ['ERROR', 'WARN'];
 
   // API service for sending logs (will be injected)
-  private apiService: ApiCommunicationService;
-  private configService: ConfigService;
+  private apiService: ApiCommunicationService | null = null;
+  private configService: ConfigService | null = null;
 
   constructor(
+    @Optional()
     @Inject(forwardRef(() => ApiCommunicationService))
-    apiService: ApiCommunicationService,
-    configService: ConfigService,
+    apiService: ApiCommunicationService | null,
+    @Optional()
+    configService: ConfigService | null,
   ) {
     this.apiService = apiService;
     this.configService = configService;
@@ -300,7 +302,11 @@ export class LoggingService {
    */
   private async flushBackendLogs(): Promise<void> {
     if (this.pendingLogs.length === 0) return;
-    if (!this.apiService || !this.configService) return;
+    if (!this.apiService || !this.configService) {
+      // Services not available yet, skip backend logging
+      this.pendingLogs = []; // Clear pending logs to prevent memory leak
+      return;
+    }
 
     const logsToSend = [...this.pendingLogs];
     this.pendingLogs = [];
