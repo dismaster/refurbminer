@@ -156,9 +156,9 @@ export class NetworkInfoUtil {
     baseInfo.interfaceDetails = this.filterRelevantInterfaces(interfaceDetails);
 
     // Set primary MAC address (from primary interface) - only if not already set by system-specific function
+    const primaryInterface =
+      baseInfo.interfaces[0] !== 'Unknown' ? baseInfo.interfaces[0] : null;
     if (!baseInfo.macAddress || baseInfo.macAddress === 'Unknown') {
-      const primaryInterface =
-        baseInfo.interfaces[0] !== 'Unknown' ? baseInfo.interfaces[0] : null;
       if (primaryInterface && interfaceDetails.length > 0) {
         const primaryDetail = interfaceDetails.find(
           (detail) => detail.name === primaryInterface,
