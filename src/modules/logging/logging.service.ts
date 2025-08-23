@@ -265,11 +265,27 @@ export class LoggingService {
 
   /**
    * Check if log level should be sent to backend
+   * Supports both hierarchical (e.g., "WARN") and explicit list (e.g., "ERROR,SUCCESS,INFO")
    */
   private shouldSendToBackend(level: string): boolean {
+    // Check if backendLogLevel contains comma (explicit list mode)
+    if (this.backendLogLevel.includes(',')) {
+      const allowedLevels = this.backendLogLevel
+        .split(',')
+        .map(l => l.trim().toUpperCase())
+        .filter(l => l.length > 0);
+      return allowedLevels.includes(level.toUpperCase());
+    }
+    
+    // Traditional hierarchical mode
     const backendLevels = ['ERROR', 'WARN', 'INFO', 'DEBUG', 'SUCCESS'];
-    const backendLevelIndex = backendLevels.indexOf(this.backendLogLevel);
-    const messageLevelIndex = backendLevels.indexOf(level);
+    const backendLevelIndex = backendLevels.indexOf(this.backendLogLevel.toUpperCase());
+    const messageLevelIndex = backendLevels.indexOf(level.toUpperCase());
+    
+    // If backendLogLevel is not found, default to ERROR only
+    if (backendLevelIndex === -1) {
+      return level.toUpperCase() === 'ERROR';
+    }
     
     return messageLevelIndex <= backendLevelIndex;
   }

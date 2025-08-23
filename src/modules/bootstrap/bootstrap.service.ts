@@ -196,7 +196,10 @@ export class BootstrapService implements OnModuleInit {
             envContent += '# Enable sending logs to backend via /error endpoint\n';
           }
           if (key === 'BACKEND_LOG_LEVEL' && !envContent.includes('# Backend log level')) {
-            envContent += '# Backend log level (ERROR, WARN, INFO, DEBUG, SUCCESS)\n';
+            envContent += '# Backend log level - supports two modes:\n';
+            envContent += '# 1. Hierarchical: WARN (sends ERROR + WARN), INFO (sends ERROR + WARN + INFO), etc.\n';
+            envContent += '# 2. Explicit list: ERROR,SUCCESS (sends only ERROR and SUCCESS messages)\n';
+            envContent += '# Available levels: ERROR, WARN, INFO, DEBUG, SUCCESS\n';
           }
         } else if (key.startsWith('API_') || key === 'RIG_TOKEN') {
           // Add to API section
