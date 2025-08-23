@@ -290,71 +290,148 @@ export class NetworkInfoUtil {
     const details: InterfaceDetail[] = [];
 
     try {
-      // Try ifconfig first
+      // Primary method: Use 'ip link show' for better MAC address detection
       try {
-        const ifconfigOutput = execSync('ifconfig 2>/dev/null', {
+        const ipLinkOutput = execSync('ip link show', {
           encoding: 'utf8',
           timeout: 3000,
+          stdio: ['pipe', 'pipe', 'ignore'], // Suppress stderr
         });
-        const sections = ifconfigOutput.split(/\n\n+/);
 
-        for (const section of sections) {
-          if (section.includes('lo:') || section.includes('lo ')) continue; // Skip loopback
+        // Parse ip link show output
+        const lines = ipLinkOutput.split('\n');
+        let currentInterface: InterfaceDetail | null = null;
 
-          const detail: InterfaceDetail = {
-            name: 'Unknown',
-            macAddress: 'Unknown',
-            state: 'unknown',
-            type: 'unknown',
-          };
-
-          // Extract interface name
-          const interfaceMatch = section.match(/^([a-zA-Z0-9]+)[\s:]/);
+        for (const line of lines) {
+          const trimmed = line.trim();
+          
+          // Look for interface declaration line (e.g., "21: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP>")
+          const interfaceMatch = trimmed.match(/^\d+:\s+([^:]+):\s+<([^>]+)>/);
           if (interfaceMatch) {
-            detail.name = interfaceMatch[1];
-          }
+            // Save previous interface if it exists
+            if (currentInterface && currentInterface.name !== 'lo') {
+              details.push(currentInterface);
+            }
 
-          // Extract MAC address (HWaddr or ether)
-          const macMatch = section.match(
-            /(?:HWaddr|ether)\s+([a-fA-F0-9:]{17})/,
-          );
-          if (macMatch) {
-            detail.macAddress = macMatch[1].toUpperCase();
-          }
+            const interfaceName = interfaceMatch[1].trim();
+            const flags = interfaceMatch[2];
 
-          // Extract IP address
-          const ipMatch = section.match(/inet\s+(?:addr:)?([0-9.]+)/);
-          if (ipMatch) {
-            detail.ipAddress = ipMatch[1];
-          }
+            // Skip loopback interface
+            if (interfaceName === 'lo') {
+              currentInterface = null;
+              continue;
+            }
 
-          // Check if interface is up
-          if (section.includes('UP') || section.includes('RUNNING')) {
-            detail.state = 'up';
-          } else if (section.includes('DOWN')) {
-            detail.state = 'down';
+            currentInterface = {
+              name: interfaceName,
+              macAddress: 'Unknown',
+              state: flags.includes('UP') ? 'up' : 'down',
+              type: this.determineInterfaceType(interfaceName),
+            };
           }
-
-          // Determine interface type
-          if (detail.name !== 'Unknown') {
-            detail.type = this.determineInterfaceType(detail.name);
-          }
-
-          if (detail.name !== 'Unknown') {
-            details.push(detail);
+          
+          // Look for MAC address line (e.g., "link/ether 70:19:88:87:ff:d5 brd ff:ff:ff:ff:ff:ff")
+          const macMatch = trimmed.match(/link\/ether\s+([a-fA-F0-9:]{17})/);
+          if (macMatch && currentInterface) {
+            currentInterface.macAddress = macMatch[1].toUpperCase();
           }
         }
-      } catch (ifconfigError) {
-        console.debug('ifconfig failed in Termux:', ifconfigError);
+
+        // Don't forget the last interface
+        if (currentInterface && currentInterface.name !== 'lo') {
+          details.push(currentInterface);
+        }
+
+        // Now get IP addresses for all detected interfaces using 'ip addr show'
+        if (details.length > 0) {
+          try {
+            const ipAddrOutput = execSync('ip addr show', {
+              encoding: 'utf8',
+              timeout: 3000,
+              stdio: ['pipe', 'pipe', 'ignore'], // Suppress stderr
+            });
+
+            // Parse IP addresses for each interface
+            for (const detail of details) {
+              const interfaceRegex = new RegExp(`^\\d+:\\s+${detail.name}:.*?(?=^\\d+:|$)`, 'ms');
+              const interfaceSection = ipAddrOutput.match(interfaceRegex);
+              
+              if (interfaceSection) {
+                // Look for inet (IPv4) address
+                const ipMatch = interfaceSection[0].match(/inet\s+([0-9.]+)/);
+                if (ipMatch) {
+                  detail.ipAddress = ipMatch[1];
+                }
+              }
+            }
+          } catch (ipAddrError) {
+            console.debug('ip addr show failed, IP addresses not available:', ipAddrError);
+          }
+        }
+      } catch (ipLinkError) {
+        console.debug('ip link show failed in Termux:', ipLinkError);
+        
+        // Fallback: Try ifconfig if ip link fails
+        try {
+          const ifconfigOutput = execSync('ifconfig 2>/dev/null', {
+            encoding: 'utf8',
+            timeout: 3000,
+          });
+          const sections = ifconfigOutput.split(/\n\n+/);
+
+          for (const section of sections) {
+            if (section.includes('lo:') || section.includes('lo ')) continue; // Skip loopback
+
+            const detail: InterfaceDetail = {
+              name: 'Unknown',
+              macAddress: 'Unknown',
+              state: 'unknown',
+              type: 'unknown',
+            };
+
+            // Extract interface name
+            const interfaceMatch = section.match(/^([a-zA-Z0-9]+)[\s:]/);
+            if (interfaceMatch) {
+              detail.name = interfaceMatch[1];
+            }
+
+            // Extract MAC address (HWaddr or ether)
+            const macMatch = section.match(
+              /(?:HWaddr|ether)\s+([a-fA-F0-9:]{17})/,
+            );
+            if (macMatch) {
+              detail.macAddress = macMatch[1].toUpperCase();
+            }
+
+            // Check if interface is up
+            if (section.includes('UP') || section.includes('RUNNING')) {
+              detail.state = 'up';
+            } else if (section.includes('DOWN')) {
+              detail.state = 'down';
+            }
+
+            // Determine interface type
+            if (detail.name !== 'Unknown') {
+              detail.type = this.determineInterfaceType(detail.name);
+            }
+
+            if (detail.name !== 'Unknown') {
+              details.push(detail);
+            }
+          }
+        } catch (ifconfigError) {
+          console.debug('ifconfig fallback also failed in Termux:', ifconfigError);
+        }
       }
 
-      // If we have WiFi info, try to get additional details via Termux API
+      // If we have WiFi info and no proper MAC addresses were found, try Termux WiFi API
       if (details.some((d) => d.type === 'wifi')) {
         try {
           const wifiInfo = JSON.parse(
             execSync('termux-wifi-connectioninfo', {
               encoding: 'utf8',
               timeout: 3000,
+              stdio: ['pipe', 'pipe', 'ignore'], // Suppress stderr
             }),
           ) as { bssid?: string };
 
@@ -621,6 +698,59 @@ export class NetworkInfoUtil {
       let externalIp = 'Unknown';
       const interfaces: string[] = [];
 
+      // Primary method: Get gateway from routing table using multiple ip route methods
+      try {
+        // Method 1: Try 'ip route get' to a reliable external IP (most accurate)
+        try {
+          const routeGetOutput = execSync('ip route get 8.8.8.8', {
+            encoding: 'utf8',
+            timeout: 2000,
+            stdio: ['pipe', 'pipe', 'ignore'], // Suppress stderr
+          });
+          
+          // Parse output like: "8.8.8.8 via 10.0.10.1 dev eth0 src 10.0.10.187"
+          const getViaMatch = routeGetOutput.match(/via\s+([0-9.]+)/);
+          if (getViaMatch) {
+            gateway = getViaMatch[1];
+          }
+        } catch (routeGetError) {
+          console.debug('ip route get failed, trying ip route show:', routeGetError);
+        }
+
+        // Method 2: If route get failed, try standard ip route commands
+        if (gateway === 'Unknown') {
+          const routeOutput = execSync('ip route', {
+            encoding: 'utf8',
+            timeout: 3000,
+            stdio: ['pipe', 'pipe', 'ignore'], // Suppress stderr
+          });
+
+          // Look for default route first (most common)
+          const defaultRouteMatch = routeOutput.match(/default\s+via\s+([0-9.]+)/);
+          if (defaultRouteMatch) {
+            gateway = defaultRouteMatch[1];
+          } else {
+            // If no default route, try to extract gateway from network routes
+            // Look for patterns like "10.0.10.0/24 via 10.0.10.1 dev eth0"
+            const viaRouteMatch = routeOutput.match(/([0-9.]+\/\d+)\s+via\s+([0-9.]+)/);
+            if (viaRouteMatch) {
+              gateway = viaRouteMatch[2];
+            } else {
+              // For directly connected networks, infer gateway from network
+              // Example: "10.0.10.0/24 dev eth0 proto kernel scope link src 10.0.10.187"
+              const directRouteMatch = routeOutput.match(/([0-9.]+)\.0\/24\s+dev\s+\w+.*src\s+([0-9.]+)/);
+              if (directRouteMatch) {
+                const networkBase = directRouteMatch[1];
+                // Commonly gateway is .1 in the network
+                gateway = `${networkBase}.1`; 
+              }
+            }
+          }
+        }
+      } catch (routeError) {
+        console.debug('ip route failed, trying alternative methods:', routeError);
+      }
+
       // Try to get interface and IP from ifconfig with suppressed stderr
       try {
         const ifconfigOutput = execSync('ifconfig 2>/dev/null', {
@@ -665,7 +795,10 @@ export class NetworkInfoUtil {
 
           if (wifiInfo?.ip) {
             primaryIp = wifiInfo.ip;
-            gateway = wifiInfo.gateway || 'Unknown';
+            // Only use termux API gateway if we couldn't get it from ip route
+            if (gateway === 'Unknown' && wifiInfo.gateway) {
+              gateway = wifiInfo.gateway;
+            }
             if (!interfaces.includes('wlan0')) interfaces.push('wlan0');
           }
         } catch (wifiError) {
