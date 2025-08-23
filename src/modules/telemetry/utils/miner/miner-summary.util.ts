@@ -35,24 +35,19 @@ export class MinerSummaryUtil {
       MinerApiConfigUtil.clearCache();
       
       const endpoint = MinerApiConfigUtil.getCcminerApiEndpoint();
-      console.log(`🔍 [DEBUG] CCMiner endpoint: ${endpoint}`);
       
       // Use direct summary command since it provides accurate real-time data
       const summaryRaw = execSync(`echo 'summary' | nc -w 2 ${endpoint}`, {
         encoding: 'utf8',
         timeout: 3000,
       });
-      
-      console.log(`🔍 [DEBUG] CCMiner raw response length: ${summaryRaw ? summaryRaw.length : 0}`);
-      console.log(`🔍 [DEBUG] CCMiner raw response: ${summaryRaw ? summaryRaw.substring(0, 200) : 'null'}`);
-      
+
       if (!summaryRaw || !summaryRaw.trim()) {
         console.log(`⚠️ [DEBUG] CCMiner API returned empty response`);
         return this.getDefaultSummary();
       }
       
       const parsed = this.parseCcminerOutput(summaryRaw);
-      console.log(`🔍 [DEBUG] Parsed CCMiner data:`, parsed);
 
       const result = {
         name: 'ccminer',
@@ -66,8 +61,7 @@ export class MinerSummaryUtil {
         averageShareRate: parseFloat(parsed.ACCMN) || 0,
         solvedBlocks: parseInt(parsed.SOLV) || 0,
       };
-      
-      console.log(`🔍 [DEBUG] Final CCMiner result:`, result);
+
       return result;
     } catch (error) {
       return this.getDefaultSummary();

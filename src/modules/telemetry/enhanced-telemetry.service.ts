@@ -359,9 +359,6 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
         battery: battery
       };
 
-      console.log(`🔍 [DEBUG] apiTelemetry created with hashrate: ${apiTelemetry?.minerSoftware?.hashrate}`);
-      console.log(`🔍 [DEBUG] apiTelemetry minerSoftware:`, apiTelemetry?.minerSoftware);
-
       // Clean the telemetry object to remove any unwanted root-level variables
       const cleanedTelemetry = this.cleanTelemetryStructure(apiTelemetry);
     
@@ -373,13 +370,7 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
         this.loggingService.log.bind(this.loggingService),
       );
       
-      console.log(`🔍 [DEBUG] scheduleInfo object:`, scheduleInfo);
-      console.log(`🔍 [DEBUG] scheduleInfo has minerSoftware property: ${scheduleInfo?.hasOwnProperty('minerSoftware')}`);
-      
       // Create full telemetry object
-      console.log(`🔍 [DEBUG] Before fullTelemetry creation - cleanedTelemetry hashrate: ${cleanedTelemetry?.minerSoftware?.hashrate}`);
-      console.log(`🔍 [DEBUG] Before fullTelemetry creation - minerSummary hashrate: ${minerSummary?.hashrate}`);
-      
       const fullTelemetry = {
         ...cleanedTelemetry,
         schedules: scheduleInfo,
@@ -388,9 +379,6 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
           minerSummary?.hashrate,
         ),
       };
-      
-      console.log(`🔍 [DEBUG] After fullTelemetry creation - fullTelemetry hashrate: ${fullTelemetry?.minerSoftware?.hashrate}`);
-      console.log(`🔍 [DEBUG] After fullTelemetry creation - fullTelemetry minerSoftware:`, fullTelemetry?.minerSoftware);
     
       // Save telemetry data with error handling
       await safeExecuteAsync(
@@ -428,8 +416,6 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
    * @returns Cleaned telemetry object with only allowed root-level fields
    */
   private cleanTelemetryStructure(telemetry: any): any {
-    console.log(`🔍 [DEBUG] cleanTelemetryStructure input hashrate: ${telemetry?.minerSoftware?.hashrate}`);
-    
     // Define allowed root-level fields
     const allowedRootFields = [
       'status',
@@ -450,8 +436,6 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    console.log(`🔍 [DEBUG] cleanTelemetryStructure output hashrate: ${cleanedTelemetry?.minerSoftware?.hashrate}`);
-    
     // Log if we removed any unwanted fields
     const originalFields = Object.keys(telemetry);
     const removedFields = originalFields.filter(
@@ -529,10 +513,7 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
     previousHistory: Array<{ timestamp: number; hashrate: number }>,
     currentHashrate?: number
   ): Array<{ timestamp: number; hashrate: number }> {
-    console.log(`🔍 [DEBUG] updateHistoricalHashrate called with currentHashrate: ${currentHashrate}, type: ${typeof currentHashrate}`);
-    
     if (currentHashrate === undefined || currentHashrate === null) {
-      console.log(`🔍 [DEBUG] updateHistoricalHashrate: currentHashrate is undefined/null, returning previousHistory`);
       return previousHistory;
     }
   
@@ -567,17 +548,12 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
 
   private async saveTelemetry(data: any) {
     try {
-      console.log(`🔍 [DEBUG] Saving telemetry data with hashrate: ${data?.minerSoftware?.hashrate || 'undefined'}`);
-      console.log(`🔍 [DEBUG] Full miner data:`, data?.minerSoftware);
-      
       await fs.promises.writeFile(
         this.telemetryFilePath,
         JSON.stringify(data, null, 2),
         'utf8'
       );
-      
-      console.log(`✅ [DEBUG] Telemetry data successfully written to file`);
-      
+
       // Only create backup if file was successfully written and not too recent
       const shouldCreateBackup = await this.shouldCreateBackup();
       if (shouldCreateBackup) {
