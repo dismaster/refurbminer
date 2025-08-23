@@ -48,7 +48,6 @@ export class MinerApiConfigUtil {
     for (const host of possibleHosts) {
       for (const port of possiblePorts) {
         if (this.testEndpoint(host, port, minerType)) {
-          console.log(`✅ Discovered ${minerType} API at ${host}:${port}`);
           return {
             host,
             port,
@@ -59,7 +58,6 @@ export class MinerApiConfigUtil {
     }
 
     // If discovery fails, return default
-    console.warn(`⚠️ Could not discover ${minerType} API endpoint, using default`);
     return this.DEFAULT_ENDPOINTS[minerType];
   }
 

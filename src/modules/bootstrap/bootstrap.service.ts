@@ -28,7 +28,6 @@ export class BootstrapService implements OnModuleInit {
   ) {}
 
   async onModuleInit() {
-    console.log('⚡ [DEBUG] BootstrapService is running...');
     this.loggingService.log(
       'Initializing Bootstrap Service...',
       'INFO',

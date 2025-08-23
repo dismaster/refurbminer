@@ -13,8 +13,4 @@ import { HttpModule } from '@nestjs/axios';
   providers: [ConfigService],
   exports: [ConfigService]
 })
-export class ConfigModule {
-  constructor() {
-    console.log('🚀 ConfigModule initialized');
-  }
-}
+export class ConfigModule {}

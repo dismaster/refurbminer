@@ -43,8 +43,17 @@ export class MinerSummaryUtil {
       });
 
       if (!summaryRaw || !summaryRaw.trim()) {
-        console.log(`⚠️ [DEBUG] CCMiner API returned empty response`);
-        return this.getDefaultSummary();
+        return {
+          name: 'ccminer',
+          version: 'unknown',
+          algorithm: 'unknown',
+          hashrate: 0,
+          acceptedShares: 0,
+          rejectedShares: 0,
+          uptime: 0,
+          averageShareRate: 0,
+          solvedBlocks: 0,
+        };
       }
       
       const parsed = this.parseCcminerOutput(summaryRaw);
