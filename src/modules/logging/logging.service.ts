@@ -1,7 +1,9 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Inject, forwardRef } from '@nestjs/common';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as dotenv from 'dotenv';
+import { ApiCommunicationService } from '../api-communication/api-communication.service';
+import { ConfigService } from '../config/config.service';
 
 // Load environment variables
 dotenv.config();
@@ -11,6 +13,27 @@ const LOGS_DIR = path.resolve(process.cwd(), 'logs');
 const LOG_FILE_PATH = path.join(LOGS_DIR, 'app.log');
 const MAX_LOGS = 100;
 const DEFAULT_LOG_LEVEL = 'INFO';
+
+// Log levels for backend sending
+const LOG_LEVELS = {
+  ERROR: 0,
+  WARN: 1,
+  INFO: 2,
+  DEBUG: 3,
+  SUCCESS: 4,
+  VERBOSE: 5
+} as const;
+
+type LogLevel = keyof typeof LOG_LEVELS;
+
+interface PendingLog {
+  message: string;
+  level: LogLevel;
+  module: string;
+  timestamp: Date;
+  stack?: string;
+  metadata?: Record<string, any>;
+}
 
 @Injectable()
 export class LoggingService {
@@ -27,9 +50,33 @@ export class LoggingService {
   private readonly BUFFER_SIZE = 10;
   private readonly BUFFER_TIMEOUT = 5000; // 5 seconds
 
-  constructor() {
+  // Backend logging configuration
+  private sendToBackend: boolean;
+  private backendLogLevel: string;
+  private pendingLogs: PendingLog[] = [];
+  private backendSendTimer?: NodeJS.Timeout;
+  private readonly BACKEND_BATCH_SIZE = 5;
+  private readonly BACKEND_BATCH_TIMEOUT = 30000; // 30 seconds
+  private readonly IMMEDIATE_SEND_LEVELS: LogLevel[] = ['ERROR', 'WARN'];
+
+  // API service for sending logs (will be injected)
+  private apiService: ApiCommunicationService;
+  private configService: ConfigService;
+
+  constructor(
+    @Inject(forwardRef(() => ApiCommunicationService))
+    apiService: ApiCommunicationService,
+    configService: ConfigService,
+  ) {
+    this.apiService = apiService;
+    this.configService = configService;
+    
     this.logLevel = (process.env.LOG_LEVEL || DEFAULT_LOG_LEVEL).toUpperCase().trim();
     this.logToConsole = process.env.LOG_TO_CONSOLE === 'true';
+    
+    // Backend logging configuration
+    this.sendToBackend = process.env.SEND_LOGS_TO_BACKEND === 'true';
+    this.backendLogLevel = (process.env.BACKEND_LOG_LEVEL || 'WARN').toUpperCase().trim();
 
     this.ensureLogFileExists();
   }
@@ -45,14 +92,15 @@ export class LoggingService {
   }
 
   /** ✅ Log message with level & module name */
-  log(message: string, level: string = 'INFO', module: string = 'General'): void {
-    const levels = ['ERROR', 'WARN', 'INFO', 'DEBUG', 'VERBOSE'];
+  log(message: string, level: string = 'INFO', module: string = 'General', metadata?: Record<string, any>): void {
+    const levels = ['ERROR', 'WARN', 'INFO', 'DEBUG', 'VERBOSE', 'SUCCESS'];
+    const normalizedLevel = level.toUpperCase();
     const currentLevelIndex = levels.indexOf(this.logLevel);
-    const messageLevelIndex = levels.indexOf(level.toUpperCase());
+    const messageLevelIndex = levels.indexOf(normalizedLevel);
     if (messageLevelIndex > currentLevelIndex) return; // Skip lower-level logs
 
     // Rate limit debug logs to prevent excessive I/O
-    if (level.toUpperCase() === 'DEBUG') {
+    if (normalizedLevel === 'DEBUG') {
       const key = `${module}:${message.substring(0, 50)}`; // Use first 50 chars as key
       const now = Date.now();
       const lastLog = this.logCache.get(key);
@@ -72,16 +120,50 @@ export class LoggingService {
       }
     }
 
-    const timestamp = new Date().toISOString();
-    const logEntry = `${timestamp} [${level}] [${module}] ${message}`;
+    const timestamp = new Date();
+    const logEntry = `${timestamp.toISOString()} [${normalizedLevel}] [${module}] ${message}`;
 
     // Add to buffer for batch write
     this.addToBuffer(logEntry);
 
     // Print to console if enabled
     if (this.logToConsole) {
-      this.printToConsole(logEntry, level);
+      this.printToConsole(logEntry, normalizedLevel);
     }
+
+    // Send to backend if enabled and level qualifies
+    if (this.sendToBackend && this.shouldSendToBackend(normalizedLevel)) {
+      this.addToBackendQueue({
+        message,
+        level: normalizedLevel as LogLevel,
+        module,
+        timestamp,
+        metadata,
+      });
+    }
+  }
+
+  /**
+   * Enhanced log methods with metadata support
+   */
+  error(message: string, module: string = 'General', metadata?: Record<string, any>): void {
+    this.log(message, 'ERROR', module, metadata);
+  }
+
+  warn(message: string, module: string = 'General', metadata?: Record<string, any>): void {
+    this.log(message, 'WARN', module, metadata);
+  }
+
+  info(message: string, module: string = 'General', metadata?: Record<string, any>): void {
+    this.log(message, 'INFO', module, metadata);
+  }
+
+  debug(message: string, module: string = 'General', metadata?: Record<string, any>): void {
+    this.log(message, 'DEBUG', module, metadata);
+  }
+
+  success(message: string, module: string = 'General', metadata?: Record<string, any>): void {
+    this.log(message, 'SUCCESS', module, metadata);
   }
 
   /** ✅ Add log to buffer for batch writing */
@@ -168,10 +250,108 @@ export class LoggingService {
     if (this.bufferTimer) {
       clearTimeout(this.bufferTimer);
     }
+    
+    // Send any pending backend logs
+    this.flushBackendLogs();
+    if (this.backendSendTimer) {
+      clearTimeout(this.backendSendTimer);
+    }
   }
 
   /** ✅ Clear rate limiting cache manually if needed */
   clearCache(): void {
     this.logCache.clear();
+  }
+
+  /**
+   * Check if log level should be sent to backend
+   */
+  private shouldSendToBackend(level: string): boolean {
+    const backendLevels = ['ERROR', 'WARN', 'INFO', 'DEBUG', 'SUCCESS'];
+    const backendLevelIndex = backendLevels.indexOf(this.backendLogLevel);
+    const messageLevelIndex = backendLevels.indexOf(level);
+    
+    return messageLevelIndex <= backendLevelIndex;
+  }
+
+  /**
+   * Add log to backend sending queue
+   */
+  private addToBackendQueue(logData: PendingLog): void {
+    this.pendingLogs.push(logData);
+
+    // Send immediately for critical levels
+    if (this.IMMEDIATE_SEND_LEVELS.includes(logData.level)) {
+      this.flushBackendLogs();
+    } else {
+      // Batch send for other levels
+      if (this.pendingLogs.length >= this.BACKEND_BATCH_SIZE) {
+        this.flushBackendLogs();
+      } else if (!this.backendSendTimer) {
+        this.backendSendTimer = setTimeout(() => {
+          this.flushBackendLogs();
+        }, this.BACKEND_BATCH_TIMEOUT);
+      }
+    }
+  }
+
+  /**
+   * Send all pending logs to backend
+   */
+  private async flushBackendLogs(): Promise<void> {
+    if (this.pendingLogs.length === 0) return;
+    if (!this.apiService || !this.configService) return;
+
+    const logsToSend = [...this.pendingLogs];
+    this.pendingLogs = [];
+
+    // Clear timer
+    if (this.backendSendTimer) {
+      clearTimeout(this.backendSendTimer);
+      this.backendSendTimer = undefined;
+    }
+
+    try {
+      const config = this.configService.getConfig();
+      if (!config?.minerId) return;
+
+      // Send each log individually to match your backend's expected format
+      for (const logData of logsToSend) {
+        try {
+          await this.sendLogToBackend(config.minerId, logData);
+        } catch (error) {
+          // Don't log to avoid infinite loops, just queue for retry
+          console.error(`Failed to send log to backend: ${error.message}`);
+        }
+      }
+    } catch (error) {
+      // Re-queue logs for retry on next flush
+      this.pendingLogs.unshift(...logsToSend);
+      console.error(`Backend log flush failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Send individual log to backend using existing error endpoint
+   */
+  private async sendLogToBackend(minerId: string, logData: PendingLog): Promise<void> {
+    try {
+      const additionalInfo = {
+        level: logData.level.toLowerCase(),
+        module: logData.module,
+        timestamp: logData.timestamp.toISOString(),
+        ...logData.metadata,
+      };
+
+      // Use the existing logMinerError method with correct parameters
+      await this.apiService.logMinerError(
+        minerId,
+        logData.message,
+        logData.stack || 'No stack trace',
+        additionalInfo
+      );
+    } catch (error) {
+      throw new Error(`API call failed: ${error.message}`);
+    }
   }
 }

@@ -6,6 +6,7 @@ import { MinerManagerService } from '../miner-manager/miner-manager.service';
 import { ConfigService } from '../config/config.service';
 import * as fs from 'fs';
 import { execSync } from 'child_process';
+import * as dotenv from 'dotenv';
 
 // Define config interface to fix TypeScript errors
 interface MinerConfig {
@@ -34,6 +35,7 @@ export class BootstrapService implements OnModuleInit {
       'bootstrap',
     );
     this.ensureConfigExists();
+    this.ensureEnvironmentVariables();
 
     // --- ENFORCE: Do not proceed until minerId is assigned by backend ---
     let validMinerID = false;
@@ -140,6 +142,85 @@ export class BootstrapService implements OnModuleInit {
         this.configPath,
         JSON.stringify({ minerId: '', rigId: '' }, null, 2),
       );
+    }
+  }
+
+  /** ✅ Ensure required environment variables exist in .env file */
+  private ensureEnvironmentVariables() {
+    const envPath = '.env';
+    
+    // Default environment variables that should always exist
+    const requiredEnvVars = {
+      'LOG_LEVEL': 'INFO',
+      'LOG_TO_CONSOLE': 'true',
+      'SEND_LOGS_TO_BACKEND': 'false',
+      'BACKEND_LOG_LEVEL': 'WARN',
+      'API_URL': 'https://api.refurbminer.de',
+      'RIG_TOKEN': ''
+    };
+
+    let envContent = '';
+    let needsUpdate = false;
+
+    // Read existing .env file if it exists
+    if (fs.existsSync(envPath)) {
+      envContent = fs.readFileSync(envPath, 'utf8');
+    } else {
+      this.loggingService.log(
+        '.env file missing, creating new one...',
+        'WARN',
+        'bootstrap',
+      );
+      needsUpdate = true;
+    }
+
+    // Check each required variable
+    for (const [key, defaultValue] of Object.entries(requiredEnvVars)) {
+      const regex = new RegExp(`^${key}=`, 'm');
+      if (!regex.test(envContent)) {
+        this.loggingService.log(
+          `Adding missing environment variable: ${key}`,
+          'INFO',
+          'bootstrap',
+        );
+        
+        // Add the variable to the appropriate section
+        if (key.startsWith('LOG_') || key.includes('BACKEND_LOG')) {
+          // Add to logging section
+          if (!envContent.includes('##### Logging Module')) {
+            envContent += '\n##### Logging Module\n';
+            envContent += '# LOG_LEVEL controls verbosity: ERROR < WARN < INFO < DEBUG < VERBOSE\n';
+          }
+          if (key === 'SEND_LOGS_TO_BACKEND' && !envContent.includes('# Backend logging configuration')) {
+            envContent += '\n# Backend logging configuration\n';
+            envContent += '# Enable sending logs to backend via /error endpoint\n';
+          }
+          if (key === 'BACKEND_LOG_LEVEL' && !envContent.includes('# Backend log level')) {
+            envContent += '# Backend log level (ERROR, WARN, INFO, DEBUG, SUCCESS)\n';
+          }
+        } else if (key.startsWith('API_') || key === 'RIG_TOKEN') {
+          // Add to API section
+          if (!envContent.includes('##### API settings')) {
+            envContent += '\n##### API settings\n';
+          }
+        }
+        
+        envContent += `${key}=${defaultValue}\n`;
+        needsUpdate = true;
+      }
+    }
+
+    // Write updated .env file if needed
+    if (needsUpdate) {
+      fs.writeFileSync(envPath, envContent);
+      this.loggingService.log(
+        'Environment variables updated successfully',
+        'INFO',
+        'bootstrap',
+      );
+      
+      // Reload environment variables
+      dotenv.config();
     }
   }
 

@@ -73,13 +73,21 @@ export class ApiCommunicationService {
       const url = `${this.apiUrl}/api/miners/update`;
       this.loggingService.log(`📡 Sending telemetry to: ${url}`, 'DEBUG', 'api');
   
-      const response = await firstValueFrom(
-        this.httpService.put(url, {
-          rigToken: this.rigToken,
-          minerId,
-          telemetry,
-        })
-      );
+      // Add timeout protection to prevent hanging
+      const response = await Promise.race([
+        firstValueFrom(
+          this.httpService.put(url, {
+            rigToken: this.rigToken,
+            minerId,
+            telemetry,
+          }, {
+            timeout: 15000, // 15 second timeout for telemetry
+          })
+        ),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Telemetry update timeout after 15 seconds')), 15000)
+        )
+      ]) as any; // Type assertion for Promise.race result
   
       if (response.status !== 200) {
         throw new Error(`API returned ${response.status}`);
@@ -88,11 +96,15 @@ export class ApiCommunicationService {
       // Success - let the calling service handle success logging
       return response.data;
     } catch (error) {
-      this.loggingService.log(
-        `❌ Failed to update telemetry: ${error.message}\nPayload: ${JSON.stringify(telemetry, null, 2)}`, 
-        'ERROR', 
-        'api'
-      );
+      if (error.message?.includes('timeout')) {
+        this.loggingService.log(`⏰ Telemetry update timed out after 15 seconds`, 'WARN', 'api');
+      } else {
+        this.loggingService.log(
+          `❌ Failed to update telemetry: ${error.message}`, 
+          'ERROR', 
+          'api'
+        );
+      }
       throw new HttpException('Failed to update telemetry', HttpStatus.BAD_REQUEST);
     }
   }
@@ -142,13 +154,20 @@ export class ApiCommunicationService {
       const url = `${this.apiUrl}/miners-actions/miner/${minerId}/pending`;
       this.loggingService.log(`📡 Fetching pending actions from: ${url}`, 'DEBUG', 'api');
 
-      const response = await firstValueFrom(
-        this.httpService.get(url, {
-          headers: {
-            'rig-token': rigToken
-          }
-        })
-      );
+      // Add timeout protection to prevent hanging
+      const response = await Promise.race([
+        firstValueFrom(
+          this.httpService.get(url, {
+            headers: {
+              'rig-token': rigToken
+            },
+            timeout: 10000, // 10 second timeout
+          })
+        ),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('API request timeout after 10 seconds')), 10000)
+        )
+      ]) as any; // Type assertion for Promise.race result
 
       if (!response.data) {
         return [];
@@ -156,7 +175,11 @@ export class ApiCommunicationService {
 
       return response.data;
     } catch (error) {
-      this.loggingService.log(`❌ Failed to fetch pending actions: ${error.message}`, 'ERROR', 'api');
+      if (error.message?.includes('timeout')) {
+        this.loggingService.log(`⏰ API request timed out after 10 seconds for actions check`, 'WARN', 'api');
+      } else {
+        this.loggingService.log(`❌ Failed to fetch pending actions: ${error.message}`, 'ERROR', 'api');
+      }
       return [];
     }
   }

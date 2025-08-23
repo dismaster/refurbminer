@@ -87,38 +87,64 @@ export class ActionsService implements OnModuleInit {
         'actions',
       );
       this.isProcessingActions = true;
-      // Fetch pending actions from API - this will use the miners-actions/miner/:minerId/pending endpoint
-      const response = await this.apiService.getPendingMinerActions(
-        config.minerId,
-      );
-      const actions = response as unknown as MinerAction[];
 
-      if (!actions || actions.length === 0) {
+      // Set a maximum timeout for the entire action check process
+      const actionCheckTimeout = setTimeout(() => {
         this.loggingService.log(
-          '✅ No pending actions found',
-          'DEBUG',
+          '⏰ Action check timed out after 30 seconds, resetting processing flag',
+          'WARN',
           'actions',
         );
         this.isProcessingActions = false;
-        return;
-      }
+      }, 30000); // 30 second timeout
 
-      this.loggingService.log(
-        `🔔 Found ${actions.length} pending action(s)`,
-        'INFO',
-        'actions',
-      );
+      try {
+        // Fetch pending actions from API - this will use the miners-actions/miner/:minerId/pending endpoint
+        const response = await this.apiService.getPendingMinerActions(
+          config.minerId,
+        );
+        const actions = response as unknown as MinerAction[];
 
-      // Process each action in sequence
-      for (const action of actions) {
-        await this.processAction(action);
+        clearTimeout(actionCheckTimeout); // Clear timeout if successful
+
+        if (!actions || actions.length === 0) {
+          this.loggingService.log(
+            '✅ No pending actions found',
+            'DEBUG',
+            'actions',
+          );
+          this.isProcessingActions = false;
+          return;
+        }
+
+        this.loggingService.log(
+          `🔔 Found ${actions.length} pending action(s)`,
+          'INFO',
+          'actions',
+        );
+
+        // Process each action in sequence
+        for (const action of actions) {
+          await this.processAction(action);
+        }
+      } catch (apiError) {
+        clearTimeout(actionCheckTimeout);
+        throw apiError; // Re-throw to be handled by outer catch
       }
     } catch (error) {
-      this.loggingService.log(
-        `❌ Error checking for actions: ${(error as Error).message}`,
-        'ERROR',
-        'actions',
-      );
+      if (error.message?.includes('timeout')) {
+        this.loggingService.log(
+          `⏰ Action check timed out: ${(error as Error).message}`,
+          'WARN',
+          'actions',
+        );
+      } else {
+        this.loggingService.log(
+          `❌ Error checking for actions: ${(error as Error).message}`,
+          'ERROR',
+          'actions',
+        );
+      }
     } finally {
       this.isProcessingActions = false;
     }
