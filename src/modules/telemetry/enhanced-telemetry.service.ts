@@ -85,8 +85,11 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
       clearInterval(this.updateInterval);
     }
 
-    // Collect telemetry data immediately on startup
-    this.getTelemetryData().catch(error => {
+    // Clear any stale telemetry data on startup
+    this.clearStaleData();
+
+    // Collect telemetry data immediately on startup with retry
+    this.getTelemetryDataWithRetry().catch(error => {
       this.loggingService.log(
         `❌ Failed to collect initial telemetry data: ${error instanceof Error ? error.message : 'Unknown error'}`,
         'ERROR',
@@ -98,6 +101,91 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
     this.updateInterval = setInterval(async () => {
       await this.getTelemetryData();
     }, 60000);
+  }
+
+  /** Clear stale telemetry data on startup */
+  private clearStaleData(): void {
+    try {
+      const emptyTelemetry = {
+        status: 'initializing',
+        appVersion: this.appVersion,
+        minerSoftware: {
+          name: 'unknown',
+          version: 'unknown',
+          algorithm: 'unknown',
+          hashrate: 0,
+          acceptedShares: 0,
+          rejectedShares: 0,
+          uptime: 0,
+          solvedBlocks: 0,
+          difficulty: 0,
+          miningStatus: 'initializing'
+        },
+        pool: {},
+        deviceInfo: {},
+        network: {},
+        battery: {},
+        schedules: { mining: { start: null, stop: null }, restarts: [] },
+        historicalHashrate: []
+      };
+      
+      // Ensure directory exists
+      this.ensureStorageExists();
+      
+      // Write fresh empty telemetry
+      fs.writeFileSync(
+        this.telemetryFilePath,
+        JSON.stringify(emptyTelemetry, null, 2),
+        'utf8'
+      );
+      
+      this.loggingService.log(
+        '🗑️ Cleared stale telemetry data on startup',
+        'DEBUG',
+        'telemetry'
+      );
+    } catch (error) {
+      this.loggingService.log(
+        `⚠️ Failed to clear stale telemetry data: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'WARN',
+        'telemetry'
+      );
+    }
+  }
+
+  /** Get telemetry data with retry logic for startup */
+  private async getTelemetryDataWithRetry(maxRetries: number = 3): Promise<TelemetryData | null> {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const data = await this.getTelemetryData();
+        if (data) {
+          this.loggingService.log(
+            `✅ Successfully collected fresh telemetry data (attempt ${attempt}/${maxRetries})`,
+            'DEBUG',
+            'telemetry'
+          );
+          return data;
+        }
+      } catch (error) {
+        this.loggingService.log(
+          `⚠️ Telemetry collection attempt ${attempt}/${maxRetries} failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          'WARN',
+          'telemetry'
+        );
+      }
+      
+      // Wait before retry (exponential backoff)
+      if (attempt < maxRetries) {
+        await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+      }
+    }
+    
+    this.loggingService.log(
+      `❌ All telemetry collection attempts failed after ${maxRetries} retries`,
+      'ERROR',
+      'telemetry'
+    );
+    return null;
   }
 
   /** Get telemetry data with comprehensive error handling */
@@ -458,11 +546,16 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
 
   private async saveTelemetry(data: any) {
     try {
+      console.log(`🔍 [DEBUG] Saving telemetry data with hashrate: ${data?.minerSoftware?.hashrate || 'undefined'}`);
+      console.log(`🔍 [DEBUG] Full miner data:`, data?.minerSoftware);
+      
       await fs.promises.writeFile(
         this.telemetryFilePath,
         JSON.stringify(data, null, 2),
         'utf8'
       );
+      
+      console.log(`✅ [DEBUG] Telemetry data successfully written to file`);
       
       // Only create backup if file was successfully written and not too recent
       const shouldCreateBackup = await this.shouldCreateBackup();

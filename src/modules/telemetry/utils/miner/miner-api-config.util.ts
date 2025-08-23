@@ -38,11 +38,9 @@ export class MinerApiConfigUtil {
    */
   private static discoverMinerEndpoint(minerType: 'ccminer' | 'xmrig'): MinerApiEndpoint {
     const possibleHosts = [
-      '127.0.0.1',    // Localhost first (most common for XMRig)
-      'localhost',
+      '127.0.0.1',    // Localhost first (most common - miner runs locally)
+      'localhost',    // Alternative localhost format
       '0.0.0.0',      // Wildcard binding (some configurations use this)
-      '10.0.10.105',  // Your specific miner host
-      '192.168.1.100', // Common local network
     ];
 
     const possiblePorts = [4068, 8080, 3333]; // Common miner API ports
