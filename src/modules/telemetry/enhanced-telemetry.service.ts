@@ -153,11 +153,22 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** Get telemetry data with retry logic for startup */
+  /** Get telemetry data with retry logic and timeout protection */
   private async getTelemetryDataWithRetry(maxRetries: number = 3): Promise<TelemetryData | null> {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        const data = await this.getTelemetryData();
+        // Add timeout protection to prevent hanging
+        const timeoutPromise = new Promise<null>((_, reject) => {
+          setTimeout(() => {
+            reject(new Error('Telemetry collection timeout after 30 seconds'));
+          }, 30000); // 30 second timeout per attempt
+        });
+
+        const telemetryPromise = this.getTelemetryData();
+        
+        // Race between telemetry collection and timeout
+        const data = await Promise.race([telemetryPromise, timeoutPromise]);
+        
         if (data) {
           this.loggingService.log(
             `✅ Successfully collected fresh telemetry data (attempt ${attempt}/${maxRetries})`,

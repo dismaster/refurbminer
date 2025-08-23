@@ -37,10 +37,30 @@ export class MinerSummaryUtil {
       const endpoint = MinerApiConfigUtil.getCcminerApiEndpoint();
       
       // Use direct summary command since it provides accurate real-time data
-      const summaryRaw = execSync(`echo 'summary' | nc -w 2 ${endpoint}`, {
-        encoding: 'utf8',
-        timeout: 3000,
-      });
+      // Added better timeout protection to prevent hanging
+      let summaryRaw: string;
+      try {
+        // Force kill netcat after timeout using signal
+        summaryRaw = execSync(`echo 'summary' | nc -w 2 ${endpoint}`, {
+          encoding: 'utf8',
+          timeout: 5000, // Increased timeout
+          stdio: ['pipe', 'pipe', 'ignore'], // Suppress stderr to avoid noise
+          killSignal: 'SIGKILL', // Force kill if timeout
+        });
+      } catch (timeoutError) {
+        // If the API call times out, return fallback data
+        return {
+          name: 'ccminer',
+          version: 'unknown',
+          algorithm: 'unknown',
+          hashrate: 0,
+          acceptedShares: 0,
+          rejectedShares: 0,
+          uptime: 0,
+          averageShareRate: 0,
+          solvedBlocks: 0,
+        };
+      }
 
       if (!summaryRaw || !summaryRaw.trim()) {
         return {
