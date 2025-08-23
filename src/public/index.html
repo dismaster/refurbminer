@@ -650,22 +650,13 @@ async function fetchTelemetry() {
         
         if (telemetryData) {
             updateDashboard(telemetryData, healthData, statusData);
-            addActivity('Telemetry data updated successfully', 'success');
-            
-            // Log current mining status
-            const status = telemetryData.status || 'unknown';
-            addActivity(`Current mining status: ${status === 'active' ? 'Mining' : 'Stopped'}`, 'info');
-            
-            // Log current hashrate if available
-            if (telemetryData.minerSoftware && telemetryData.minerSoftware.hashrate) {
-                addActivity(`Current hashrate: ${formatHashrate(telemetryData.minerSoftware.hashrate)}`, 'info');
-            }
+            // Removed redundant telemetry/status/hashrate logs - visible in dashboard
             
             // Update chart with historical data
             if (historyData && Array.isArray(historyData)) {
                 console.log('Updating chart with', historyData.length, 'data points');
                 updateHashrateChart(historyData);
-                addActivity(`Chart updated with ${historyData.length} data points`, 'info');
+                // Removed chart update activity log - redundant with visual chart
             } else {
                 console.log('No historical data available for chart');
                 // Create empty chart or show message
@@ -739,9 +730,12 @@ function updateDashboard(data, healthData, statusData) {
             const recentOutputString = healthData.recentOutput.join('\n');
             
             if (lastProcessedOutput !== recentOutputString) {
-                // Look for new accepted shares
+                // Process each line for various miner events
                 healthData.recentOutput.forEach(line => {
-                    if (line && line.includes('accepted:')) {
+                    if (!line || line.trim() === '') return;
+                    
+                    // Look for new accepted shares
+                    if (line.includes('accepted:')) {
                         const match = line.match(/accepted: (\d+\/\d+).*?(\d+\.\d+\s+[kmgKMG]?H\/s)/);
                         if (match) {
                             addActivity(`Share accepted: ${match[1]} - ${match[2]}`, 'success');
@@ -749,7 +743,7 @@ function updateDashboard(data, healthData, statusData) {
                     }
                     
                     // Look for rejected shares and rejection reasons
-                    if (line && line.includes('reject reason:')) {
+                    else if (line.includes('reject reason:')) {
                         const reasonMatch = line.match(/reject reason:\s*(.+)/);
                         if (reasonMatch) {
                             addActivity(`Share rejected: ${reasonMatch[1]}`, 'warning');
@@ -757,8 +751,57 @@ function updateDashboard(data, healthData, statusData) {
                     }
                     
                     // Look for "booooo" rejections (ccminer style)
-                    if (line && line.includes('booooo')) {
+                    else if (line.includes('booooo')) {
                         addActivity(`Share rejected (booooo)`, 'warning');
+                    }
+                    
+                    // Look for miner startup/connection messages
+                    else if (line.includes('Starting') || line.includes('starting')) {
+                        if (line.includes('miner') || line.includes('mining')) {
+                            addActivity(`🚀 ${line.trim()}`, 'info');
+                        }
+                    }
+                    
+                    // Look for pool connection events
+                    else if (line.includes('Connected to') || line.includes('connecting to')) {
+                        addActivity(`🌐 ${line.trim()}`, 'info');
+                    }
+                    
+                    // Look for difficulty changes
+                    else if (line.includes('difficulty') && (line.includes('set to') || line.includes('changed to'))) {
+                        const diffMatch = line.match(/difficulty.*?(\d+\.?\d*[kKmMgGtT]?)/);
+                        if (diffMatch) {
+                            addActivity(`⚡ Difficulty updated: ${diffMatch[1]}`, 'info');
+                        }
+                    }
+                    
+                    // Look for algorithm or job notifications
+                    else if (line.includes('new job') || line.includes('stratum job')) {
+                        if (line.includes('diff')) {
+                            const diffMatch = line.match(/diff\s+(\d+\.?\d*[kKmMgGtT]?)/);
+                            if (diffMatch) {
+                                addActivity(`📊 New mining job (diff: ${diffMatch[1]})`, 'info');
+                            }
+                        } else {
+                            addActivity(`📊 New mining job received`, 'info');
+                        }
+                    }
+                    
+                    // Look for CPU/thread information
+                    else if (line.includes('CPU') && (line.includes('thread') || line.includes('core'))) {
+                        if (line.includes('started') || line.includes('activated')) {
+                            addActivity(`💻 ${line.trim()}`, 'info');
+                        }
+                    }
+                    
+                    // Look for error messages
+                    else if (line.toLowerCase().includes('error') || line.toLowerCase().includes('failed')) {
+                        addActivity(`❌ ${line.trim()}`, 'error');
+                    }
+                    
+                    // Look for warning messages
+                    else if (line.toLowerCase().includes('warning') || line.toLowerCase().includes('warn')) {
+                        addActivity(`⚠️ ${line.trim()}`, 'warning');
                     }
                 });
                 
