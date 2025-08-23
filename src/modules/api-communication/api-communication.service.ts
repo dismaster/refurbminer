@@ -1,4 +1,4 @@
-import { Injectable, HttpException, HttpStatus } from '@nestjs/common';
+import { Injectable, HttpException, HttpStatus, Inject, forwardRef } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import * as fs from 'fs';
@@ -14,6 +14,7 @@ export class ApiCommunicationService {
 
   constructor(
     private readonly httpService: HttpService,
+    @Inject(forwardRef(() => LoggingService))
     private readonly loggingService: LoggingService
   ) {
     this.apiUrl = process.env.API_URL || 'http://localhost:3000';

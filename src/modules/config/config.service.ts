@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleInit, Inject, forwardRef } from '@nestjs/common';
 import { LoggingService } from '../logging/logging.service';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
@@ -83,6 +83,7 @@ export class ConfigService implements OnModuleInit {
   private readonly API_CACHE_TTL = 30000; // 30 seconds for API responses
 
   constructor(
+    @Inject(forwardRef(() => LoggingService))
     private readonly loggingService: LoggingService,
     private readonly httpService: HttpService,
   ) {
