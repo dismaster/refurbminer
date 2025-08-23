@@ -316,11 +316,10 @@ export class NetworkInfoUtil {
           details.push(detail);
         } catch (error) {
           // Skip interfaces that can't be read
-          console.debug(`Failed to read interface ${interfaceName}:`, error);
         }
       }
     } catch (error) {
-      console.debug('Failed to get Linux interface details:', error);
+      // Failed to get Linux interface details
     }
 
     return details;
@@ -333,15 +332,12 @@ export class NetworkInfoUtil {
     try {
       // Primary method: Use 'ip link show' for better MAC address detection
       try {
-        console.debug('🔍 Termux: Trying ip link show for MAC addresses...');
         const ipLinkOutput = execSync('ip link show', {
           encoding: 'utf8',
           timeout: 3000,
           stdio: ['pipe', 'pipe', 'ignore'], // Suppress stderr
         });
 
-        console.debug('📋 Termux: ip link show output length:', ipLinkOutput.length);
-        
         // Parse ip link show output
         const lines = ipLinkOutput.split('\n');
         let currentInterface: InterfaceDetail | null = null;
@@ -372,14 +368,12 @@ export class NetworkInfoUtil {
               state: flags.includes('UP') ? 'up' : 'down',
               type: this.determineInterfaceType(interfaceName),
             };
-            console.debug('🔍 Termux: Found interface:', interfaceName, 'state:', currentInterface.state);
           }
           
           // Look for MAC address line (e.g., "link/ether 70:19:88:87:ff:d5 brd ff:ff:ff:ff:ff:ff")
           const macMatch = trimmed.match(/link\/ether\s+([a-fA-F0-9:]{17})/);
           if (macMatch && currentInterface) {
             currentInterface.macAddress = macMatch[1].toUpperCase();
-            console.debug('✅ Termux: Found MAC for', currentInterface.name, ':', currentInterface.macAddress);
           }
         }
 
@@ -411,11 +405,11 @@ export class NetworkInfoUtil {
               }
             }
           } catch (ipAddrError) {
-            console.debug('ip addr show failed, IP addresses not available:', ipAddrError);
+            // IP addresses not available, continue without them
           }
         }
       } catch (ipLinkError) {
-        console.debug('ip link show failed in Termux:', ipLinkError);
+        // ip link show failed, try ifconfig fallback
         
         // Fallback: Try ifconfig if ip link fails
         try {
@@ -466,7 +460,7 @@ export class NetworkInfoUtil {
             }
           }
         } catch (ifconfigError) {
-          console.debug('ifconfig fallback also failed in Termux:', ifconfigError);
+          // ifconfig fallback also failed in Termux
         }
       }
 
@@ -491,11 +485,11 @@ export class NetworkInfoUtil {
             }
           }
         } catch (apiError) {
-          console.debug('Termux WiFi API not available:', apiError);
+          // Termux WiFi API not available
         }
       }
     } catch (error) {
-      console.debug('Failed to get Termux interface details:', error);
+      // Failed to get Termux interface details
     }
 
     return details;
@@ -630,7 +624,7 @@ export class NetworkInfoUtil {
       }
 
     } catch (error) {
-      console.debug('Failed to get Termux DNS servers:', error);
+      // Failed to get Termux DNS servers
     }
 
     return dnsServers.length > 0 ? dnsServers : ['Unknown'];
@@ -746,28 +740,21 @@ export class NetworkInfoUtil {
 
       // Primary method: Get gateway from routing table using multiple ip route methods
       try {
-        console.debug('🔍 Termux: Trying gateway detection...');
         // Method 1: Try 'ip route get' to a reliable external IP (most accurate)
         try {
-          console.debug('🎯 Termux: Trying ip route get 8.8.8.8...');
           const routeGetOutput = execSync('ip route get 8.8.8.8', {
             encoding: 'utf8',
             timeout: 2000,
             stdio: ['pipe', 'pipe', 'ignore'], // Suppress stderr
           });
           
-          console.debug('📋 Termux: ip route get output:', routeGetOutput.trim());
-          
           // Parse output like: "8.8.8.8 via 10.0.10.1 dev eth0 src 10.0.10.187"
           const getViaMatch = routeGetOutput.match(/via\s+([0-9.]+)/);
           if (getViaMatch) {
             gateway = getViaMatch[1];
-            console.debug('✅ Termux: Found gateway via ip route get:', gateway);
-          } else {
-            console.debug('❌ Termux: No via match found in ip route get output');
           }
         } catch (routeGetError) {
-          console.debug('ip route get failed, trying ip route show:', routeGetError);
+          // ip route get failed, trying ip route show
         }
 
         // Method 2: If route get failed, try standard ip route commands
@@ -801,7 +788,7 @@ export class NetworkInfoUtil {
           }
         }
       } catch (routeError) {
-        console.debug('ip route failed, trying alternative methods:', routeError);
+        // ip route failed, trying alternative methods
       }
 
       // Try to get interface and IP from ifconfig with suppressed stderr
@@ -830,10 +817,7 @@ export class NetworkInfoUtil {
           }
         }
       } catch (ifconfigError) {
-        console.debug(
-          'ifconfig failed:',
-          (ifconfigError as Error)?.message || 'Unknown error',
-        );
+        // ifconfig failed
       }
 
       // If ifconfig didn't give us an IP, try termux-wifi-connectioninfo
@@ -855,23 +839,18 @@ export class NetworkInfoUtil {
             if (!interfaces.includes('wlan0')) interfaces.push('wlan0');
           }
         } catch (wifiError) {
-          console.debug(
-            'Termux API not available:',
-            (wifiError as Error)?.message || 'Unknown error',
-          );
+          // Termux API not available
         }
       }
 
       // Get interface details with MAC addresses
       const interfaceDetails = this.getInterfaceDetails('termux');
       const filteredInterfaceDetails = this.filterRelevantInterfaces(interfaceDetails);
-      console.debug('🔍 Termux: Interface details count:', interfaceDetails.length, '→ filtered:', filteredInterfaceDetails.length);
-      console.debug('🔍 Termux: Interfaces array:', interfaces);
 
       // Get external IP
       externalIp = this.getCachedExternalIp() || 'Unknown';
 
-      console.debug('🔍 Termux: Final values - Gateway:', gateway, 'Primary IP:', primaryIp);
+            // Final network info object
 
       return {
         primaryIp,
@@ -939,7 +918,7 @@ export class NetworkInfoUtil {
         return pingMatch[1];
       }
     } catch (error) {
-      console.debug('Gateway detection failed:', error.message);
+      // Gateway detection failed
       
       // Last resort: try to derive gateway from IP
       try {
@@ -1255,18 +1234,16 @@ export class NetworkInfoUtil {
           }
             // Log the error if we failed after all retries
           if (lastError) {
-            console.debug(`Failed to get IP from ${url} after ${NETWORK_CONSTANTS.MAX_RETRIES} attempts:`, 
-              lastError instanceof Error ? lastError.message : 'Unknown error');
+            // Failed to get IP after all retries
           }
         } catch (urlError) {
           const error = urlError as Error;
-          console.debug(`Error with URL ${url}:`, error.message || 'Unknown error');
           continue;
         }
       }
     } catch (error) {
       const err = error as Error;
-      console.debug('External IP detection failed:', err.message || 'Unknown error');
+      // External IP detection failed
     }
     
     // Default to previous cached value or Unknown
