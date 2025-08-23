@@ -57,3 +57,4 @@ package-lock.json
 logs/app.log
 logs/app.log
 /storage
+storage/telemetry.json
