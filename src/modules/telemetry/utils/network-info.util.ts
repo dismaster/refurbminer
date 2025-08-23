@@ -313,6 +313,19 @@ export class NetworkInfoUtil {
           // Determine interface type
           detail.type = this.determineInterfaceType(interfaceName);
 
+          // Get IP address for this interface
+          try {
+            const ipOutput = execSync(
+              `ip -4 addr show ${interfaceName} | grep inet | head -1 | awk '{print $2}' | cut -d/ -f1`,
+              { encoding: 'utf8', timeout: 1000 },
+            ).trim();
+            if (ipOutput && ipOutput !== '') {
+              detail.ipAddress = ipOutput;
+            }
+          } catch {
+            // No IP address found for this interface
+          }
+
           details.push(detail);
         } catch (error) {
           // Skip interfaces that can't be read
@@ -455,6 +468,12 @@ export class NetworkInfoUtil {
               detail.type = this.determineInterfaceType(detail.name);
             }
 
+            // Extract IP address from the same ifconfig section
+            const ipMatch = section.match(/inet\s+(?:addr:)?([0-9.]+)/);
+            if (ipMatch) {
+              detail.ipAddress = ipMatch[1];
+            }
+
             if (detail.name !== 'Unknown') {
               details.push(detail);
             }
@@ -510,8 +529,35 @@ export class NetworkInfoUtil {
   /** ✅ Get primary MAC address from interface details */
   private static getPrimaryMacAddress(
     interfaceDetails: InterfaceDetail[],
+    primaryIp?: string,
   ): string {
-    // Find first non-loopback interface with a valid MAC
+    // If we have a primary IP, try to find the interface with that IP
+    if (primaryIp && primaryIp !== 'Unknown') {
+      const primaryInterface = interfaceDetails.find(
+        (detail) =>
+          detail.ipAddress === primaryIp &&
+          detail.macAddress !== 'Unknown' &&
+          detail.macAddress !== '00:00:00:00:00:00',
+      );
+      if (primaryInterface) {
+        return primaryInterface.macAddress;
+      }
+    }
+
+    // Fallback: Find first active interface with a valid MAC
+    const activeInterface = interfaceDetails.find(
+      (detail) =>
+        detail.state === 'up' &&
+        detail.type !== 'loopback' &&
+        detail.macAddress !== 'Unknown' &&
+        detail.macAddress !== '00:00:00:00:00:00',
+    );
+
+    if (activeInterface) {
+      return activeInterface.macAddress;
+    }
+
+    // Last fallback: Find first non-loopback interface with a valid MAC
     const validInterface = interfaceDetails.find(
       (detail) =>
         detail.type !== 'loopback' &&
@@ -711,10 +757,11 @@ export class NetworkInfoUtil {
 
       // Get interface details with MAC addresses
       const interfaceDetails = this.getInterfaceDetails('linux');
+      const primaryIp = ipOutput.length > 0 ? ipOutput[0].split('/')[0] : 'Unknown';
 
       return {
-        primaryIp: ipOutput.length > 0 ? ipOutput[0].split('/')[0] : 'Unknown',
-        macAddress: this.getPrimaryMacAddress(interfaceDetails),
+        primaryIp,
+        macAddress: this.getPrimaryMacAddress(interfaceDetails, primaryIp),
         gateway: gateway || 'Unknown',
         interfaces:
           interfaces.length > 0
@@ -748,10 +795,25 @@ export class NetworkInfoUtil {
             stdio: ['pipe', 'pipe', 'ignore'], // Suppress stderr
           });
           
-          // Parse output like: "8.8.8.8 via 10.0.10.1 dev eth0 src 10.0.10.187"
+          // Parse output like: "8.8.8.8 via 10.0.10.1 dev eth0 table 1021 src 10.0.10.187"
           const getViaMatch = routeGetOutput.match(/via\s+([0-9.]+)/);
           if (getViaMatch) {
             gateway = getViaMatch[1];
+          }
+
+          // Extract the primary interface from dev field
+          const getDevMatch = routeGetOutput.match(/dev\s+([a-zA-Z0-9]+)/);
+          if (getDevMatch) {
+            const primaryInterface = getDevMatch[1];
+            if (!interfaces.includes(primaryInterface)) {
+              interfaces.push(primaryInterface);
+            }
+          }
+
+          // Extract the primary IP from src field
+          const getSrcMatch = routeGetOutput.match(/src\s+([0-9.]+)/);
+          if (getSrcMatch) {
+            primaryIp = getSrcMatch[1];
           }
         } catch (routeGetError) {
           // ip route get failed, trying ip route show
@@ -791,7 +853,7 @@ export class NetworkInfoUtil {
         // ip route failed, trying alternative methods
       }
 
-      // Try to get interface and IP from ifconfig with suppressed stderr
+      // Try to get additional interfaces from ifconfig (only if we need more info)
       try {
         const ifconfigOutput = execSync('ifconfig 2>/dev/null', {
           encoding: 'utf8',
@@ -806,12 +868,15 @@ export class NetworkInfoUtil {
           const interfaceMatch = section.match(/^([a-zA-Z0-9]+):/);
           const ifaceName = interfaceMatch ? interfaceMatch[1] : null;
 
-          if (ifaceName) {
+          if (ifaceName && !interfaces.includes(ifaceName)) {
+            // Only add additional interfaces (primary interface should already be from ip route get)
             interfaces.push(ifaceName);
+          }
 
-            // Extract IP address
+          // Only look for IP if we haven't found it yet from ip route get
+          if (primaryIp === 'Unknown') {
             const ipMatch = section.match(/inet\s+(\d+\.\d+\.\d+\.\d+)/);
-            if (ipMatch && ipMatch[1] && primaryIp === 'Unknown') {
+            if (ipMatch && ipMatch[1]) {
               primaryIp = ipMatch[1];
             }
           }
@@ -854,7 +919,7 @@ export class NetworkInfoUtil {
 
       return {
         primaryIp,
-        macAddress: this.getPrimaryMacAddress(interfaceDetails),
+        macAddress: this.getPrimaryMacAddress(interfaceDetails, primaryIp),
         gateway,
         interfaces,
         interfaceDetails: filteredInterfaceDetails,
