@@ -185,7 +185,7 @@ export class BootstrapService implements OnModuleInit {
         );
         
         // Add the variable to the appropriate section
-        if (key.startsWith('LOG_') || key.includes('BACKEND_LOG')) {
+        if (key.startsWith('LOG_') || key.includes('BACKEND_LOG') || key === 'SEND_LOGS_TO_BACKEND') {
           // Add to logging section
           if (!envContent.includes('##### Logging Module')) {
             envContent += '\n##### Logging Module\n';
