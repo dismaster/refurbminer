@@ -278,6 +278,40 @@ export class HardwareInfoUtil {
         return this.runCommandWithSuFallback('getprop ro.product.brand');
       }
       
+      // Enhanced Allwinner/Radxa detection using device-tree compatible
+      if (fs.existsSync('/proc/device-tree/compatible')) {
+        try {
+          const compatibleData = fs.readFileSync('/proc/device-tree/compatible', 'utf8');
+          const compatibleEntries = compatibleData.split('\0').filter(entry => entry.length > 0);
+          
+          for (const entry of compatibleEntries) {
+            if (entry.includes('allwinner')) {
+              // Check if it's a Radxa device with Allwinner chip
+              if (fs.existsSync('/proc/device-tree/model')) {
+                const modelData = fs.readFileSync('/proc/device-tree/model', 'utf8').trim();
+                // For Radxa devices, even with Allwinner chips, we want to identify as Radxa
+                if (process.env.HOSTNAME && process.env.HOSTNAME.includes('radxa')) {
+                  return 'Radxa';
+                }
+                // Check for sun55iw3 which indicates Allwinner H618 used in some Radxa boards
+                if (modelData.includes('sun55iw3')) {
+                  return 'Radxa'; // Radxa device with Allwinner H618
+                }
+              }
+              return 'Allwinner';
+            }
+            if (entry.includes('rockchip')) {
+              return 'Rockchip';
+            }
+            if (entry.includes('broadcom')) {
+              return 'Broadcom';
+            }
+          }
+        } catch (e) {
+          // Continue with other detection methods if this fails
+        }
+      }
+      
       // Enhanced Radxa and ARM board detection
       if (fs.existsSync('/sys/firmware/devicetree/base/model')) {
         const modelContent = fs.readFileSync('/sys/firmware/devicetree/base/model', 'utf8').trim().replace(/\0/g, '');
@@ -396,6 +430,49 @@ export class HardwareInfoUtil {
         return 'Unknown Android Device';
       }
       
+      // Enhanced Allwinner device model detection using device-tree compatible
+      if (fs.existsSync('/proc/device-tree/compatible')) {
+        try {
+          const compatibleData = fs.readFileSync('/proc/device-tree/compatible', 'utf8');
+          const compatibleEntries = compatibleData.split('\0').filter(entry => entry.length > 0);
+          
+          for (const entry of compatibleEntries) {
+            if (entry.includes('allwinner')) {
+              // Check the model file for specific SoC information
+              if (fs.existsSync('/proc/device-tree/model')) {
+                const modelData = fs.readFileSync('/proc/device-tree/model', 'utf8').trim();
+                
+                // Map Allwinner SoC identifiers to proper model names
+                if (modelData.includes('sun55iw3')) {
+                  // H618 SoC - check for specific board
+                  if (process.env.HOSTNAME && process.env.HOSTNAME.includes('radxa')) {
+                    return 'Cubie A5E'; // Radxa board with H618
+                  }
+                  return 'H618'; // Generic H618 board
+                }
+                
+                // Check for other Allwinner SoCs
+                if (entry.includes('sun50i')) {
+                  return 'H6/H616 Series';
+                }
+                if (entry.includes('sun8i')) {
+                  return 'H3/H5 Series';
+                }
+                
+                // If we have a proper model name in the entry, use it
+                const allwinnerMatch = entry.match(/allwinner,(.+)/);
+                if (allwinnerMatch) {
+                  const modelName = allwinnerMatch[1].replace(/-/g, ' ').toUpperCase();
+                  return modelName;
+                }
+              }
+            }
+          }
+        } catch (e) {
+          // Continue with other detection methods if this fails
+        }
+      }
+      
       // Enhanced ARM board model detection
       if (fs.existsSync('/sys/firmware/devicetree/base/model')) {
         const modelContent = fs.readFileSync('/sys/firmware/devicetree/base/model', 'utf8').trim().replace(/\0/g, '');
@@ -452,9 +529,35 @@ export class HardwareInfoUtil {
   /** ✅ Detect Radxa model from system information */
   private static detectRadxaModel(): string {
     try {
-      // Try to detect from CPU info which might contain board info
+      // Enhanced detection for Allwinner-based Radxa devices
       if (fs.existsSync('/proc/cpuinfo')) {
         const cpuInfo = fs.readFileSync('/proc/cpuinfo', 'utf8');
+        
+        // Look for CPU part information to identify specific ARM cores
+        const cpuPartMatch = cpuInfo.match(/CPU part\s*:\s*0x([a-fA-F0-9]+)/);
+        if (cpuPartMatch) {
+          const cpuPart = cpuPartMatch[1].toLowerCase();
+          // 0xd05 is Cortex-A55, commonly used in Allwinner H618 (Radxa Cubie A5E)
+          if (cpuPart === 'd05') {
+            // Check for sun55iw3 identifier which is specific to H618
+            if (fs.existsSync('/proc/device-tree/model')) {
+              const modelData = fs.readFileSync('/proc/device-tree/model', 'utf8').trim();
+              if (modelData.includes('sun55iw3')) {
+                return 'Cubie A5E'; // H618-based Radxa board
+              }
+            }
+            
+            // Check device-tree compatible for Allwinner confirmation
+            if (fs.existsSync('/proc/device-tree/compatible')) {
+              const compatibleData = fs.readFileSync('/proc/device-tree/compatible', 'utf8');
+              if (compatibleData.includes('allwinner')) {
+                return 'Cubie A5E'; // Allwinner H618 in Radxa device
+              }
+            }
+          }
+        }
+        
+        // Legacy hardware field check
         const hardwareMatch = cpuInfo.match(/Hardware\s*:\s*(.+)/i);
         if (hardwareMatch) {
           const hardware = hardwareMatch[1].trim();

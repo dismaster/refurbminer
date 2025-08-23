@@ -836,34 +836,96 @@ function updateDashboard(data, healthData, statusData) {
     const startButton = document.getElementById('start-miner');
     const stopButton = document.getElementById('stop-miner');
     const restartButton = document.getElementById('restart-miner');
-    const isMinerActive = status === 'active';
-
-    // Update button states
-    startButton.disabled = isMinerActive;
-    stopButton.disabled = !isMinerActive;
-    restartButton.disabled = false;
     
-    // Apply gradient colors based on state
-    if (isMinerActive) {
-        // Mining is active - highlight start button with green gradient (active state)
-        startButton.style.background = 'linear-gradient(135deg, var(--accent), #0de3ac)';
-        startButton.style.color = 'white';
+    // Determine if miner is active - check multiple sources for accuracy
+    let isMinerActive = false;
+    
+    // Primary check: status data from the server
+    if (statusData && statusData.status) {
+        isMinerActive = statusData.status === 'running';
+    } else if (data && data.status) {
+        // Fallback to telemetry data
+        isMinerActive = data.status === 'active';
+    } else if (healthData && healthData.healthy && data.minerSoftware && data.minerSoftware.hashrate > 0) {
+        // Last resort: check if we have hashrate data and miner is healthy
+        isMinerActive = true;
+    }
+    
+    const isBenchmark = statusData && statusData.benchmark === true;
+    
+    console.log(`Button state update: isMinerActive=${isMinerActive}, isBenchmark=${isBenchmark}, status=${status}, statusData.status=${statusData?.status}`);
+
+    // Update button states - disable all controls during benchmark mode
+    if (isBenchmark) {
+        // During benchmark mode, disable all manual controls
+        startButton.disabled = true;
+        stopButton.disabled = true;
+        restartButton.disabled = true;
+        
+        // Apply benchmark styling to indicate buttons are disabled
+        startButton.style.background = 'linear-gradient(135deg, #6b7280, #4b5563)';
+        startButton.style.color = '#9ca3af';
         startButton.style.border = 'none';
+        startButton.title = 'Mining controls disabled during benchmark mode';
         
-        // Reset stop button to default secondary style
-        stopButton.style.background = '';
-        stopButton.style.color = '';
-        stopButton.style.border = '';
-    } else {
-        // Mining is stopped - highlight stop button with red gradient (stopped state)
-        stopButton.style.background = 'linear-gradient(135deg, #ef4444, #dc2626)';
-        stopButton.style.color = 'white';
+        stopButton.style.background = 'linear-gradient(135deg, #6b7280, #4b5563)';
+        stopButton.style.color = '#9ca3af';
         stopButton.style.border = 'none';
+        stopButton.title = 'Mining controls disabled during benchmark mode';
         
-        // Reset start button to default secondary style
-        startButton.style.background = '';
-        startButton.style.color = '';
-        startButton.style.border = '';
+        restartButton.style.background = 'linear-gradient(135deg, #6b7280, #4b5563)';
+        restartButton.style.color = '#9ca3af';
+        restartButton.style.border = 'none';
+        restartButton.title = 'Mining controls disabled during benchmark mode';
+    } else {
+        // Normal mode - enable controls based on mining status
+        startButton.disabled = isMinerActive;  // Disable start when already running
+        stopButton.disabled = !isMinerActive;  // Disable stop when not running
+        restartButton.disabled = false;  // Restart is always available
+        
+        // Clear benchmark tooltips
+        startButton.title = isMinerActive ? 'Mining is already running' : 'Start mining';
+        stopButton.title = !isMinerActive ? 'Mining is not running' : 'Stop mining';
+        restartButton.title = 'Restart mining process';
+        
+        // Apply gradient colors based on state
+        if (isMinerActive) {
+            // Mining is active - highlight start button with green gradient (active state)
+            startButton.style.background = 'linear-gradient(135deg, var(--accent), #0de3ac)';
+            startButton.style.color = 'white';
+            startButton.style.border = 'none';
+            startButton.style.opacity = '0.6';  // Make it look disabled
+            
+            // Reset stop button to default secondary style
+            stopButton.style.background = '';
+            stopButton.style.color = '';
+            stopButton.style.border = '';
+            stopButton.style.opacity = '1';
+            
+            // Reset restart button to default secondary style
+            restartButton.style.background = '';
+            restartButton.style.color = '';
+            restartButton.style.border = '';
+            restartButton.style.opacity = '1';
+        } else {
+            // Mining is stopped - highlight stop button with red gradient (stopped state)
+            stopButton.style.background = 'linear-gradient(135deg, #ef4444, #dc2626)';
+            stopButton.style.color = 'white';
+            stopButton.style.border = 'none';
+            stopButton.style.opacity = '0.6';  // Make it look disabled
+            
+            // Reset start button to default secondary style
+            startButton.style.background = '';
+            startButton.style.color = '';
+            startButton.style.border = '';
+            startButton.style.opacity = '1';
+            
+            // Reset restart button to default secondary style
+            restartButton.style.background = '';
+            restartButton.style.color = '';
+            restartButton.style.border = '';
+            restartButton.style.opacity = '1';
+        }
     }
 
     // Mining metrics
@@ -1184,6 +1246,15 @@ function formatUptime(seconds) {
 }
 
 async function controlMiner(action) {
+    // Check if benchmark mode is active (extra safety check)
+    const statusIndicator = document.getElementById('status-indicator');
+    const isBenchmark = statusIndicator?.getAttribute('data-benchmark') === 'true';
+    
+    if (isBenchmark) {
+        addActivity(`Mining controls are disabled during benchmark mode`, 'warning');
+        return;
+    }
+    
     try {
         const response = await fetch(`/miner/${action}`, { method: 'POST' });
         const result = await response.json();
