@@ -64,9 +64,6 @@
                     <div class="dashboard-grid">
                         <div class="metric-card soft-glow stat-gradient-1">
                             <div class="metric-label">Mining Status <span class="status-indicator" id="status-indicator"></span></div>
-                            <div class="metric-label benchmark-status" id="benchmark-status-container" style="margin-top: 0.5rem; display: none;">
-                                <i class="fas fa-flask"></i> Benchmark Mode <span class="benchmark-indicator active" id="benchmark-indicator">ACTIVE</span>
-                            </div>
                             <div class="control-buttons" style="justify-content: center; align-items: center;">
                                 <button id="start-miner" class="btn-primary">
                                     <i class="fas fa-play"></i> Start
@@ -804,36 +801,35 @@ function updateDashboard(data, healthData, statusData) {
         addActivity(`Mining status changed to: ${currentStatus}`, activityType);
     }
     
-    // Update status indicator
+    // Update status indicator with benchmark integration
     if (statusIndicator) {
-        statusIndicator.className = `status-indicator ${status === 'active' ? 'status-active' : 'status-inactive'}`;
-        statusIndicator.setAttribute('data-status', currentStatus);
-    }
-
-    // Update benchmark status
-    const benchmarkContainer = document.getElementById('benchmark-status-container');
-    const benchmarkIndicator = document.getElementById('benchmark-indicator');
-    
-    if (statusData && statusData.benchmark === true) {
-        // Show benchmark indicator when benchmark is active
-        benchmarkContainer.style.display = 'flex';
-        benchmarkIndicator.textContent = 'ACTIVE';
-        benchmarkIndicator.className = 'benchmark-indicator active';
+        const isBenchmark = statusData && statusData.benchmark === true;
         
-        // Log benchmark activation if this is a change
-        const wasBenchmarkActive = benchmarkContainer.getAttribute('data-benchmark') === 'true';
-        if (!wasBenchmarkActive) {
-            addActivity('🧪 Benchmark mode activated - bypassing schedules', 'info');
-            benchmarkContainer.setAttribute('data-benchmark', 'true');
+        if (isBenchmark) {
+            // Show benchmark mode with blue flask icon
+            statusIndicator.className = 'status-indicator status-benchmark';
+            statusIndicator.innerHTML = '<i class="fas fa-flask"></i>';
+            statusIndicator.setAttribute('data-status', 'Benchmark Mode');
+            
+            // Log benchmark activation if this is a change
+            const wasBenchmarkActive = statusIndicator.getAttribute('data-benchmark') === 'true';
+            if (!wasBenchmarkActive) {
+                addActivity('🧪 Benchmark mode activated - bypassing schedules', 'info');
+                statusIndicator.setAttribute('data-benchmark', 'true');
+            }
+        } else {
+            // Normal mining status with green/red circle
+            statusIndicator.className = `status-indicator ${status === 'active' ? 'status-active' : 'status-inactive'}`;
+            statusIndicator.innerHTML = ''; // Clear any icon content
+            statusIndicator.setAttribute('data-status', currentStatus);
+            
+            // Log benchmark deactivation if this is a change
+            const wasBenchmarkActive = statusIndicator.getAttribute('data-benchmark') === 'true';
+            if (wasBenchmarkActive) {
+                addActivity('Benchmark mode deactivated', 'info');
+            }
+            statusIndicator.setAttribute('data-benchmark', 'false');
         }
-    } else {
-        // Hide benchmark indicator when not in benchmark mode
-        const wasBenchmarkActive = benchmarkContainer.getAttribute('data-benchmark') === 'true';
-        if (wasBenchmarkActive) {
-            addActivity('Benchmark mode deactivated', 'info');
-        }
-        benchmarkContainer.style.display = 'none';
-        benchmarkContainer.setAttribute('data-benchmark', 'false');
     }
 
     // Control buttons

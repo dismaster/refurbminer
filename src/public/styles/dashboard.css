@@ -44,6 +44,17 @@
 .status-inactive { background-color: #ef4444; }
 .status-warning { background-color: #f59e0b; }
 
+/* Benchmark status indicator - flask icon instead of circle */
+.status-benchmark {
+    width: auto !important;
+    height: auto !important;
+    border-radius: 0 !important;
+    color: #3b82f6 !important; /* Blue color for benchmark */
+    background: none !important;
+    animation: none !important;
+    font-size: 12px;
+}
+
 /* Health Status */
 .health-status {
     display: flex;

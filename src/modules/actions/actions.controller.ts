@@ -1,9 +1,13 @@
-import { Controller, Get, Post, Body } from '@nestjs/common';
+import { Controller, Get, Post, Body, BadRequestException } from '@nestjs/common';
 import { ActionsService } from './actions.service';
+import { ConfigService } from '../config/config.service';
 
 @Controller('actions')
 export class ActionsController {
-  constructor(private readonly actionsService: ActionsService) {}
+  constructor(
+    private readonly actionsService: ActionsService,
+    private readonly configService: ConfigService,
+  ) {}
 
   /**
    * Manually trigger a check for pending actions
@@ -19,6 +23,9 @@ export class ActionsController {
    */
   @Post('restart-miner')
   async restartMiner() {
+    if (this.configService.getBenchmarkFlag()) {
+      throw new BadRequestException('Cannot restart miner during benchmark mode');
+    }
     await this.actionsService.restartMiner();
     return { success: true, message: 'Miner restart initiated' };
   }
@@ -37,6 +44,9 @@ export class ActionsController {
    */
   @Post('stop')
   async stopMining() {
+    if (this.configService.getBenchmarkFlag()) {
+      throw new BadRequestException('Cannot stop mining during benchmark mode');
+    }
     await this.actionsService.stopMining();
     return { success: true, message: 'Mining stopped' };
   }
@@ -46,6 +56,9 @@ export class ActionsController {
    */
   @Post('start')
   async startMining() {
+    if (this.configService.getBenchmarkFlag()) {
+      throw new BadRequestException('Cannot start mining during benchmark mode');
+    }
     await this.actionsService.startMining();
     return { success: true, message: 'Mining started' };
   }

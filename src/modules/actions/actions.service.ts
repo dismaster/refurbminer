@@ -161,6 +161,24 @@ export class ActionsService implements OnModuleInit {
         'actions',
       );
 
+      // Check if benchmark mode is active before executing critical actions
+      if (this.shouldSkipActionDuringBenchmark(action.command)) {
+        const message = `Action ${action.command} skipped - benchmark mode is active`;
+        this.loggingService.log(
+          `🚫 ${message}`,
+          'WARN',
+          'actions',
+        );
+        
+        // Mark action as failed with specific reason
+        await this.apiService.updateMinerActionStatus(
+          action._id,
+          MinerActionStatus.FAILED,
+          message,
+        );
+        return;
+      }
+
       // Mark action as in progress
       await this.apiService.updateMinerActionStatus(
         action._id,
@@ -220,6 +238,38 @@ export class ActionsService implements OnModuleInit {
         error.message,
       );
     }
+  }
+
+  /**
+   * Check if an action should be skipped during benchmark mode
+   */
+  private shouldSkipActionDuringBenchmark(command: MinerActionCommand): boolean {
+    const isBenchmarkActive = this.configService.getBenchmarkFlag();
+    
+    if (!isBenchmarkActive) {
+      return false; // Not in benchmark mode, allow all actions
+    }
+
+    // Define actions that should be blocked during benchmark mode
+    const blockedActions = [
+      MinerActionCommand.RESTART_MINER,
+      MinerActionCommand.RESTART_DEVICE,
+      MinerActionCommand.UPDATE_SOFTWARE,
+      MinerActionCommand.STOP_MINING,
+      MinerActionCommand.START_MINING,
+    ];
+
+    const shouldSkip = blockedActions.includes(command);
+    
+    if (shouldSkip) {
+      this.loggingService.log(
+        `🚫 Blocking ${command} action - benchmark mode is active`,
+        'WARN',
+        'actions',
+      );
+    }
+
+    return shouldSkip;
   }
 
   /**
