@@ -32,9 +32,17 @@ export class MinerSummaryUtil {
   private static getCcminerSummary(): any {
     try {
       const endpoint = MinerApiConfigUtil.getCcminerApiEndpoint();
-      const summaryRaw = execSync(`echo 'summary' | nc -w 1 ${endpoint}`, {
+      
+      // Use direct summary command since it provides accurate real-time data
+      const summaryRaw = execSync(`echo 'summary' | nc -w 2 ${endpoint}`, {
         encoding: 'utf8',
+        timeout: 3000,
       });
+      
+      if (!summaryRaw || !summaryRaw.trim()) {
+        return this.getDefaultSummary();
+      }
+      
       const parsed = this.parseCcminerOutput(summaryRaw);
 
       return {
@@ -134,6 +142,60 @@ export class MinerSummaryUtil {
     
     
     return this.getDefaultSummary();
+  }
+
+  /** ✅ Extract real-time hashrate from CCMiner process or logs */
+  private static extractRealtimeHashrate(): number {
+    try {
+      // Try to get most current hashrate from CCMiner API with shorter timeout
+      const endpoint = MinerApiConfigUtil.getCcminerApiEndpoint();
+      
+      // Try 'threads' command which may have more current per-thread data
+      try {
+        const threadsRaw = execSync(`echo 'threads' | nc -w 1 ${endpoint}`, {
+          encoding: 'utf8',
+          timeout: 1500,
+        });
+        
+        // Parse threads output to get total current hashrate
+        if (threadsRaw && threadsRaw.includes('KHS=')) {
+          let totalKHS = 0;
+          const khsMatches = threadsRaw.match(/KHS=([\d.]+)/g);
+          if (khsMatches) {
+            for (const match of khsMatches) {
+              const khs = match.match(/KHS=([\d.]+)/);
+              if (khs && khs[1]) {
+                totalKHS += parseFloat(khs[1]);
+              }
+            }
+            if (totalKHS > 0) {
+              return totalKHS * 1000; // Convert kH/s to H/s
+            }
+          }
+        }
+      } catch (threadsError) {
+        // Threads command failed
+      }
+
+      // Try a fresh 'summary' call with minimal timeout for most current data
+      try {
+        const summaryRaw = execSync(`echo 'summary' | nc -w 1 ${endpoint}`, {
+          encoding: 'utf8',
+          timeout: 1500,
+        });
+        const summaryData = this.parseCcminerOutput(summaryRaw);
+        if (summaryData.KHS) {
+          return parseFloat(summaryData.KHS) * 1000;
+        }
+      } catch (summaryError) {
+        // Fresh summary failed
+      }
+
+    } catch (error) {
+      // All extraction methods failed
+    }
+    
+    return 0; // Return 0 to indicate real-time extraction failed, use API fallback
   }
 
   /** ✅ Parse CCMiner output */

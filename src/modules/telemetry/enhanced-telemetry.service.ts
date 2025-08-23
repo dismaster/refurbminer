@@ -94,7 +94,7 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
       );
     });
 
-    // Update telemetry and historical data every minute
+    // Update telemetry and historical data every 60 seconds
     this.updateInterval = setInterval(async () => {
       await this.getTelemetryData();
     }, 60000);
