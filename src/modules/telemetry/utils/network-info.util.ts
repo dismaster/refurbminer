@@ -457,7 +457,7 @@ export class NetworkInfoUtil {
       // Method 2: Try to read from /system/etc/resolv.conf (Android)
       if (dnsServers.length === 0) {
         try {
-          const resolveOutput = execSync('cat /system/etc/resolv.conf', {
+          const resolveOutput = execSync('cat /system/etc/resolv.conf 2>/dev/null', {
             encoding: 'utf8',
             timeout: 2000,
           });
@@ -513,7 +513,7 @@ export class NetworkInfoUtil {
   /** ✅ Get DNS servers on Linux */
   private static getLinuxDnsServers(): string[] {
     try {
-      const dnsOutput = execSync('cat /etc/resolv.conf', {
+      const dnsOutput = execSync('cat /etc/resolv.conf 2>/dev/null', {
         encoding: 'utf8',
         timeout: 2000,
       });
