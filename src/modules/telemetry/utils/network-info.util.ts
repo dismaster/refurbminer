@@ -438,10 +438,12 @@ export class NetworkInfoUtil {
         const dns1 = execSync('getprop net.dns1', {
           encoding: 'utf8',
           timeout: 2000,
+          stdio: ['pipe', 'pipe', 'ignore'], // Ignore stderr
         }).trim();
         const dns2 = execSync('getprop net.dns2', {
           encoding: 'utf8',
           timeout: 2000,
+          stdio: ['pipe', 'pipe', 'ignore'], // Ignore stderr
         }).trim();
 
         if (dns1 && dns1 !== '' && !dns1.startsWith('127.')) {
@@ -457,9 +459,10 @@ export class NetworkInfoUtil {
       // Method 2: Try to read from /system/etc/resolv.conf (Android)
       if (dnsServers.length === 0) {
         try {
-          const resolveOutput = execSync('cat /system/etc/resolv.conf 2>/dev/null', {
+          const resolveOutput = execSync('cat /system/etc/resolv.conf', {
             encoding: 'utf8',
             timeout: 2000,
+            stdio: ['pipe', 'pipe', 'ignore'], // Ignore stderr
           });
           
           const lines = resolveOutput.split('\n');
@@ -513,9 +516,10 @@ export class NetworkInfoUtil {
   /** ✅ Get DNS servers on Linux */
   private static getLinuxDnsServers(): string[] {
     try {
-      const dnsOutput = execSync('cat /etc/resolv.conf 2>/dev/null', {
+      const dnsOutput = execSync('cat /etc/resolv.conf', {
         encoding: 'utf8',
         timeout: 2000,
+        stdio: ['pipe', 'pipe', 'ignore'], // Ignore stderr
       });
 
       const dnsServers: string[] = [];

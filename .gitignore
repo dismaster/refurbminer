@@ -54,11 +54,5 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 ccminer
 xmrig
 package-lock.json
-logs/app.log
-logs/app.log
-/storage
-storage/telemetry.json
-logs/app.log
-storage/telemetry.json
-/config
-/storage
+*.bak
+*.log
