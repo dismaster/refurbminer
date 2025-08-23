@@ -85,6 +85,15 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
       clearInterval(this.updateInterval);
     }
 
+    // Collect telemetry data immediately on startup
+    this.getTelemetryData().catch(error => {
+      this.loggingService.log(
+        `❌ Failed to collect initial telemetry data: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'ERROR',
+        'telemetry'
+      );
+    });
+
     // Update telemetry and historical data every minute
     this.updateInterval = setInterval(async () => {
       await this.getTelemetryData();

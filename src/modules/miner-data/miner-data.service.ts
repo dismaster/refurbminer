@@ -37,6 +37,9 @@ export class MinerDataService implements OnModuleInit, OnApplicationShutdown {
       return;
     }
 
+    // ✅ Send telemetry immediately on startup
+    await this.sendTelemetry();
+
     // ✅ Send telemetry every 60s
     this.telemetryInterval = setInterval(async () => {
       await this.sendTelemetry();
