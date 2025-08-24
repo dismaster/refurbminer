@@ -787,6 +787,43 @@ export class HardwareInfoUtil {
     }
   }
 
+  /** ✅ Helper function to determine if error should be suppressed based on environment */
+  private static shouldSuppressError(systemType: string, errorMessage: string): boolean {
+    // Common errors that are expected in restricted environments
+    const expectedErrors = [
+      'permission denied',
+      'not found',
+      'no such file or directory',
+      'command not found',
+      'eacces',
+      'enoent',
+    ];
+
+    const lowerErrorMessage = errorMessage.toLowerCase();
+    
+    // Always suppress expected permission/availability errors in Termux
+    if (systemType === 'termux') {
+      return expectedErrors.some(pattern => lowerErrorMessage.includes(pattern));
+    }
+    
+    // For other systems, only suppress very common expected errors
+    return expectedErrors.slice(0, 3).some(pattern => lowerErrorMessage.includes(pattern));
+  }
+
+  /** ✅ Helper function to log errors conditionally */
+  private static logConditionalError(
+    systemType: string,
+    errorMessage: string,
+    log: (message: string, level: string, category: string) => void,
+    context: string = '',
+    level: 'WARN' | 'ERROR' = 'WARN'
+  ): void {
+    if (!this.shouldSuppressError(systemType, errorMessage)) {
+      const fullMessage = context ? `${context}: ${errorMessage}` : errorMessage;
+      log(fullMessage, level, 'hardware');
+    }
+  }
+
   /** ✅ Raspberry Pi: Get CPU Temp via vcgencmd */
   private static getVcgencmdTemperature(log: (message: string, level: string, category: string) => void): number {
     try {
@@ -998,7 +1035,12 @@ export class HardwareInfoUtil {
               return maxTemp;
             }
           } catch (thermalScanError) {
-            log(`Failed to scan thermal directory: ${thermalScanError instanceof Error ? thermalScanError.message : String(thermalScanError)}`, 'WARN', 'hardware');
+            this.logConditionalError(
+              'termux',
+              thermalScanError instanceof Error ? thermalScanError.message : String(thermalScanError),
+              log,
+              'Failed to scan thermal directory'
+            );
           }
         }
       } catch (thermalAccessError) {
@@ -1228,10 +1270,11 @@ export class HardwareInfoUtil {
 
         log('No valid temperature found in sensors output', 'WARN', 'hardware');
       } catch (sensorsError) {
-        log(
-          `Sensors command failed: ${sensorsError instanceof Error ? sensorsError.message : String(sensorsError)}`,
-          'WARN',
-          'hardware',
+        this.logConditionalError(
+          'linux',
+          sensorsError instanceof Error ? sensorsError.message : String(sensorsError),
+          log,
+          'Sensors command failed'
         );
       }
 
@@ -1300,10 +1343,11 @@ export class HardwareInfoUtil {
           }
         }
       } catch (hwmonListError) {
-        log(
-          `Failed to list hwmon directories: ${hwmonListError instanceof Error ? hwmonListError.message : String(hwmonListError)}`,
-          'WARN',
-          'hardware',
+        this.logConditionalError(
+          'linux',
+          hwmonListError instanceof Error ? hwmonListError.message : String(hwmonListError),
+          log,
+          'Failed to list hwmon directories'
         );
       }
 
@@ -1325,10 +1369,13 @@ export class HardwareInfoUtil {
           }
         }
       } catch (acpiError) {
-        log(
-          `ACPI failed: ${acpiError instanceof Error ? acpiError.message : String(acpiError)}`,
+        const errorMessage = acpiError instanceof Error ? acpiError.message : String(acpiError);
+        HardwareInfoUtil.logConditionalError(
+          'linux',
+          errorMessage,
+          log,
+          'ACPI failed',
           'WARN',
-          'hardware',
         );
       }
 
@@ -1364,10 +1411,13 @@ export class HardwareInfoUtil {
           }
         }
       } catch (procAcpiError) {
-        log(
-          `/proc/acpi/thermal_zone failed: ${procAcpiError instanceof Error ? procAcpiError.message : String(procAcpiError)}`,
+        const errorMessage = procAcpiError instanceof Error ? procAcpiError.message : String(procAcpiError);
+        HardwareInfoUtil.logConditionalError(
+          'linux',
+          errorMessage,
+          log,
+          '/proc/acpi/thermal_zone failed',
           'WARN',
-          'hardware',
         );
       }
 
@@ -1396,10 +1446,13 @@ export class HardwareInfoUtil {
           }
         }
       } catch (directAmdError) {
-        log(
-          `Direct AMD reading failed: ${directAmdError instanceof Error ? directAmdError.message : String(directAmdError)}`,
+        const errorMessage = directAmdError instanceof Error ? directAmdError.message : String(directAmdError);
+        HardwareInfoUtil.logConditionalError(
+          'linux',
+          errorMessage,
+          log,
+          'Direct AMD reading failed',
           'WARN',
-          'hardware',
         );
       }
 
@@ -1411,10 +1464,13 @@ export class HardwareInfoUtil {
       );
       return 0;
     } catch (error) {
-      log(
-        `Failed to get Linux temperature: ${error instanceof Error ? error.message : String(error)}`,
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      HardwareInfoUtil.logConditionalError(
+        'linux',
+        errorMessage,
+        log,
+        'Failed to get Linux temperature',
         'ERROR',
-        'hardware',
       );
       return 0;
     }

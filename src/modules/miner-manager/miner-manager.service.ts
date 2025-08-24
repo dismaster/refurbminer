@@ -535,6 +535,11 @@ export class MinerManagerService
           void this.restartMiner();
         } else {
           this.crashCount = 0;
+          this.loggingService.log(
+            '✅ Health check completed successfully - miner is running normally',
+            'DEBUG',
+            'miner-manager',
+          );
         }
       } else {
         this.crashCount = 0;
@@ -811,59 +816,74 @@ export class MinerManagerService
   /**
    * Analyze miner output for errors and issues
    */
-  private async analyzeOutput(output: string, minerSoftware?: string): Promise<boolean> {
-    // Detect miner software if not provided
-    if (!minerSoftware) {
-      minerSoftware = this.detectMinerFromOutput(output) || this.getMinerFromFlightsheet();
-    }
-
-    this.loggingService.log(
-      `🔍 Analyzing output for ${minerSoftware || 'unknown'} miner`,
-      'DEBUG',
-      'miner-manager',
-    );
-
-    // Get miner-specific error patterns
-    const errorPatterns = this.getErrorPatterns(minerSoftware);
-
-    let hasErrors = false;
-    const lines = output.split('\n').slice(-50); // Check last 50 lines
-    
-    for (const line of lines) {
-      for (const pattern of errorPatterns) {
-        if (pattern.test(line)) {
-          const errorKey = line.trim();
-          this.loggingService.log(
-            `🔍 Detected ${minerSoftware} error in output: ${errorKey}`,
-            'WARN',
-            'miner-manager',
-          );
-          
-          // Use smart error tracking instead of immediate API logging
-          await this.trackAndReportError(errorKey, `${minerSoftware} output error: ${errorKey}`);
-          hasErrors = true;
-          break;
-        }
+  private analyzeOutput(output: string, minerSoftware?: string): boolean {
+    try {
+      // Detect miner software if not provided
+      if (!minerSoftware) {
+        minerSoftware = this.detectMinerFromOutput(output) || this.getMinerFromFlightsheet();
       }
-      if (hasErrors) break;
-    }
 
-    // Check for recent activity using miner-specific patterns
-    const now = new Date();
-    const recentActivity = this.checkForRecentMinerActivity(lines, now, minerSoftware);
-    
-    if (!recentActivity) {
       this.loggingService.log(
-        `⚠️ No recent ${minerSoftware} activity detected (possible connection issue or pool difficulty adjustment)`,
+        `🔍 Analyzing output for ${minerSoftware || 'unknown'} miner`,
         'DEBUG',
         'miner-manager',
       );
-      // Don't treat lack of activity as an error unless combined with other issues
-      // This is especially important for XMRig which may have longer intervals between activities
-      // hasErrors = true; // Commented out to be less aggressive
-    }
 
-    return hasErrors;
+      // Get miner-specific error patterns
+      const errorPatterns = this.getErrorPatterns(minerSoftware);
+
+      let hasErrors = false;
+      const lines = output.split('\n').slice(-50); // Check last 50 lines
+      
+      for (const line of lines) {
+        for (const pattern of errorPatterns) {
+          if (pattern.test(line)) {
+            const errorKey = line.trim();
+            this.loggingService.log(
+              `🔍 Detected ${minerSoftware} error in output: ${errorKey}`,
+              'WARN',
+              'miner-manager',
+            );
+            
+            // Use smart error tracking instead of immediate API logging
+            this.trackAndReportError(errorKey, `${minerSoftware} output error: ${errorKey}`);
+            hasErrors = true;
+            break;
+          }
+        }
+        if (hasErrors) break;
+      }
+
+      // Check for recent activity using miner-specific patterns
+      const now = new Date();
+      const recentActivity = this.checkForRecentMinerActivity(lines, now, minerSoftware);
+      
+      if (!recentActivity) {
+        this.loggingService.log(
+          `⚠️ No recent ${minerSoftware} activity detected (possible connection issue or pool difficulty adjustment)`,
+          'DEBUG',
+          'miner-manager',
+        );
+        // Don't treat lack of activity as an error unless combined with other issues
+        // This is especially important for XMRig which may have longer intervals between activities
+        // hasErrors = true; // Commented out to be less aggressive
+      }
+
+      this.loggingService.log(
+        `✅ Output analysis completed for ${minerSoftware} miner (errors: ${hasErrors})`,
+        'DEBUG',
+        'miner-manager',
+      );
+
+      return hasErrors;
+    } catch (error) {
+      this.loggingService.log(
+        `❌ Error analyzing miner output: ${error instanceof Error ? error.message : String(error)}`,
+        'ERROR',
+        'miner-manager',
+      );
+      return false; // Return false to avoid triggering restarts on analysis errors
+    }
   }
 
   /**
@@ -1899,7 +1919,7 @@ export class MinerManagerService
    * Smart error tracking to prevent API spam
    * Only reports errors to API after multiple occurrences and with cooldown
    */
-  private async trackAndReportError(errorKey: string, fullMessage: string): Promise<void> {
+  private trackAndReportError(errorKey: string, fullMessage: string): void {
     const now = new Date();
     
     // Clean up old error entries periodically
@@ -1940,7 +1960,8 @@ export class MinerManagerService
       );
       
       errorEntry.lastReported = now;
-      await this.logMinerError(fullMessage);
+      // Don't await to avoid blocking health checks
+      void this.logMinerError(fullMessage);
     } else {
       this.loggingService.log(
         `⏳ Error not yet reported (${errorEntry.count}/${this.ERROR_REPORT_THRESHOLD}): ${errorKey}`,
