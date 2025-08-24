@@ -10,7 +10,15 @@ export class MinerSoftwareController {
    */
   @Get('compatibility')
   async getCompatibility() {
-    const compatibility = await this.minerSoftwareService.checkCPUCompatibility();
+    const compatibility = await Promise.race([
+      this.minerSoftwareService.checkCPUCompatibility(),
+      new Promise<any>((_, reject) =>
+        setTimeout(
+          () => reject(new Error('CPU compatibility check timeout after 15 seconds')),
+          15000,
+        ),
+      ),
+    ]);
     return {
       compatible: compatibility.hasAES && compatibility.is64Bit,
       details: compatibility,
@@ -22,7 +30,15 @@ export class MinerSoftwareController {
    */
   @Get('status')
   async getAllMinersStatus() {
-    return await this.minerSoftwareService.getAllMinersStatus();
+    return await Promise.race([
+      this.minerSoftwareService.getAllMinersStatus(),
+      new Promise<any>((_, reject) =>
+        setTimeout(
+          () => reject(new Error('All miners status check timeout after 20 seconds')),
+          20000,
+        ),
+      ),
+    ]);
   }
 
   /**

@@ -223,7 +223,15 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
       if (this.retryCount >= this.MAX_RETRIES) {
         // Reset retry counter to avoid continuous recovery attempts
         this.retryCount = Math.floor(this.MAX_RETRIES / 2);
-        await this.performRecoveryActions(osType);
+        await Promise.race([
+          this.performRecoveryActions(osType),
+          new Promise((_, reject) =>
+            setTimeout(
+              () => reject(new Error('Network recovery actions timeout after 60 seconds')),
+              60000,
+            ),
+          ),
+        ]);
       }
     } else {
       // Connection successful, increment consecutive successes
@@ -264,7 +272,15 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
       this.loggingService.log('✅ Network connectivity restored', 'INFO', 'network-monitoring');
       this.wasDisconnected = false;
       this.retryCount = 0;
-      await this.logNetworkRestored();
+      await Promise.race([
+        this.logNetworkRestored(),
+        new Promise((_, reject) =>
+          setTimeout(
+            () => reject(new Error('Network restoration logging timeout after 10 seconds')),
+            10000,
+          ),
+        ),
+      ]);
     }
 
     this.manageRetryPatterns(connectivityLost);

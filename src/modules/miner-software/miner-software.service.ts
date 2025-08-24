@@ -181,7 +181,15 @@ export class MinerSoftwareService {
       return { valid: false, issues, recommendations };
     }
 
-    const compatibility = await this.checkCPUCompatibility();
+    const compatibility = await Promise.race([
+      this.checkCPUCompatibility(),
+      new Promise<any>((_, reject) =>
+        setTimeout(
+          () => reject(new Error('CPU compatibility check timeout after 15 seconds')),
+          15000,
+        ),
+      ),
+    ]);
     const minerInfo = this.getMinerInfo(minerName);
 
     // Check CPU compatibility
@@ -309,7 +317,15 @@ export class MinerSoftwareService {
 
     for (const minerName of this.supportedMiners) {
       const info = this.getMinerInfo(minerName);
-      const validation = await this.validateMiner(minerName);
+      const validation = await Promise.race([
+        this.validateMiner(minerName),
+        new Promise<any>((_, reject) =>
+          setTimeout(
+            () => reject(new Error(`Miner validation timeout for ${minerName} after 10 seconds`)),
+            10000,
+          ),
+        ),
+      ]);
       
       result[minerName] = {
         ...info,
@@ -516,7 +532,15 @@ export class MinerSoftwareService {
    * Verify ccminer branch availability and download
    */
   async downloadOptimalCcminer(compatibility: SystemCompatibility): Promise<boolean> {
-    const ccBranch = await this.selectCcminerBranch(compatibility);
+    const ccBranch = await Promise.race([
+      this.selectCcminerBranch(compatibility),
+      new Promise<any>((_, reject) =>
+        setTimeout(
+          () => reject(new Error('CCMiner branch selection timeout after 10 seconds')),
+          10000,
+        ),
+      ),
+    ]);
     const ccminerDir = path.join(this.appsDir, 'ccminer');
     const ccminerPath = path.join(ccminerDir, 'ccminer');
     const configPath = path.join(ccminerDir, 'config.json');

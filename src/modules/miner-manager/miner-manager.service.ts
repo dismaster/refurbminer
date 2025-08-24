@@ -18,25 +18,25 @@ export class MinerManagerService
 {
   private static isInitialized = false;
   private minerScreen = 'miner-session';
-  
+
   // Consolidated monitoring
   private mainMonitoringInterval?: NodeJS.Timeout;
   private healthCheckInterval?: NodeJS.Timeout;
   private cleanupInterval?: NodeJS.Timeout;
-  
+
   // Monitoring cycle counters for staggered operations
   private monitoringCycle = 0;
-  
+
   private lastScheduleCheck: Date | null = null;
   private crashCount = 0;
   private readonly MAX_CRASHES = 3;
   private lastCrashTime?: Date;
-  
+
   // Add new properties to track manual stop status
   public isManuallyStoppedByUser = false;
   private manualStopTime?: Date;
   private readonly MANUAL_STOP_TIMEOUT = 10 * 60 * 1000; // 10 minutes
-  
+
   // Add restart cooldown to prevent too frequent restarts
   private lastRestartTime?: Date;
   private readonly RESTART_COOLDOWN = 5 * 60 * 1000; // 5 minutes between restarts
@@ -48,15 +48,21 @@ export class MinerManagerService
   private benchmarkStartTime?: Date;
   private lastBenchmarkStatus: boolean = false;
   private readonly BENCHMARK_STARTUP_GRACE = 2 * 60 * 1000; // 2 minutes grace period for benchmark startup
-  
+
   // Prevent multiple simultaneous auto-starts
   private isAutoStarting: boolean = false;
 
   // Smart error tracking to prevent spam to API backend
-  private errorTracker = new Map<string, { count: number; firstSeen: Date; lastSeen: Date; lastReported?: Date }>();
+  private errorTracker = new Map<
+    string,
+    { count: number; firstSeen: Date; lastSeen: Date; lastReported?: Date }
+  >();
   private readonly ERROR_REPORT_THRESHOLD = 3; // Report after 3 consecutive occurrences
   private readonly ERROR_REPORT_COOLDOWN = 5 * 60 * 1000; // 5 minutes between reports of same error
   private readonly ERROR_TRACKER_CLEANUP_INTERVAL = 30 * 60 * 1000; // Clean old errors after 30 minutes
+
+  // Prevent duplicate flightsheet fetches during startup
+  private isInitialStartup = true;
 
   constructor(
     private readonly loggingService: LoggingService,
@@ -84,7 +90,15 @@ export class MinerManagerService
     );
 
     this.clearIntervals();
-    await this.initializeMiner();
+    await Promise.race([
+      this.initializeMiner(),
+      new Promise((_, reject) =>
+        setTimeout(
+          () => reject(new Error('Miner initialization timeout after 30 seconds')),
+          30000,
+        ),
+      ),
+    ]);
     this.initializeMonitoring();
   }
 
@@ -174,18 +188,54 @@ export class MinerManagerService
         'DEBUG',
         'miner-manager',
       );
-      await this.configService.syncConfigWithApi();
+
+      // Add timeout protection for config sync to prevent hanging
+      try {
+        await Promise.race([
+          this.configService.syncConfigWithApi(),
+          new Promise((_, reject) =>
+            setTimeout(
+              () => reject(new Error('Config sync timeout after 30 seconds')),
+              30000,
+            ),
+          ),
+        ]);
+      } catch (error: any) {
+        if (error.message?.includes('timeout')) {
+          this.loggingService.log(
+            '⏰ Config sync timed out after 30 seconds, continuing with cached config',
+            'WARN',
+            'miner-manager',
+          );
+        } else {
+          this.loggingService.log(
+            `❌ Config sync failed: ${error.message}`,
+            'ERROR',
+            'miner-manager',
+          );
+        }
+        // Continue with cached config instead of failing completely
+      }
 
       // CRITICAL: Check flightsheet AFTER config sync to use updated miningCpus
-      this.loggingService.log(
-        '🔄 Checking for flightsheet updates...',
-        'DEBUG',
-        'miner-manager',
-      );
-      const updated = await this.fetchAndUpdateFlightsheet();
-      if (updated) {
-        await this.logMinerError('Flightsheet changed, restarting miner');
-        void this.restartMiner();
+      // Skip flightsheet fetch during initial startup - bootstrap will handle it
+      if (this.isInitialStartup) {
+        this.loggingService.log(
+          '🔄 Skipping flightsheet check during initial startup - bootstrap will handle first fetch',
+          'DEBUG',
+          'miner-manager',
+        );
+      } else {
+        this.loggingService.log(
+          '🔄 Checking for flightsheet updates...',
+          'DEBUG',
+          'miner-manager',
+        );
+        const updated = await this.fetchAndUpdateFlightsheet();
+        if (updated) {
+          await this.logMinerError('Flightsheet changed, restarting miner');
+          void this.restartMiner();
+        }
       }
 
       // Check if miner software changed and restart if needed
@@ -336,7 +386,7 @@ export class MinerManagerService
             'INFO',
             'miner-manager',
           );
-          
+
           const stopped = this.stopMiner();
           if (!stopped) {
             this.loggingService.log(
@@ -357,7 +407,7 @@ export class MinerManagerService
           'INFO',
           'miner-manager',
         );
-        
+
         const started = await this.startMiner();
         if (started) {
           this.loggingService.log(
@@ -450,8 +500,10 @@ export class MinerManagerService
       }
 
       // Check if we're in benchmark startup grace period
-      const isInBenchmarkGracePeriod = this.benchmarkStartTime && 
-        (Date.now() - this.benchmarkStartTime.getTime()) < this.BENCHMARK_STARTUP_GRACE;
+      const isInBenchmarkGracePeriod =
+        this.benchmarkStartTime &&
+        Date.now() - this.benchmarkStartTime.getTime() <
+          this.BENCHMARK_STARTUP_GRACE;
 
       this.loggingService.log(
         `🔍 Health check: Should mine=${shouldBeMining}, Is running=${isMinerRunning}, Benchmark grace=${isInBenchmarkGracePeriod}`,
@@ -517,8 +569,11 @@ export class MinerManagerService
         if (hasErrors) {
           // Check if we're in restart cooldown period
           const now = new Date();
-          if (this.lastRestartTime && 
-              now.getTime() - this.lastRestartTime.getTime() < this.RESTART_COOLDOWN) {
+          if (
+            this.lastRestartTime &&
+            now.getTime() - this.lastRestartTime.getTime() <
+              this.RESTART_COOLDOWN
+          ) {
             this.loggingService.log(
               '⏳ Restart cooldown active, skipping restart to prevent too frequent restarts',
               'DEBUG',
@@ -526,7 +581,7 @@ export class MinerManagerService
             );
             return;
           }
-          
+
           this.loggingService.log(
             '⚠️ Miner errors detected in output, restarting miner',
             'WARN',
@@ -600,27 +655,24 @@ export class MinerManagerService
 
       // Try in-memory capture first (faster, no disk I/O)
       let output = '';
-      
+
       try {
         this.loggingService.log(
           `🚀 Attempting in-memory miner output capture`,
           'DEBUG',
           'miner-manager',
         );
-        
+
         // Method 1: Direct file-based capture using screen hardcopy to temporary file
         const tempOutput1 = `storage/temp-output1-${Date.now()}.txt`;
         try {
-          execSync(
-            `screen -S ${this.minerScreen} -X hardcopy ${tempOutput1}`,
-            {
-              timeout: 5000,
-            },
-          );
-          
+          execSync(`screen -S ${this.minerScreen} -X hardcopy ${tempOutput1}`, {
+            timeout: 5000,
+          });
+
           // Wait for file to be written
           await new Promise((resolve) => setTimeout(resolve, 500));
-          
+
           if (fs.existsSync(tempOutput1)) {
             output = fs.readFileSync(tempOutput1, 'utf8');
             try {
@@ -628,7 +680,7 @@ export class MinerManagerService
             } catch {
               // Ignore cleanup errors
             }
-            
+
             this.loggingService.log(
               `✅ Successfully captured miner output via method 1 (${output.length} chars)`,
               'DEBUG',
@@ -645,10 +697,10 @@ export class MinerManagerService
                 timeout: 3000,
               },
             );
-            
+
             // Wait for file to be written
             await new Promise((resolve) => setTimeout(resolve, 300));
-            
+
             if (fs.existsSync(tempOutput2)) {
               output = fs.readFileSync(tempOutput2, 'utf8');
               try {
@@ -656,7 +708,7 @@ export class MinerManagerService
               } catch {
                 // Ignore cleanup errors
               }
-              
+
               this.loggingService.log(
                 `✅ Successfully captured miner output via method 2 (${output.length} chars)`,
                 'DEBUG',
@@ -686,21 +738,24 @@ export class MinerManagerService
           'DEBUG',
           'miner-manager',
         );
-        
+
         try {
           // Ensure storage directory exists
           this.ensureStorageDirectory();
-          
+
           const hardcopyFile = `storage/miner-health-${Date.now()}.txt`;
-          
+
           // Create hardcopy of screen session with timeout
-          execSync(`screen -S ${this.minerScreen} -X hardcopy ${hardcopyFile}`, {
-            timeout: 10000,
-          });
-          
+          execSync(
+            `screen -S ${this.minerScreen} -X hardcopy ${hardcopyFile}`,
+            {
+              timeout: 10000,
+            },
+          );
+
           // Wait for file to be written
           await new Promise((resolve) => setTimeout(resolve, 1000));
-          
+
           if (fs.existsSync(hardcopyFile)) {
             output = fs.readFileSync(hardcopyFile, 'utf8');
             this.loggingService.log(
@@ -736,7 +791,7 @@ export class MinerManagerService
           'DEBUG',
           'miner-manager',
         );
-        
+
         try {
           // Alternative: Try to capture output to a temporary file with explicit timeout command
           const altHardcopyFile = `storage/miner-alt-${Date.now()}.txt`;
@@ -746,10 +801,10 @@ export class MinerManagerService
               timeout: 10000,
             },
           );
-          
+
           // Wait a bit longer for the file
           await new Promise((resolve) => setTimeout(resolve, 1500));
-          
+
           if (fs.existsSync(altHardcopyFile)) {
             output = fs.readFileSync(altHardcopyFile, 'utf8');
             this.loggingService.log(
@@ -779,7 +834,7 @@ export class MinerManagerService
           'DEBUG',
           'miner-manager',
         );
-        
+
         // Check if the screen session is responsive by sending a simple command
         try {
           execSync(`screen -S ${this.minerScreen} -X info`, { timeout: 5000 });
@@ -820,7 +875,8 @@ export class MinerManagerService
     try {
       // Detect miner software if not provided
       if (!minerSoftware) {
-        minerSoftware = this.detectMinerFromOutput(output) || this.getMinerFromFlightsheet();
+        minerSoftware =
+          this.detectMinerFromOutput(output) || this.getMinerFromFlightsheet();
       }
 
       this.loggingService.log(
@@ -834,7 +890,7 @@ export class MinerManagerService
 
       let hasErrors = false;
       const lines = output.split('\n').slice(-50); // Check last 50 lines
-      
+
       for (const line of lines) {
         for (const pattern of errorPatterns) {
           if (pattern.test(line)) {
@@ -844,9 +900,12 @@ export class MinerManagerService
               'WARN',
               'miner-manager',
             );
-            
+
             // Use smart error tracking instead of immediate API logging
-            this.trackAndReportError(errorKey, `${minerSoftware} output error: ${errorKey}`);
+            this.trackAndReportError(
+              errorKey,
+              `${minerSoftware} output error: ${errorKey}`,
+            );
             hasErrors = true;
             break;
           }
@@ -856,8 +915,12 @@ export class MinerManagerService
 
       // Check for recent activity using miner-specific patterns
       const now = new Date();
-      const recentActivity = this.checkForRecentMinerActivity(lines, now, minerSoftware);
-      
+      const recentActivity = this.checkForRecentMinerActivity(
+        lines,
+        now,
+        minerSoftware,
+      );
+
       if (!recentActivity) {
         this.loggingService.log(
           `⚠️ No recent ${minerSoftware} activity detected (possible connection issue or pool difficulty adjustment)`,
@@ -891,21 +954,25 @@ export class MinerManagerService
    */
   private detectMinerFromOutput(output: string): string | null {
     // XMRig patterns
-    if (output.includes('XMRig/') || 
-        output.includes('randomx') || 
-        output.includes('new job from') ||
-        output.includes('algo rx/')) {
+    if (
+      output.includes('XMRig/') ||
+      output.includes('randomx') ||
+      output.includes('new job from') ||
+      output.includes('algo rx/')
+    ) {
       return 'xmrig';
     }
-    
+
     // CCMiner patterns
-    if (output.includes('ccminer') || 
-        output.includes('stratum+tcp') ||
-        output.includes('accepted') ||
-        output.includes('kH/s')) {
+    if (
+      output.includes('ccminer') ||
+      output.includes('stratum+tcp') ||
+      output.includes('accepted') ||
+      output.includes('kH/s')
+    ) {
       return 'ccminer';
     }
-    
+
     return null;
   }
 
@@ -984,11 +1051,11 @@ export class MinerManagerService
       /\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\]/, // XMRig with milliseconds
       /(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/, // ccminer format without brackets
     ];
-    
+
     for (const line of lines.reverse()) {
       // Check most recent lines first
       let logTime: Date | null = null;
-      
+
       // Try different timestamp patterns
       for (const pattern of timestampPatterns) {
         const match = line.match(pattern);
@@ -1009,16 +1076,16 @@ export class MinerManagerService
           }
         }
       }
-      
+
       if (logTime) {
         const timeDiff = now.getTime() - logTime.getTime();
-        
+
         // Allow up to 20 minutes of inactivity to account for pool difficulty adjustments
         // Mining pools can adjust difficulty causing longer periods between shares
         if (timeDiff < 20 * 60 * 1000) {
           // Check if it's meaningful activity using miner-specific patterns
           const activityPatterns = this.getActivityPatterns(minerSoftware);
-          
+
           for (const pattern of activityPatterns) {
             if (pattern.test(line)) {
               this.loggingService.log(
@@ -1032,7 +1099,7 @@ export class MinerManagerService
         }
       }
     }
-    
+
     return false;
   }
 
@@ -1108,7 +1175,7 @@ export class MinerManagerService
         'INFO',
         'miner-manager',
       );
-      
+
       // Auto-start miner if benchmark mode is active but miner is not running
       if (!this.isMinerRunning() && !this.isAutoStarting) {
         this.isAutoStarting = true;
@@ -1124,7 +1191,7 @@ export class MinerManagerService
           });
         }, 1000);
       }
-      
+
       return true;
     }
 
@@ -1245,10 +1312,10 @@ export class MinerManagerService
         encoding: 'utf8',
         timeout: 5000,
       });
-      
+
       // Look for our specific session name
       const sessionExists = screenOutput.includes(this.minerScreen);
-      
+
       if (!sessionExists) {
         this.loggingService.log(
           `📋 No screen session '${this.minerScreen}' found`,
@@ -1272,7 +1339,7 @@ export class MinerManagerService
             this.cleanupAllMinerSessions();
             return false;
           }
-          
+
           // Session exists and is not dead
           this.loggingService.log(
             `✅ Screen session '${this.minerScreen}' is running: ${line.trim()}`,
@@ -1282,7 +1349,7 @@ export class MinerManagerService
           return true;
         }
       }
-      
+
       return false;
     } catch (error) {
       this.loggingService.log(
@@ -1367,7 +1434,7 @@ export class MinerManagerService
                 'WARN',
                 'miner-manager',
               );
-              
+
               // If screen command failed, try to remove the session file manually
               this.cleanupOrphanedSessionFile(sessionId);
             }
@@ -1393,7 +1460,7 @@ export class MinerManagerService
       // We'll try common locations
       const username = process.env.USER || process.env.USERNAME || 'root';
       const sessionFileName = `${sessionId}.${this.minerScreen}`;
-      
+
       const possiblePaths = [
         `/tmp/uscreens/S-${username}/${sessionFileName}`,
         `/var/run/screen/S-${username}/${sessionFileName}`,
@@ -1435,7 +1502,7 @@ export class MinerManagerService
             .trim()
             .split('\n')
             .filter((path) => path.trim());
-          
+
           for (const foundPath of foundPaths) {
             try {
               if (fs.existsSync(foundPath)) {
@@ -1527,7 +1594,7 @@ export class MinerManagerService
           'INFO',
           'miner-manager',
         );
-        
+
         if (!fs.existsSync(configPath) || !fs.existsSync(minerExecutable)) {
           const error = `Cannot start miner: Missing files at ${configPath} or ${minerExecutable} after installation`;
           this.loggingService.log(`❌ ${error}`, 'ERROR', 'miner-manager');
@@ -1602,10 +1669,10 @@ export class MinerManagerService
 
   public async restartMiner(): Promise<boolean> {
     this.loggingService.log('🔄 Restarting miner...', 'INFO', 'miner-manager');
-    
+
     // Record restart time for cooldown tracking
     this.lastRestartTime = new Date();
-    
+
     const stopped = this.stopMiner();
     if (!stopped) {
       const error = 'Failed to restart: Could not stop miner';
@@ -1632,7 +1699,18 @@ export class MinerManagerService
 
   async fetchAndUpdateFlightsheet(): Promise<boolean> {
     try {
-      const updated = await this.flightsheetService.updateFlightsheet();
+      // Add timeout protection for flightsheet update to prevent hanging
+      const updated = (await Promise.race([
+        this.flightsheetService.updateFlightsheet(),
+        new Promise((_, reject) =>
+          setTimeout(
+            () =>
+              reject(new Error('Flightsheet update timeout after 25 seconds')),
+            25000,
+          ),
+        ),
+      ])) as boolean;
+
       const miner = this.getMinerFromFlightsheet();
 
       if (!miner) {
@@ -1641,11 +1719,19 @@ export class MinerManagerService
       }
 
       return updated;
-    } catch (error) {
-      await this.logMinerError(
-        `Failed to update flightsheet: ${error.message}`,
-        error.stack,
-      );
+    } catch (error: any) {
+      if (error.message?.includes('timeout')) {
+        this.loggingService.log(
+          '⏰ Flightsheet update timed out after 25 seconds',
+          'WARN',
+          'miner-manager',
+        );
+      } else {
+        await this.logMinerError(
+          `Failed to update flightsheet: ${error.message}`,
+          error.stack,
+        );
+      }
       return false;
     }
   }
@@ -1660,6 +1746,9 @@ export class MinerManagerService
         'INFO',
         'miner-manager',
       );
+
+      // Mark that initial startup is complete and future monitoring should include flightsheet checks
+      this.isInitialStartup = false;
 
       const updated = await this.fetchAndUpdateFlightsheet();
       if (updated) {
@@ -1709,19 +1798,22 @@ export class MinerManagerService
     // Optimize schedule checking by caching config and only checking when necessary
     const now = new Date();
     const currentTime = now.toTimeString().split(' ')[0].substring(0, 5);
-    
+
     // Only check schedules if we haven't checked recently (unless it's a schedule boundary time)
     if (this.lastScheduleCheck) {
-      const timeSinceLastCheck = now.getTime() - this.lastScheduleCheck.getTime();
-      const isScheduleBoundary = currentTime.endsWith(':00') || currentTime.endsWith(':30'); // Check on hour/half-hour boundaries
-      
-      if (timeSinceLastCheck < 60000 && !isScheduleBoundary) { // Less than 1 minute and not a boundary
+      const timeSinceLastCheck =
+        now.getTime() - this.lastScheduleCheck.getTime();
+      const isScheduleBoundary =
+        currentTime.endsWith(':00') || currentTime.endsWith(':30'); // Check on hour/half-hour boundaries
+
+      if (timeSinceLastCheck < 60000 && !isScheduleBoundary) {
+        // Less than 1 minute and not a boundary
         return; // Skip this check to reduce config reads
       }
     }
-    
+
     this.lastScheduleCheck = now;
-    
+
     if (!config) {
       this.loggingService.log(
         '⚠️ Cannot check schedules: No config found',
@@ -1737,7 +1829,8 @@ export class MinerManagerService
 
     // Check for multiple sessions and log warning (only every 5 minutes to reduce noise)
     const sessionCount = this.getMinerSessionCount();
-    if (sessionCount > 1 && currentTime.endsWith(':00')) { // Only log on hour boundaries
+    if (sessionCount > 1 && currentTime.endsWith(':00')) {
+      // Only log on hour boundaries
       this.loggingService.log(
         `⚠️ Multiple miner sessions detected (${sessionCount}). This may indicate session cleanup issues.`,
         'WARN',
@@ -1921,12 +2014,13 @@ export class MinerManagerService
    */
   private trackAndReportError(errorKey: string, fullMessage: string): void {
     const now = new Date();
-    
+
     // Clean up old error entries periodically
-    if (Math.random() < 0.1) { // 10% chance on each call
+    if (Math.random() < 0.1) {
+      // 10% chance on each call
       this.cleanupOldErrorEntries(now);
     }
-    
+
     // Get or create error tracking entry
     let errorEntry = this.errorTracker.get(errorKey);
     if (!errorEntry) {
@@ -1937,28 +2031,28 @@ export class MinerManagerService
       };
       this.errorTracker.set(errorKey, errorEntry);
     }
-    
+
     // Update error tracking
     errorEntry.count++;
     errorEntry.lastSeen = now;
-    
+
     // Log locally for debugging
     this.loggingService.log(
       `📊 Error tracking: "${errorKey}" - Count: ${errorEntry.count}/${this.ERROR_REPORT_THRESHOLD}`,
       'DEBUG',
       'miner-manager',
     );
-    
+
     // Check if we should report to API
     const shouldReport = this.shouldReportError(errorEntry, now);
-    
+
     if (shouldReport) {
       this.loggingService.log(
         `📤 Reporting error to API after ${errorEntry.count} occurrences: ${errorKey}`,
         'INFO',
         'miner-manager',
       );
-      
+
       errorEntry.lastReported = now;
       // Don't await to avoid blocking health checks
       void this.logMinerError(fullMessage);
@@ -1974,19 +2068,28 @@ export class MinerManagerService
   /**
    * Determine if error should be reported to API based on tracking rules
    */
-  private shouldReportError(errorEntry: { count: number; firstSeen: Date; lastSeen: Date; lastReported?: Date }, now: Date): boolean {
+  private shouldReportError(
+    errorEntry: {
+      count: number;
+      firstSeen: Date;
+      lastSeen: Date;
+      lastReported?: Date;
+    },
+    now: Date,
+  ): boolean {
     // Report if we've reached the threshold
     if (errorEntry.count >= this.ERROR_REPORT_THRESHOLD) {
       // Check cooldown if already reported before
       if (errorEntry.lastReported) {
-        const timeSinceLastReport = now.getTime() - errorEntry.lastReported.getTime();
+        const timeSinceLastReport =
+          now.getTime() - errorEntry.lastReported.getTime();
         if (timeSinceLastReport < this.ERROR_REPORT_COOLDOWN) {
           return false; // Still in cooldown period
         }
       }
       return true; // Ready to report
     }
-    
+
     return false; // Haven't reached threshold yet
   }
 
@@ -2237,9 +2340,19 @@ export class MinerManagerService
         'miner-manager',
       );
 
-      // Check system compatibility first
-      const compatibility =
-        await this.minerSoftwareService.checkCPUCompatibility();
+      // Check system compatibility first with timeout protection
+      const compatibility = (await Promise.race([
+        this.minerSoftwareService.checkCPUCompatibility(),
+        new Promise((_, reject) =>
+          setTimeout(
+            () =>
+              reject(
+                new Error('CPU compatibility check timeout after 15 seconds'),
+              ),
+            15000,
+          ),
+        ),
+      ])) as any;
 
       this.loggingService.log(
         `📋 System compatibility - OS: ${compatibility.os}, Arch: ${compatibility.architecture}, Termux: ${compatibility.isTermux}, AES: ${compatibility.hasAES}`,

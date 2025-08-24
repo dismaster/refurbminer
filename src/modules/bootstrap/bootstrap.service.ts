@@ -60,7 +60,15 @@ export class BootstrapService implements OnModuleInit {
       );
 
       while (!validMinerID) {
-        validMinerID = await this.registerMiner();
+        validMinerID = await Promise.race([
+          this.registerMiner(),
+          new Promise<boolean>((_, reject) =>
+            setTimeout(
+              () => reject(new Error('Miner registration timeout after 30 seconds')),
+              30000,
+            ),
+          ),
+        ]);
         if (!validMinerID) {
           this.loggingService.log(
             'Waiting for backend-assigned minerId. Retrying registration in 10 seconds...',

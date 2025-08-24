@@ -100,9 +100,15 @@ export class ActionsService implements OnModuleInit {
 
       try {
         // Fetch pending actions from API - this will use the miners-actions/miner/:minerId/pending endpoint
-        const response = await this.apiService.getPendingMinerActions(
-          config.minerId,
-        );
+        const response = await Promise.race([
+          this.apiService.getPendingMinerActions(config.minerId),
+          new Promise((_, reject) =>
+            setTimeout(
+              () => reject(new Error('Pending actions fetch timeout after 15 seconds')),
+              15000,
+            ),
+          ),
+        ]);
         const actions = response as unknown as MinerAction[];
 
         clearTimeout(actionCheckTimeout); // Clear timeout if successful
@@ -164,12 +170,8 @@ export class ActionsService implements OnModuleInit {
       // Check if benchmark mode is active before executing critical actions
       if (this.shouldSkipActionDuringBenchmark(action.command)) {
         const message = `Action ${action.command} skipped - benchmark mode is active`;
-        this.loggingService.log(
-          `🚫 ${message}`,
-          'WARN',
-          'actions',
-        );
-        
+        this.loggingService.log(`🚫 ${message}`, 'WARN', 'actions');
+
         // Mark action as failed with specific reason
         await this.apiService.updateMinerActionStatus(
           action._id,
@@ -243,9 +245,11 @@ export class ActionsService implements OnModuleInit {
   /**
    * Check if an action should be skipped during benchmark mode
    */
-  private shouldSkipActionDuringBenchmark(command: MinerActionCommand): boolean {
+  private shouldSkipActionDuringBenchmark(
+    command: MinerActionCommand,
+  ): boolean {
     const isBenchmarkActive = this.configService.getBenchmarkFlag();
-    
+
     if (!isBenchmarkActive) {
       return false; // Not in benchmark mode, allow all actions
     }
@@ -260,7 +264,7 @@ export class ActionsService implements OnModuleInit {
     ];
 
     const shouldSkip = blockedActions.includes(command);
-    
+
     if (shouldSkip) {
       this.loggingService.log(
         `🚫 Blocking ${command} action - benchmark mode is active`,
@@ -324,7 +328,15 @@ export class ActionsService implements OnModuleInit {
                 'DEBUG',
                 'actions',
               );
-              await execAsync('su -c reboot');
+              await Promise.race([
+                execAsync('su -c reboot'),
+                new Promise((_, reject) =>
+                  setTimeout(
+                    () => reject(new Error('Su reboot timeout after 15 seconds')),
+                    15000,
+                  ),
+                ),
+              ]);
               return; // If successful, exit early
             } catch (suError) {
               this.loggingService.log(
@@ -342,26 +354,49 @@ export class ActionsService implements OnModuleInit {
                 'DEBUG',
                 'actions',
               );
-              
-              // Check if adb command exists
-              await execAsync('command -v adb');
-              
-              // Check if device is connected to ADB
-              const adbDevices = await execAsync('adb devices');
-              const deviceLines = adbDevices.stdout.split('\n').filter(line => 
-                line.trim() && !line.includes('List of devices') && line.includes('device')
-              );
-              
+
+              // Check if adb command exists with timeout protection
+              await Promise.race([
+                execAsync('command -v adb'),
+                new Promise((_, reject) =>
+                  setTimeout(
+                    () =>
+                      reject(new Error('ADB check timeout after 5 seconds')),
+                    5000,
+                  ),
+                ),
+              ]);
+
+              // Check if device is connected to ADB with timeout protection
+              const adbDevices = (await Promise.race([
+                execAsync('adb devices'),
+                new Promise((_, reject) =>
+                  setTimeout(
+                    () =>
+                      reject(new Error('ADB devices timeout after 10 seconds')),
+                    10000,
+                  ),
+                ),
+              ])) as any;
+              const deviceLines = adbDevices.stdout
+                .split('\n')
+                .filter(
+                  (line) =>
+                    line.trim() &&
+                    !line.includes('List of devices') &&
+                    line.includes('device'),
+                );
+
               if (deviceLines.length === 0) {
                 throw new Error('No ADB devices connected');
               }
-              
+
               this.loggingService.log(
                 `Found ${deviceLines.length} ADB device(s) connected, attempting reboot`,
                 'INFO',
                 'actions',
               );
-              
+
               // Try adb reboot (more direct than adb shell reboot)
               await execAsync('adb reboot');
               this.loggingService.log(
@@ -376,7 +411,7 @@ export class ActionsService implements OnModuleInit {
                 'DEBUG',
                 'actions',
               );
-              
+
               // Fallback: try adb shell reboot as secondary method
               try {
                 this.loggingService.log(
@@ -465,9 +500,9 @@ export class ActionsService implements OnModuleInit {
           'INFO',
           'actions',
         );
-        
+
         await execAsync('pkg update -y && pkg upgrade -y', { timeout: 300000 }); // 5 minute timeout
-        
+
         this.loggingService.log(
           '✅ Termux packages updated successfully',
           'INFO',
@@ -486,39 +521,67 @@ export class ActionsService implements OnModuleInit {
         let upgradeCommand = '';
 
         try {
-          // Check for apt (Debian/Ubuntu)
-          await execAsync('which apt-get');
+          // Check for apt (Debian/Ubuntu) with timeout protection
+          await Promise.race([
+            execAsync('which apt-get'),
+            new Promise((_, reject) =>
+              setTimeout(
+                () => reject(new Error('Package manager check timeout after 5 seconds')),
+                5000,
+              ),
+            ),
+          ]);
           updateCommand = 'sudo apt-get update -y';
           upgradeCommand = 'sudo apt-get upgrade -y';
-          this.loggingService.log('📦 Using APT package manager', 'INFO', 'actions');
+          this.loggingService.log(
+            '📦 Using APT package manager',
+            'INFO',
+            'actions',
+          );
         } catch {
           try {
             // Check for yum (RHEL/CentOS)
             await execAsync('which yum');
             updateCommand = 'sudo yum check-update';
             upgradeCommand = 'sudo yum update -y';
-            this.loggingService.log('📦 Using YUM package manager', 'INFO', 'actions');
+            this.loggingService.log(
+              '📦 Using YUM package manager',
+              'INFO',
+              'actions',
+            );
           } catch {
             try {
               // Check for dnf (Fedora)
               await execAsync('which dnf');
               updateCommand = 'sudo dnf check-update';
               upgradeCommand = 'sudo dnf upgrade -y';
-              this.loggingService.log('📦 Using DNF package manager', 'INFO', 'actions');
+              this.loggingService.log(
+                '📦 Using DNF package manager',
+                'INFO',
+                'actions',
+              );
             } catch {
               try {
                 // Check for pacman (Arch Linux)
                 await execAsync('which pacman');
                 updateCommand = 'sudo pacman -Sy';
                 upgradeCommand = 'sudo pacman -Su --noconfirm';
-                this.loggingService.log('📦 Using Pacman package manager', 'INFO', 'actions');
+                this.loggingService.log(
+                  '📦 Using Pacman package manager',
+                  'INFO',
+                  'actions',
+                );
               } catch {
                 try {
                   // Check for zypper (openSUSE)
                   await execAsync('which zypper');
                   updateCommand = 'sudo zypper refresh';
                   upgradeCommand = 'sudo zypper update -y';
-                  this.loggingService.log('📦 Using Zypper package manager', 'INFO', 'actions');
+                  this.loggingService.log(
+                    '📦 Using Zypper package manager',
+                    'INFO',
+                    'actions',
+                  );
                 } catch {
                   this.loggingService.log(
                     '⚠️ No supported package manager found, skipping system updates',
@@ -534,10 +597,18 @@ export class ActionsService implements OnModuleInit {
 
         if (updateCommand && upgradeCommand) {
           // Run update command
-          this.loggingService.log(`🔄 Running: ${updateCommand}`, 'INFO', 'actions');
+          this.loggingService.log(
+            `🔄 Running: ${updateCommand}`,
+            'INFO',
+            'actions',
+          );
           try {
             await execAsync(updateCommand, { timeout: 300000 }); // 5 minute timeout
-            this.loggingService.log('✅ Package index updated successfully', 'INFO', 'actions');
+            this.loggingService.log(
+              '✅ Package index updated successfully',
+              'INFO',
+              'actions',
+            );
           } catch (updateError) {
             this.loggingService.log(
               `⚠️ Package update command failed (continuing anyway): ${updateError instanceof Error ? updateError.message : String(updateError)}`,
@@ -547,10 +618,18 @@ export class ActionsService implements OnModuleInit {
           }
 
           // Run upgrade command
-          this.loggingService.log(`⬆️ Running: ${upgradeCommand}`, 'INFO', 'actions');
+          this.loggingService.log(
+            `⬆️ Running: ${upgradeCommand}`,
+            'INFO',
+            'actions',
+          );
           try {
             await execAsync(upgradeCommand, { timeout: 600000 }); // 10 minute timeout
-            this.loggingService.log('✅ System packages upgraded successfully', 'INFO', 'actions');
+            this.loggingService.log(
+              '✅ System packages upgraded successfully',
+              'INFO',
+              'actions',
+            );
           } catch (upgradeError) {
             this.loggingService.log(
               `⚠️ Package upgrade command failed: ${upgradeError instanceof Error ? upgradeError.message : String(upgradeError)}`,
@@ -613,8 +692,9 @@ export class ActionsService implements OnModuleInit {
 
       // Always download the latest update script from GitHub
       const updateScriptPath = `${homeDir}/update_refurbminer.sh`;
-      const scriptUrl = 'https://raw.githubusercontent.com/dismaster/refurbminer_tools/refs/heads/main/update_refurbminer.sh';
-      
+      const scriptUrl =
+        'https://raw.githubusercontent.com/dismaster/refurbminer_tools/refs/heads/main/update_refurbminer.sh';
+
       this.loggingService.log(
         '⬇️ Downloading latest update script from GitHub...',
         'INFO',
@@ -641,9 +721,15 @@ export class ActionsService implements OnModuleInit {
 
       // Download the latest script from the repository
       try {
-        await execAsync(
-          `wget -q -O ${updateScriptPath} "${scriptUrl}"`,
-        );
+        await Promise.race([
+          execAsync(`wget -q -O ${updateScriptPath} "${scriptUrl}"`),
+          new Promise((_, reject) =>
+            setTimeout(
+              () => reject(new Error('Script download timeout after 30 seconds')),
+              30000,
+            ),
+          ),
+        ]);
         this.loggingService.log(
           '✅ Downloaded latest update script successfully',
           'INFO',
@@ -655,7 +741,7 @@ export class ActionsService implements OnModuleInit {
           'ERROR',
           'actions',
         );
-        
+
         // Try curl as fallback
         try {
           this.loggingService.log(
@@ -663,9 +749,15 @@ export class ActionsService implements OnModuleInit {
             'DEBUG',
             'actions',
           );
-          await execAsync(
-            `curl -s -o ${updateScriptPath} "${scriptUrl}"`,
-          );
+          await Promise.race([
+            execAsync(`curl -s -o ${updateScriptPath} "${scriptUrl}"`),
+            new Promise((_, reject) =>
+              setTimeout(
+                () => reject(new Error('Curl download timeout after 30 seconds')),
+                30000,
+              ),
+            ),
+          ]);
           this.loggingService.log(
             '✅ Downloaded update script using curl',
             'INFO',
@@ -713,8 +805,8 @@ export class ActionsService implements OnModuleInit {
         // Create a comprehensive wrapper script that handles the entire update process
         const wrapperPath = `${homeDir}/update_wrapper.sh`;
         const logPath = `${homeDir}/update_log.txt`;
-        
-const wrapperContent = `#!/data/data/com.termux/files/usr/bin/bash
+
+        const wrapperContent = `#!/data/data/com.termux/files/usr/bin/bash
 # RefurbMiner Termux Update Wrapper Script
 # Generated at $(date)
 
@@ -811,7 +903,7 @@ rm -f ${wrapperPath} 2>/dev/null || true
         try {
           fs.writeFileSync(wrapperPath, wrapperContent);
           await execAsync(`chmod +x ${wrapperPath}`);
-          
+
           this.loggingService.log(
             `📝 Created wrapper script at: ${wrapperPath}`,
             'DEBUG',
@@ -828,7 +920,9 @@ rm -f ${wrapperPath} 2>/dev/null || true
 
         // Create a visual indicator for the user that update is happening
         try {
-          await execAsync('termux-toast "RefurbMiner update starting, please wait..." 2>/dev/null || true');
+          await execAsync(
+            'termux-toast "RefurbMiner update starting, please wait..." 2>/dev/null || true',
+          );
         } catch {
           // Toast might not be available, continue anyway
         }
@@ -840,10 +934,12 @@ rm -f ${wrapperPath} 2>/dev/null || true
             'INFO',
             'actions',
           );
-          
+
           // Use a more robust execution method for Termux
-          await execAsync(`nohup bash ${wrapperPath} </dev/null >/dev/null 2>&1 &`);
-          
+          await execAsync(
+            `nohup bash ${wrapperPath} </dev/null >/dev/null 2>&1 &`,
+          );
+
           this.loggingService.log(
             '✅ Update wrapper launched successfully',
             'INFO',
@@ -855,7 +951,7 @@ rm -f ${wrapperPath} 2>/dev/null || true
             'ERROR',
             'actions',
           );
-          
+
           // Fallback: try direct execution
           try {
             this.loggingService.log(

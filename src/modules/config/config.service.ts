@@ -72,14 +72,17 @@ export class ConfigService implements OnModuleInit {
   private syncInterval: NodeJS.Timeout;
   private apiUrl: string;
   private readonly MAX_BACKUPS = 5; // Maximum number of backup files to keep
-  
+
   // Enhanced cache to prevent excessive file reads within the same minute
   private configCache: { data: Config | null; timestamp: number } | null = null;
   private readonly CACHE_TTL = 60000; // 1 minute - longer cache for better performance
   private isLoading: boolean = false; // Prevent multiple simultaneous reads
 
   // API response cache to prevent excessive API calls
-  private apiCache: { data: ApiConfigResponse | null; timestamp: number } | null = null;
+  private apiCache: {
+    data: ApiConfigResponse | null;
+    timestamp: number;
+  } | null = null;
   private readonly API_CACHE_TTL = 30000; // 30 seconds for API responses
 
   constructor(
@@ -98,7 +101,7 @@ export class ConfigService implements OnModuleInit {
 
     // Check if config exists and is valid, restore from backup if needed
     const configValid = await this.ensureValidConfig();
-    
+
     if (!configValid) {
       this.loggingService.log(
         'Failed to ensure valid config even after backup restoration attempts',
@@ -146,7 +149,10 @@ export class ConfigService implements OnModuleInit {
     try {
       // Check if cache is still valid
       const now = Date.now();
-      if (this.configCache && (now - this.configCache.timestamp) < this.CACHE_TTL) {
+      if (
+        this.configCache &&
+        now - this.configCache.timestamp < this.CACHE_TTL
+      ) {
         // Only log in DEBUG to reduce noise in logs
         this.loggingService.log(
           '📋 Using cached config data',
@@ -182,11 +188,11 @@ export class ConfigService implements OnModuleInit {
 
       const configData = fs.readFileSync(this.configPath, 'utf8');
       const config: Config = JSON.parse(configData);
-      
+
       // Update cache
       this.configCache = { data: config, timestamp: now };
       this.isLoading = false;
-      
+
       // Only log successful loads in DEBUG to reduce noise
       this.loggingService.log(
         '✅ Config loaded successfully and cached',
@@ -209,20 +215,20 @@ export class ConfigService implements OnModuleInit {
     try {
       // Write new config first
       fs.writeFileSync(this.configPath, JSON.stringify(config, null, 2));
-      
+
       // Update cache with the new config instead of invalidating it
       // This prevents unnecessary file reads right after saving
       this.configCache = { data: config, timestamp: Date.now() };
-      
+
       // Only create backup if not too recent
       this.createBackupIfNeeded();
-      
+
       this.loggingService.log(
         '✅ Config saved successfully',
         'DEBUG',
         'config',
       );
-      
+
       return true;
     } catch (error) {
       this.loggingService.log(
@@ -294,12 +300,20 @@ export class ConfigService implements OnModuleInit {
         'config',
       );
 
-      const response = await firstValueFrom(this.httpService.get(url));
+      const response = (await Promise.race([
+        firstValueFrom(this.httpService.get(url)),
+        new Promise((_, reject) =>
+          setTimeout(
+            () => reject(new Error('Config sync timeout after 20 seconds')),
+            20000,
+          ),
+        ),
+      ])) as any;
 
       if (response.status !== 200) {
         throw new Error(`API returned ${response.status}`);
       }
-      
+
       // Type-safe API response handling
       const apiConfig = response.data as ApiConfigResponse;
       this.loggingService.log(
@@ -309,7 +323,10 @@ export class ConfigService implements OnModuleInit {
       );
 
       // Only log minerSoftware changes, not every sync
-      if (apiConfig.minerSoftware && apiConfig.minerSoftware !== currentConfig.minerSoftware) {
+      if (
+        apiConfig.minerSoftware &&
+        apiConfig.minerSoftware !== currentConfig.minerSoftware
+      ) {
         this.loggingService.log(
           `🔄 Miner software changing: ${currentConfig.minerSoftware} → ${apiConfig.minerSoftware}`,
           'INFO',
@@ -318,7 +335,10 @@ export class ConfigService implements OnModuleInit {
       }
 
       // Log benchmark flag changes
-      if (apiConfig.benchmark !== undefined && apiConfig.benchmark !== currentConfig.benchmark) {
+      if (
+        apiConfig.benchmark !== undefined &&
+        apiConfig.benchmark !== currentConfig.benchmark
+      ) {
         this.loggingService.log(
           `🧪 Benchmark mode changing: ${currentConfig.benchmark ?? false} → ${apiConfig.benchmark}`,
           'INFO',
@@ -375,12 +395,12 @@ export class ConfigService implements OnModuleInit {
             currentConfig.schedules.scheduledRestarts,
         },
       };
-      
+
       this.saveConfig(updatedConfig);
-      
+
       // Update cache immediately with the new config to prevent unnecessary file reads
       this.configCache = { data: updatedConfig, timestamp: Date.now() };
-      
+
       this.loggingService.log(
         '✅ Config synchronized with API successfully',
         'DEBUG',
@@ -394,11 +414,19 @@ export class ConfigService implements OnModuleInit {
       );
       return true;
     } catch (error) {
-      this.loggingService.log(
-        `❌ Failed to sync config with API: ${error instanceof Error ? error.message : String(error)}`,
-        'ERROR',
-        'config',
-      );
+      if (error instanceof Error && error.message?.includes('timeout')) {
+        this.loggingService.log(
+          '⏰ Config sync timed out after 20 seconds',
+          'WARN',
+          'config',
+        );
+      } else {
+        this.loggingService.log(
+          `❌ Failed to sync config with API: ${error instanceof Error ? error.message : String(error)}`,
+          'ERROR',
+          'config',
+        );
+      }
       return false;
     }
   }
@@ -489,41 +517,50 @@ export class ConfigService implements OnModuleInit {
 
       // Check if directory exists first
       if (!fs.existsSync(dirPath)) {
-        this.loggingService.log(`Directory does not exist: ${dirPath}`, 'DEBUG', 'config');
+        this.loggingService.log(
+          `Directory does not exist: ${dirPath}`,
+          'DEBUG',
+          'config',
+        );
         return;
       }
 
       // Get all files in the directory with timeout protection
       const files = await Promise.race([
         fs.promises.readdir(dirPath),
-        new Promise<string[]>((_, reject) => 
-          setTimeout(() => reject(new Error('Directory read timeout')), 5000)
-        )
+        new Promise<string[]>((_, reject) =>
+          setTimeout(() => reject(new Error('Directory read timeout')), 5000),
+        ),
       ]);
 
       // Filter for backup files matching our pattern with better validation
       const backupFiles = files
-        .filter(file => {
+        .filter((file) => {
           // More strict pattern matching
-          const pattern = new RegExp(`^${fileName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.\\d+\\.bak$`);
+          const pattern = new RegExp(
+            `^${fileName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.\\d+\\.bak$`,
+          );
           return pattern.test(file);
         })
-        .map(file => {
+        .map((file) => {
           // Extract timestamp more safely
           const timestampMatch = file.match(/\.(\d+)\.bak$/);
-          const timestamp = timestampMatch ? parseInt(timestampMatch[1], 10) : 0;
-          
+          const timestamp = timestampMatch
+            ? parseInt(timestampMatch[1], 10)
+            : 0;
+
           // Validate timestamp (should be reasonable Unix timestamp)
-          const isValidTimestamp = timestamp > 1000000000 && timestamp < Date.now() + 86400000;
-          
+          const isValidTimestamp =
+            timestamp > 1000000000 && timestamp < Date.now() + 86400000;
+
           return {
             name: file,
             path: path.join(dirPath, file),
             timestamp: isValidTimestamp ? timestamp : 0,
-            isValid: isValidTimestamp
+            isValid: isValidTimestamp,
           };
         })
-        .filter(file => file.isValid) // Only keep files with valid timestamps
+        .filter((file) => file.isValid) // Only keep files with valid timestamps
         .sort((a, b) => b.timestamp - a.timestamp); // Sort newest first
 
       this.loggingService.log(
@@ -535,13 +572,21 @@ export class ConfigService implements OnModuleInit {
       // Remove older backups if we have more than MAX_BACKUPS
       if (backupFiles.length > this.MAX_BACKUPS) {
         const filesToDelete = backupFiles.slice(this.MAX_BACKUPS);
-        
+
         // Delete files in parallel with individual error handling
         const deletePromises = filesToDelete.map(async (file) => {
           try {
             // Check if file still exists before attempting to delete
             if (fs.existsSync(file.path)) {
-              await fs.promises.unlink(file.path);
+              await Promise.race([
+                fs.promises.unlink(file.path),
+                new Promise((_, reject) =>
+                  setTimeout(
+                    () => reject(new Error('Config file deletion timeout after 5 seconds')),
+                    5000,
+                  ),
+                ),
+              ]);
               this.loggingService.log(
                 `🗑️ Removed old config backup: ${file.name}`,
                 'DEBUG',
@@ -565,23 +610,25 @@ export class ConfigService implements OnModuleInit {
             return { success: false, file: file.name, error };
           }
         });
-        
+
         // Wait for all deletions with timeout protection
         const results = await Promise.allSettled(
-          deletePromises.map(p => 
+          deletePromises.map((p) =>
             Promise.race([
               p,
-              new Promise((_, reject) => 
-                setTimeout(() => reject(new Error('Delete timeout')), 10000)
-              )
-            ])
-          )
+              new Promise((_, reject) =>
+                setTimeout(() => reject(new Error('Delete timeout')), 10000),
+              ),
+            ]),
+          ),
         );
-        
+
         // Log summary of cleanup results
-        const successful = results.filter(r => r.status === 'fulfilled').length;
-        const failed = results.filter(r => r.status === 'rejected').length;
-        
+        const successful = results.filter(
+          (r) => r.status === 'fulfilled',
+        ).length;
+        const failed = results.filter((r) => r.status === 'rejected').length;
+
         this.loggingService.log(
           `Config backup cleanup completed: ${successful} successful, ${failed} failed`,
           failed > 0 ? 'WARN' : 'DEBUG',
@@ -631,7 +678,7 @@ export class ConfigService implements OnModuleInit {
 
       config.minerSoftware = minerSoftware;
       fs.writeFileSync(this.configPath, JSON.stringify(config, null, 2));
-      
+
       this.loggingService.log(
         `✅ Miner software updated to: ${minerSoftware}`,
         'INFO',
@@ -684,7 +731,7 @@ export class ConfigService implements OnModuleInit {
           'WARN',
           'config',
         );
-        
+
         if (await this.restoreFromLatestBackup()) {
           this.loggingService.log(
             'Successfully restored config from backup',
@@ -705,7 +752,7 @@ export class ConfigService implements OnModuleInit {
       // Config file exists, check if it's valid
       try {
         const configContent = fs.readFileSync(this.configPath, 'utf8').trim();
-        
+
         // Check if file is empty
         if (!configContent) {
           this.loggingService.log(
@@ -713,7 +760,7 @@ export class ConfigService implements OnModuleInit {
             'WARN',
             'config',
           );
-          
+
           if (await this.restoreFromLatestBackup()) {
             this.loggingService.log(
               'Successfully restored empty config from backup',
@@ -733,14 +780,18 @@ export class ConfigService implements OnModuleInit {
 
         // Try to parse the config
         const config = JSON.parse(configContent);
-        
+
         // Basic validation - ensure it has the required structure
         if (!config || typeof config !== 'object') {
           throw new Error('Config is not a valid object');
         }
 
         // Check for critical properties (at minimum we need the structure)
-        if (!config.hasOwnProperty('minerId') || !config.hasOwnProperty('thresholds') || !config.hasOwnProperty('schedules')) {
+        if (
+          !config.hasOwnProperty('minerId') ||
+          !config.hasOwnProperty('thresholds') ||
+          !config.hasOwnProperty('schedules')
+        ) {
           throw new Error('Config missing critical properties');
         }
 
@@ -749,18 +800,17 @@ export class ConfigService implements OnModuleInit {
           'DEBUG',
           'config',
         );
-        
+
         // Clean up the config to ensure consistent structure
         await this.cleanupConfig();
         return true;
-
       } catch (parseError) {
         this.loggingService.log(
           `Config file is corrupted: ${parseError instanceof Error ? parseError.message : String(parseError)}`,
           'WARN',
           'config',
         );
-        
+
         // Backup the corrupted file
         const timestamp = Date.now();
         const corruptedBackupPath = `${this.configPath}.corrupted.${timestamp}.bak`;
@@ -778,7 +828,7 @@ export class ConfigService implements OnModuleInit {
             'config',
           );
         }
-        
+
         // Try to restore from backup
         if (await this.restoreFromLatestBackup()) {
           this.loggingService.log(
@@ -796,7 +846,6 @@ export class ConfigService implements OnModuleInit {
           return this.createDefaultConfig();
         }
       }
-
     } catch (error) {
       this.loggingService.log(
         `Failed to ensure valid config: ${error instanceof Error ? error.message : String(error)}`,
@@ -818,12 +867,18 @@ export class ConfigService implements OnModuleInit {
       // Get all backup files
       const files = fs.readdirSync(dirPath);
       const backupFiles = files
-        .filter((file) => file.startsWith(`${fileName}.`) && file.endsWith('.bak'))
+        .filter(
+          (file) => file.startsWith(`${fileName}.`) && file.endsWith('.bak'),
+        )
         .filter((file) => !file.includes('corrupted')) // Exclude corrupted backups
         .map((file) => ({
           name: file,
           path: path.join(dirPath, file),
-          timestamp: parseInt(file.replace(`${fileName}.`, '').replace('.bak', ''), 10) || 0,
+          timestamp:
+            parseInt(
+              file.replace(`${fileName}.`, '').replace('.bak', ''),
+              10,
+            ) || 0,
         }))
         .sort((a, b) => b.timestamp - a.timestamp); // Sort newest first
 
@@ -843,7 +898,7 @@ export class ConfigService implements OnModuleInit {
           );
 
           const backupContent = fs.readFileSync(backupFile.path, 'utf8').trim();
-          
+
           // Skip empty backups
           if (!backupContent) {
             this.loggingService.log(
@@ -856,7 +911,7 @@ export class ConfigService implements OnModuleInit {
 
           // Try to parse the backup
           const backupConfig = JSON.parse(backupContent);
-          
+
           // Basic validation
           if (!backupConfig || typeof backupConfig !== 'object') {
             this.loggingService.log(
@@ -868,7 +923,11 @@ export class ConfigService implements OnModuleInit {
           }
 
           // Check for critical properties
-          if (!backupConfig.hasOwnProperty('minerId') || !backupConfig.hasOwnProperty('thresholds') || !backupConfig.hasOwnProperty('schedules')) {
+          if (
+            !backupConfig.hasOwnProperty('minerId') ||
+            !backupConfig.hasOwnProperty('thresholds') ||
+            !backupConfig.hasOwnProperty('schedules')
+          ) {
             this.loggingService.log(
               `Backup ${backupFile.name} missing critical properties, trying next...`,
               'DEBUG',
@@ -879,16 +938,16 @@ export class ConfigService implements OnModuleInit {
 
           // This backup looks valid, restore it
           fs.copyFileSync(backupFile.path, this.configPath);
-          
+
           // Clear cache to force reload
           this.configCache = null;
-          
+
           this.loggingService.log(
             `Successfully restored config from backup: ${backupFile.name}`,
             'INFO',
             'config',
           );
-          
+
           // Verify the restored config
           const restoredConfig = this.getConfig();
           if (restoredConfig && restoredConfig.minerId) {
@@ -898,9 +957,8 @@ export class ConfigService implements OnModuleInit {
               'config',
             );
           }
-          
-          return true;
 
+          return true;
         } catch (backupError) {
           this.loggingService.log(
             `Backup ${backupFile.name} is corrupted: ${backupError instanceof Error ? backupError.message : String(backupError)}`,
@@ -917,7 +975,6 @@ export class ConfigService implements OnModuleInit {
         'config',
       );
       return false;
-
     } catch (error) {
       this.loggingService.log(
         `Failed to restore from backup: ${error instanceof Error ? error.message : String(error)}`,
@@ -953,13 +1010,9 @@ export class ConfigService implements OnModuleInit {
       };
 
       this.saveConfig(defaultConfig);
-      
-      this.loggingService.log(
-        'Created default config file',
-        'INFO',
-        'config',
-      );
-      
+
+      this.loggingService.log('Created default config file', 'INFO', 'config');
+
       return true;
     } catch (error) {
       this.loggingService.log(
@@ -981,17 +1034,18 @@ export class ConfigService implements OnModuleInit {
       }
 
       // Check if we created a backup in the last 5 minutes
-      const fiveMinutesAgo = Date.now() - (5 * 60 * 1000);
+      const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
       const dirPath = path.dirname(this.configPath);
       const fileName = path.basename(this.configPath);
-      
+
       const files = fs.readdirSync(dirPath);
-      const recentBackups = files.filter(file => {
-        if (!file.startsWith(`${fileName}.`) || !file.endsWith('.bak')) return false;
-        
+      const recentBackups = files.filter((file) => {
+        if (!file.startsWith(`${fileName}.`) || !file.endsWith('.bak'))
+          return false;
+
         const timestampMatch = file.match(/\.(\d+)\.bak$/);
         if (!timestampMatch) return false;
-        
+
         const timestamp = parseInt(timestampMatch[1], 10);
         return timestamp > fiveMinutesAgo;
       });
@@ -1008,7 +1062,7 @@ export class ConfigService implements OnModuleInit {
 
         // Clean up old backups asynchronously to prevent blocking
         setImmediate(() => {
-          this.cleanupConfigBackups().catch(error => {
+          this.cleanupConfigBackups().catch((error) => {
             this.loggingService.log(
               `Background config backup cleanup failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
               'WARN',

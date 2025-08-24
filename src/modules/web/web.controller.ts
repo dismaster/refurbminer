@@ -8,6 +8,14 @@ export class WebController {
 
   @Get('api/telemetry')
   async getTelemetry(): Promise<TelemetryData | null> {
-    return await this.telemetryService.getTelemetryData();
+    return await Promise.race([
+      this.telemetryService.getTelemetryData(),
+      new Promise<null>((_, reject) =>
+        setTimeout(
+          () => reject(new Error('Telemetry fetch timeout after 15 seconds')),
+          15000,
+        ),
+      ),
+    ]);
   }
 }

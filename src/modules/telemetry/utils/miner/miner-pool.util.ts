@@ -85,12 +85,6 @@ export class MinerPoolUtil {
         // Use dynamic endpoint discovery with multiple API attempts
         const baseUrl = MinerApiConfigUtil.getXmrigApiUrl();
         
-        if (attempt === 1) {
-          console.log(`🔍 Attempting XMRig API connection to: ${baseUrl}`);
-        } else {
-          console.log(`🔄 XMRig API retry attempt ${attempt}/${maxRetries}`);
-        }
-        
         // Try the main endpoint with increased timeout
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -105,7 +99,6 @@ export class MinerPoolUtil {
         clearTimeout(timeoutId);
         
         if (!response.ok) {
-          console.log(`❌ XMRig API responded with status ${response.status} (attempt ${attempt})`);
           if (attempt === maxRetries) {
             return this.getDefaultPoolInfo();
           }
@@ -113,7 +106,6 @@ export class MinerPoolUtil {
         }
         
         const json = await response.json();
-        console.log(`✅ XMRig API responded successfully (attempt ${attempt})`);
         
         // Parse the actual API response structure based on your example
         const poolData = {
@@ -133,7 +125,6 @@ export class MinerPoolUtil {
           failures: parseInt(json.connection?.failures || '0'),
         };
 
-        console.log(`✅ XMRig pool data parsed:`, poolData);
         return poolData;
         
       } catch (error) {

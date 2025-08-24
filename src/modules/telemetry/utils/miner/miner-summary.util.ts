@@ -28,6 +28,7 @@ export class MinerSummaryUtil {
       return null;
     }
   }
+
   /** ✅ Get CCMiner summary */
   private static getCcminerSummary(): any {
     try {
@@ -90,7 +91,7 @@ export class MinerSummaryUtil {
         averageShareRate: parseFloat(parsed.ACCMN) || 0,
         solvedBlocks: parseInt(parsed.SOLV) || 0,
       };
-
+      
       return result;
     } catch (error) {
       return this.getDefaultSummary();
@@ -107,7 +108,7 @@ export class MinerSummaryUtil {
         const baseUrl = MinerApiConfigUtil.getXmrigApiUrl();
         
         if (attempt > 1) {
-          console.log(`🔄 XMRig summary retry attempt ${attempt}/${maxRetries}`);
+          // XMRig summary retry
         }
         
         // Manual timeout control for better error handling

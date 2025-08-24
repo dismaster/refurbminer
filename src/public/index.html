@@ -300,6 +300,7 @@
 let hashrateChart;
 let isLoading = false;
 let activityLog = [];
+let previousTelemetryData = null; // Track previous telemetry for activity comparison
 
 // Health status update function
 function updateHealthStatus(isHealthy, message, hasWarnings = false) {
@@ -560,6 +561,63 @@ function showError(message) {
     document.getElementById('error-state').style.display = 'block';
     document.getElementById('loading-state').style.display = 'none';
     document.getElementById('dashboard-content').style.display = 'none';
+}
+
+// Track telemetry-based activity updates to show real-time mining progress
+function updateActivityFromTelemetry(currentData, previousData) {
+    if (!currentData || !currentData.minerSoftware) return;
+    
+    const current = currentData.minerSoftware;
+    const pool = currentData.pool || {};
+    
+    // Track new accepted shares
+    if (previousData && previousData.minerSoftware) {
+        const prev = previousData.minerSoftware;
+        const prevPool = previousData.pool || {};
+        
+        // Check for new accepted shares
+        if (current.acceptedShares > prev.acceptedShares) {
+            const newShares = current.acceptedShares - prev.acceptedShares;
+            const hashRateText = formatHashRate(current.hashrate);
+            addActivity(`Share accepted: ${current.acceptedShares}/${current.acceptedShares + current.rejectedShares} - ${hashRateText}`, 'success');
+        }
+        
+        // Check for new rejected shares
+        if (current.rejectedShares > prev.rejectedShares) {
+            const newRejects = current.rejectedShares - prev.rejectedShares;
+            addActivity(`Share rejected: ${newRejects} new rejection(s)`, 'warning');
+        }
+        
+        // Check for difficulty updates
+        if (pool.difficulty && prevPool.difficulty && pool.difficulty !== prevPool.difficulty) {
+            addActivity(`Difficulty updated: ${pool.difficulty}`, 'info');
+        }
+        
+        // Check for mining status changes
+        if (current.miningStatus !== prev.miningStatus) {
+            if (current.miningStatus === 'active') {
+                addActivity('Mining started', 'success');
+            } else if (current.miningStatus === 'stopped') {
+                addActivity('Mining stopped', 'info');
+            }
+        }
+    }
+}
+
+// Helper function to format hash rate consistently
+function formatHashRate(hashrate) {
+    if (!hashrate || hashrate === 0) return '0 H/s';
+    
+    const units = ['H/s', 'kH/s', 'MH/s', 'GH/s'];
+    let value = hashrate;
+    let unitIndex = 0;
+    
+    while (value >= 1000 && unitIndex < units.length - 1) {
+        value /= 1000;
+        unitIndex++;
+    }
+    
+    return `${value.toFixed(2)} ${units[unitIndex]}`;
 }
 
 function addActivity(message, type = 'info') {

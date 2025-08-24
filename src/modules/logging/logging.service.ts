@@ -334,7 +334,15 @@ export class LoggingService {
       // Send each log individually to match your backend's expected format
       for (const logData of logsToSend) {
         try {
-          await this.sendLogToBackend(config.minerId, logData);
+          await Promise.race([
+            this.sendLogToBackend(config.minerId, logData),
+            new Promise((_, reject) =>
+              setTimeout(
+                () => reject(new Error('Log send timeout after 10 seconds')),
+                10000,
+              ),
+            ),
+          ]);
         } catch (error) {
           // Don't log to avoid infinite loops, just queue for retry
           console.error(`Failed to send log to backend: ${error.message}`);
@@ -360,12 +368,20 @@ export class LoggingService {
       };
 
       // Use the existing logMinerError method with correct parameters
-      await this.apiService.logMinerError(
-        minerId,
-        logData.message,
-        logData.stack || 'No stack trace',
-        additionalInfo
-      );
+      await Promise.race([
+        this.apiService.logMinerError(
+          minerId,
+          logData.message,
+          logData.stack || 'No stack trace',
+          additionalInfo
+        ),
+        new Promise((_, reject) =>
+          setTimeout(
+            () => reject(new Error('Log API call timeout after 10 seconds')),
+            10000,
+          ),
+        ),
+      ]);
     } catch (error) {
       throw new Error(`API call failed: ${error.message}`);
     }

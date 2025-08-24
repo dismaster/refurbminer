@@ -130,7 +130,7 @@ export class MinerThreadsUtil {
           }
         }
       } catch {
-        console.log('CCMiner threads command failed, trying alternatives...');
+        // CCMiner threads command failed, try alternatives
       }
 
       // Method 2: Try to get total hashrate from summary and distribute evenly
@@ -153,7 +153,7 @@ export class MinerThreadsUtil {
             }));
         }
       } catch {
-        console.log('CCMiner summary fallback failed');
+        // CCMiner summary fallback failed
       }
 
       // Method 3: Try hwinfo for CPU count and estimate
@@ -173,7 +173,7 @@ export class MinerThreadsUtil {
             }));
         }
       } catch {
-        console.log('CCMiner hwinfo fallback failed');
+        // CCMiner hwinfo fallback failed
       }
 
       return this.getDefaultThreadStats();
@@ -193,7 +193,7 @@ export class MinerThreadsUtil {
         const baseUrl = MinerApiConfigUtil.getXmrigApiUrl();
         
         if (attempt > 1) {
-          console.log(`🔄 XMRig threads retry attempt ${attempt}/${maxRetries}`);
+          // XMRig threads retry
         }
         
         // Manual timeout control for better error handling
@@ -223,7 +223,6 @@ export class MinerThreadsUtil {
         // XMRig provides thread hashrates in the main summary endpoint
         // Structure: "threads": [[8.3, 6.76, null], [24.18, 23.79, null], ...]
         if (json.hashrate?.threads && Array.isArray(json.hashrate.threads)) {
-          console.log('📊 XMRig thread hashrates found:', json.hashrate.threads);
           
           return json.hashrate.threads.map((threadHashrates: number[], index: number) => ({
             coreId: index,
@@ -234,7 +233,6 @@ export class MinerThreadsUtil {
           }));
         }
         
-        console.warn('⚠️ No thread hashrate data found in XMRig API response');
         return this.getDefaultThreadStats();
         
       } catch (error) {

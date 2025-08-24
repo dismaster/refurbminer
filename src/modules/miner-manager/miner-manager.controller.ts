@@ -12,7 +12,15 @@ export class MinerManagerController {
   ) {}
   @Post('start')
   async startMiner() {
-    const result = await this.minerManagerService.startMiner();
+    const result = await Promise.race([
+      this.minerManagerService.startMiner(),
+      new Promise((_, reject) =>
+        setTimeout(
+          () => reject(new Error('Miner start timeout after 30 seconds')),
+          30000,
+        ),
+      ),
+    ]);
     return {
       message: result
         ? 'Miner started successfully.'
@@ -28,7 +36,15 @@ export class MinerManagerController {
   }
   @Post('restart')
   async restartMiner() {
-    await this.minerManagerService.restartMiner();
+    await Promise.race([
+      this.minerManagerService.restartMiner(),
+      new Promise((_, reject) =>
+        setTimeout(
+          () => reject(new Error('Miner restart timeout after 30 seconds')),
+          30000,
+        ),
+      ),
+    ]);
     return { message: 'Miner restart command sent.' };
   }
 

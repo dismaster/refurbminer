@@ -14,6 +14,13 @@ export class MinerApiConfigUtil {
   };
 
   /**
+   * Clear cached endpoints to force rediscovery
+   */
+  static clearCache(): void {
+    this.cachedEndpoints.clear();
+  }
+
+  /**
    * Get the correct API endpoint for a specific miner
    */
   static getMinerApiEndpoint(minerType: 'ccminer' | 'xmrig'): MinerApiEndpoint {
@@ -104,13 +111,6 @@ export class MinerApiConfigUtil {
   static getCcminerApiEndpoint(): string {
     const config = this.getMinerApiEndpoint('ccminer');
     return `${config.host} ${config.port}`;
-  }
-
-  /**
-   * Clear cached endpoints (useful for testing or when config changes)
-   */
-  static clearCache(): void {
-    this.cachedEndpoints.clear();
   }
 
   /**
