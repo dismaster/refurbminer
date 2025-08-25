@@ -72,6 +72,26 @@ export class MinerManagerService
     private readonly minerSoftwareService: MinerSoftwareService,
   ) {}
 
+  async onModuleInit() {
+    if (MinerManagerService.isInitialized) {
+      this.loggingService.log(
+        '⚠️ MinerManager already initialized, skipping...',
+        'WARN',
+        'miner-manager',
+      );
+      return;
+    }
+
+    MinerManagerService.isInitialized = true;
+    this.loggingService.log(
+      '🚀 MinerManager initializing...',
+      'INFO',
+      'miner-manager',
+    );
+
+    this.clearIntervals();
+    this.initializeMonitoring();
+  }
 
   private clearIntervals(): void {
     if (this.mainMonitoringInterval) {
@@ -1745,6 +1765,15 @@ export class MinerManagerService
           'WARN',
           'miner-manager',
         );
+        // Ensure miner is started after bootstrap, even if flightsheet did not change
+        if (!this.isMinerRunning()) {
+          this.loggingService.log(
+            'No miner running after bootstrap, starting miner...',
+            'INFO',
+            'miner-manager',
+          );
+          void this.startMiner();
+        }
       }
     } catch (error) {
       await this.logMinerError(
