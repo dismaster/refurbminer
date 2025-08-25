@@ -74,11 +74,7 @@ export class MinerManagerService
 
   async onModuleInit() {
     if (MinerManagerService.isInitialized) {
-      this.loggingService.log(
-        '⚠️ MinerManager already initialized, skipping...',
-        'WARN',
-        'miner-manager',
-      );
+      this.loggingService.log('⚠️ MinerManager already initialized, skipping...', 'WARN', 'miner-manager');
       return;
     }
 
@@ -91,6 +87,7 @@ export class MinerManagerService
 
     this.clearIntervals();
     this.initializeMonitoring();
+    // The miner will be started by triggerInitialFlightsheetFetchAndStart after bootstrap completes.
   }
 
   private clearIntervals(): void {
