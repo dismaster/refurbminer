@@ -72,35 +72,6 @@ export class MinerManagerService
     private readonly minerSoftwareService: MinerSoftwareService,
   ) {}
 
-  async onModuleInit() {
-    if (MinerManagerService.isInitialized) {
-      this.loggingService.log(
-        '⚠️ MinerManager already initialized, skipping...',
-        'WARN',
-        'miner-manager',
-      );
-      return;
-    }
-
-    MinerManagerService.isInitialized = true;
-    this.loggingService.log(
-      '🚀 MinerManager initializing...',
-      'INFO',
-      'miner-manager',
-    );
-
-    this.clearIntervals();
-    await Promise.race([
-      this.initializeMiner(),
-      new Promise((_, reject) =>
-        setTimeout(
-          () => reject(new Error('Miner initialization timeout after 30 seconds')),
-          30000,
-        ),
-      ),
-    ]);
-    this.initializeMonitoring();
-  }
 
   private clearIntervals(): void {
     if (this.mainMonitoringInterval) {
