@@ -625,15 +625,75 @@ export class OsDetectionService {
     }
 
     try {
-      const ip = execSync("hostname -I | awk '{print $1}'", {
-        encoding: 'utf8',
-      }).trim();
+      let ip = '';
+      
+      // Method 1: Try ip command first (works on most Linux systems including Termux)
+      try {
+        ip = execSync("ip route get 8.8.8.8 | awk '{print $7; exit}'", {
+          encoding: 'utf8',
+          timeout: 5000,
+        }).trim();
+        
+        if (ip && ip !== '' && ip !== '127.0.0.1') {
+          this.loggingService.log(
+            `Detected IP Address via ip route: ${ip}`,
+            'INFO',
+            'os-detection',
+          );
+          this.cachedIPAddress = ip;
+          return this.cachedIPAddress;
+        }
+      } catch (error) {
+        // Continue to next method
+      }
+
+      // Method 2: Try ifconfig (if available)
+      try {
+        ip = execSync("ifconfig | grep 'inet ' | grep -v '127.0.0.1' | awk '{print $2}' | head -n1", {
+          encoding: 'utf8',
+          timeout: 5000,
+        }).trim();
+        
+        if (ip && ip !== '' && ip !== '127.0.0.1') {
+          this.loggingService.log(
+            `Detected IP Address via ifconfig: ${ip}`,
+            'INFO',
+            'os-detection',
+          );
+          this.cachedIPAddress = ip;
+          return this.cachedIPAddress;
+        }
+      } catch (error) {
+        // Continue to next method
+      }
+
+      // Method 3: Try hostname -I (traditional method, may not work on Termux)
+      try {
+        ip = execSync("hostname -I | awk '{print $1}'", {
+          encoding: 'utf8',
+          timeout: 5000,
+        }).trim();
+        
+        if (ip && ip !== '' && ip !== '127.0.0.1') {
+          this.loggingService.log(
+            `Detected IP Address via hostname: ${ip}`,
+            'INFO',
+            'os-detection',
+          );
+          this.cachedIPAddress = ip;
+          return this.cachedIPAddress;
+        }
+      } catch (error) {
+        // Continue to fallback
+      }
+
+      // Fallback: Use 127.0.0.1
       this.loggingService.log(
-        `Detected IP Address: ${ip}`,
-        'INFO',
+        'Unable to detect IP address, using fallback 127.0.0.1',
+        'WARN',
         'os-detection',
       );
-      this.cachedIPAddress = ip || '127.0.0.1';
+      this.cachedIPAddress = '127.0.0.1';
       return this.cachedIPAddress;
     } catch (error) {
       this.loggingService.log(

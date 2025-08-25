@@ -23,10 +23,10 @@ export class ApiCommunicationService {
     @Inject(forwardRef(() => LoggingService))
     private readonly loggingService: LoggingService,
   ) {
-    this.apiUrl = process.env.API_URL || 'http://localhost:3000';
+    this.apiUrl = process.env.API_URL || 'https://api.refurbminer.de';
     this.rigToken = process.env.RIG_TOKEN || '';
     this.loggingService.log(
-      '✅ API Communication Service initialized',
+      `✅ API Communication Service initialized with URL: ${this.apiUrl}`,
       'INFO',
       'api',
     );

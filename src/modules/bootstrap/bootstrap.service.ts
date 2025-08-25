@@ -36,6 +36,16 @@ export class BootstrapService implements OnModuleInit {
     this.ensureConfigExists();
     this.ensureEnvironmentVariables();
 
+    // STEP 1: Install dependencies first (before registration needs network tools)
+    this.loggingService.log(
+      'Installing dependencies before registration...',
+      'INFO',
+      'bootstrap',
+    );
+    await this.verifyDependencies();
+    this.ensureExecutables();
+
+    // STEP 2: Registration process (now that network tools are available)
     // --- ENFORCE: Do not proceed until minerId is assigned by backend ---
     let validMinerID = false;
 
@@ -80,7 +90,7 @@ export class BootstrapService implements OnModuleInit {
       }
     } // --- END ENFORCE ---
 
-    // Now that registration is complete, trigger config sync to get schedules and other config data
+    // STEP 3: Now that registration is complete, trigger config sync to get schedules and other config data
     this.loggingService.log(
       'Registration complete. Triggering optimized startup sequence...',
       'INFO',
@@ -106,8 +116,6 @@ export class BootstrapService implements OnModuleInit {
 
       // Step 3: Perform system checks and optimizations
       this.checkCPUCompatibility();
-      await this.verifyDependencies();
-      this.ensureExecutables();
 
       // Step 4: Check if we're on Termux to run ADB optimizations and cleanup
       const osType = this.deviceMonitoringService.getOS();
