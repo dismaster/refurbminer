@@ -627,16 +627,16 @@ export class OsDetectionService {
     try {
       let ip = '';
       
-      // Method 1: Try ip command first (works on most Linux systems including Termux)
+      // Method 1: Try ifconfig first (most reliable on Termux)
       try {
-        ip = execSync("ip route get 8.8.8.8 | awk '{print $7; exit}'", {
+        ip = execSync("ifconfig | grep 'inet ' | grep -v '127.0.0.1' | head -n1 | awk '{print $2}'", {
           encoding: 'utf8',
           timeout: 5000,
         }).trim();
         
-        if (ip && ip !== '' && ip !== '127.0.0.1') {
+        if (ip && ip !== '' && ip !== '127.0.0.1' && /^\d+\.\d+\.\d+\.\d+$/.test(ip)) {
           this.loggingService.log(
-            `Detected IP Address via ip route: ${ip}`,
+            `Detected IP Address via ifconfig: ${ip}`,
             'INFO',
             'os-detection',
           );
@@ -647,16 +647,19 @@ export class OsDetectionService {
         // Continue to next method
       }
 
-      // Method 2: Try ifconfig (if available)
+      // Method 2: Try ip command (alternative)
       try {
-        ip = execSync("ifconfig | grep 'inet ' | grep -v '127.0.0.1' | awk '{print $2}' | head -n1", {
+        const routeOutput = execSync('ip route get 8.8.8.8', {
           encoding: 'utf8',
           timeout: 5000,
         }).trim();
         
-        if (ip && ip !== '' && ip !== '127.0.0.1') {
+        // Extract IP from "src X.X.X.X" pattern
+        const srcMatch = routeOutput.match(/src\s+(\d+\.\d+\.\d+\.\d+)/);
+        if (srcMatch && srcMatch[1]) {
+          ip = srcMatch[1];
           this.loggingService.log(
-            `Detected IP Address via ifconfig: ${ip}`,
+            `Detected IP Address via ip route: ${ip}`,
             'INFO',
             'os-detection',
           );
