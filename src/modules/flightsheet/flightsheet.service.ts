@@ -35,7 +35,7 @@ export class FlightsheetService {
       );
 
       // Get miner software from config (synced from backend API)
-      const minerSoftware = this.configService.getMinerSoftware();
+      const minerSoftware = await this.configService.getMinerSoftware();
       if (!minerSoftware) {
         this.loggingService.log(
           '❌ Cannot fetch flightsheet: No minerSoftware found in config. Ensure config is synced with backend.',
@@ -51,7 +51,7 @@ export class FlightsheetService {
         'flightsheet',
       );
 
-      const minerId = this.configService.getMinerId();
+      const minerId = await this.configService.getMinerId();
       if (!minerId) {
         this.loggingService.log(
           '❌ Cannot fetch flightsheet: No minerId found',
@@ -72,15 +72,22 @@ export class FlightsheetService {
         return false;
       }
 
+      if (!this.validateFlightsheet(flightsheet, minerSoftware)) {
+        this.loggingService.log(
+          '❌ Flightsheet validation failed, skipping update',
+          'ERROR',
+          'flightsheet',
+        );
+        return false;
+      }
+
       const minerConfigPath = path.join(
         this.flightsheetDir,
         minerSoftware,
         'config.json',
       );
 
-      if (!fs.existsSync(path.dirname(minerConfigPath))) {
-        fs.mkdirSync(path.dirname(minerConfigPath), { recursive: true });
-      }
+      await fs.promises.mkdir(path.dirname(minerConfigPath), { recursive: true });
 
       // Always update the config file with what we get from backend
       // Apply minimal local optimizations if needed (only for security/compatibility)
@@ -91,11 +98,21 @@ export class FlightsheetService {
 
       // Check if this is a real change that requires miner restart
       // Compare the final processed config (after optimizations) with existing file
-      const hasRealChanges = this.hasSignificantChanges(minerConfigPath, finalConfig);
+      const hasRealChanges = await this.hasSignificantChanges(minerConfigPath, finalConfig);
       
       // Only write the file if there are significant changes or if the file doesn't exist
-      if (hasRealChanges || !fs.existsSync(minerConfigPath)) {
-        fs.writeFileSync(minerConfigPath, JSON.stringify(finalConfig, null, 2));
+      let configExists = true;
+      try {
+        await fs.promises.access(minerConfigPath);
+      } catch {
+        configExists = false;
+      }
+
+      if (hasRealChanges || !configExists) {
+        await fs.promises.writeFile(
+          minerConfigPath,
+          JSON.stringify(finalConfig, null, 2),
+        );
         
         // Always show that config was written
         this.loggingService.log(
@@ -135,6 +152,7 @@ export class FlightsheetService {
       return false;
     }
   }
+
 
   /**
    * Apply minimal local optimizations (only for security/compatibility)
@@ -184,6 +202,53 @@ export class FlightsheetService {
     );
 
     return optimizedConfig;
+  }
+
+  private validateFlightsheet(flightsheet: any, minerSoftware: string): boolean {
+    if (!flightsheet || typeof flightsheet !== 'object' || Array.isArray(flightsheet)) {
+      this.loggingService.log(
+        'Flightsheet is not a valid object',
+        'WARN',
+        'flightsheet',
+      );
+      return false;
+    }
+
+    const pools = (flightsheet as any).pools;
+    if (!Array.isArray(pools) || pools.length === 0) {
+      this.loggingService.log(
+        'Flightsheet missing pools array',
+        'WARN',
+        'flightsheet',
+      );
+      return false;
+    }
+
+    if (minerSoftware === 'ccminer') {
+      const threads = (flightsheet as any).threads;
+      if (threads !== undefined && (!Number.isInteger(threads) || threads <= 0)) {
+        this.loggingService.log(
+          `Flightsheet threads is invalid: ${threads}`,
+          'WARN',
+          'flightsheet',
+        );
+        return false;
+      }
+    }
+
+    if (minerSoftware === 'xmrig') {
+      const cpu = (flightsheet as any).cpu;
+      if (cpu && cpu.rx && !Array.isArray(cpu.rx)) {
+        this.loggingService.log(
+          'Flightsheet cpu.rx is invalid (expected array)',
+          'WARN',
+          'flightsheet',
+        );
+        return false;
+      }
+    }
+
+    return true;
   }
 
   /**
@@ -256,8 +321,10 @@ export class FlightsheetService {
    * Check if there are significant changes that require miner restart
    * Only checks mining-critical settings, ignores cosmetic changes and XMRig autosave artifacts
    */
-  private hasSignificantChanges(filePath: string, newFlightsheet: any): boolean {
-    if (!fs.existsSync(filePath)) {
+  private async hasSignificantChanges(filePath: string, newFlightsheet: any): Promise<boolean> {
+    try {
+      await fs.promises.access(filePath);
+    } catch {
       this.loggingService.log(
         `📋 No existing config file, treating as significant change`,
         'DEBUG',
@@ -268,7 +335,7 @@ export class FlightsheetService {
 
     try {
       const currentFlightsheet = JSON.parse(
-        fs.readFileSync(filePath, 'utf8'),
+        await fs.promises.readFile(filePath, 'utf8'),
       );
 
       // Check mining-critical settings (ignore XMRig autosave artifacts)
@@ -292,7 +359,22 @@ export class FlightsheetService {
       for (const setting of criticalSettings) {
         const currentValue = this.getNestedValue(currentFlightsheet, setting);
         const newValue = this.getNestedValue(newFlightsheet, setting);
-        
+
+        if (setting === 'pools') {
+          const currentPools = this.normalizePools(currentValue);
+          const newPools = this.normalizePools(newValue);
+
+          if (JSON.stringify(currentPools) !== JSON.stringify(newPools)) {
+            this.loggingService.log(
+              `📋 Significant change detected in pools: ${JSON.stringify(currentPools)} → ${JSON.stringify(newPools)}`,
+              'INFO',
+              'flightsheet',
+            );
+            return true;
+          }
+          continue;
+        }
+
         if (JSON.stringify(currentValue) !== JSON.stringify(newValue)) {
           this.loggingService.log(
             `📋 Significant change detected in ${setting}: ${JSON.stringify(currentValue)} → ${JSON.stringify(newValue)}`,
@@ -349,14 +431,35 @@ export class FlightsheetService {
     }, obj);
   }
 
+  private normalizePools(pools: any): Array<Record<string, any>> {
+    if (!Array.isArray(pools)) {
+      return [];
+    }
+
+    const normalized = pools.map((pool) => {
+      if (!pool || typeof pool !== 'object') {
+        return {};
+      }
+
+      const { name, ...rest } = pool as Record<string, any>;
+      return rest;
+    });
+
+    return normalized.sort((a, b) => {
+      const aKey = JSON.stringify(a);
+      const bKey = JSON.stringify(b);
+      return aKey.localeCompare(bKey);
+    });
+  }
+
   /**
    * Apply environment-specific optimizations for XMRig configuration
    */
-  private applyXMRigOptimizations(flightsheet: any): any {
+  private async applyXMRigOptimizations(flightsheet: any): Promise<any> {
     try {
       // Get or cache environment information
       if (!this.environmentInfo) {
-        this.environmentInfo = EnvironmentConfigUtil.detectEnvironment();
+        this.environmentInfo = await EnvironmentConfigUtil.detectEnvironment();
 
         // Log environment detection results
         const envSummary = EnvironmentConfigUtil.getEnvironmentSummary(
@@ -415,9 +518,9 @@ export class FlightsheetService {
   /**
    * Get current environment information
    */
-  getEnvironmentInfo(): EnvironmentInfo {
+  async getEnvironmentInfo(): Promise<EnvironmentInfo> {
     if (!this.environmentInfo) {
-      this.environmentInfo = EnvironmentConfigUtil.detectEnvironment();
+      this.environmentInfo = await EnvironmentConfigUtil.detectEnvironment();
     }
     return this.environmentInfo;
   }
@@ -425,12 +528,12 @@ export class FlightsheetService {
   /**
    * Force refresh environment detection
    */
-  refreshEnvironmentInfo(): EnvironmentInfo {
-    this.environmentInfo = EnvironmentConfigUtil.detectEnvironment();
+  async refreshEnvironmentInfo(): Promise<EnvironmentInfo> {
+    this.environmentInfo = await EnvironmentConfigUtil.detectEnvironment();
     return this.environmentInfo;
   }
 
-  getFlightsheet(miner: string): any {
+  async getFlightsheet(miner: string): Promise<any> {
     try {
       const minerConfigPath = path.join(
         this.flightsheetDir,
@@ -438,7 +541,9 @@ export class FlightsheetService {
         'config.json',
       );
 
-      if (!fs.existsSync(minerConfigPath)) {
+      try {
+        await fs.promises.access(minerConfigPath);
+      } catch {
         this.loggingService.log(
           `🚨 No flightsheet found for miner: ${miner} at ${minerConfigPath}`,
           'WARN',
@@ -448,7 +553,7 @@ export class FlightsheetService {
       }
 
       const flightsheet = JSON.parse(
-        fs.readFileSync(minerConfigPath, 'utf8'),
+        await fs.promises.readFile(minerConfigPath, 'utf8'),
       );
       return flightsheet;
     } catch (error: any) {

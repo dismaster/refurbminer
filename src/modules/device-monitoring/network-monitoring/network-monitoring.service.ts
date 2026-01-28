@@ -1,9 +1,12 @@
 import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
-import { execSync } from 'child_process';
+import { exec } from 'child_process';
 import { OsDetectionService } from '../os-detection/os-detection.service';
 import { ApiCommunicationService } from '../../api-communication/api-communication.service';
 import { LoggingService } from '../../logging/logging.service';
 import * as fs from 'fs';
+import { promisify } from 'util';
+
+const execAsync = promisify(exec);
 
 @Injectable()
 export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
@@ -26,6 +29,7 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
   private lastRecoveryTime = 0;
   private readonly MIN_RECOVERY_INTERVAL = 120000; // 2 minutes
   private connectionStabilityTimeout?: NodeJS.Timeout; // New property for delayed reset
+  private isShuttingDown = false;
 
   // New properties for better retry management
   private dynamicRetryDelay = 5000; // Starting with 5 seconds
@@ -47,11 +51,20 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
     private readonly loggingService: LoggingService
   ) {}
 
+  private async execCommand(command: string, timeout?: number): Promise<string> {
+    const { stdout } = await execAsync(command, { encoding: 'utf8', timeout });
+    return stdout ?? '';
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
   /** 📝 Initialize network monitoring */
   async onModuleInit() {
     this.loggingService.log('🌐 Initializing network monitoring service...', 'INFO', 'network-monitoring');
     try {
-      const isConnected = this.checkNetworkConnectivity();
+      const isConnected = await this.checkNetworkConnectivity();
       this.loggingService.log(
         `📡 Initial network status: ${isConnected ? 'Connected' : 'Disconnected'}`,
         'INFO',
@@ -68,14 +81,36 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  onModuleDestroy() {
+    if (this.isShuttingDown) {
+      return;
+    }
+    this.isShuttingDown = true;
+
+    if (this.networkMonitoringInterval) {
+      clearInterval(this.networkMonitoringInterval);
+      this.networkMonitoringInterval = undefined;
+    }
+    if (this.connectionStabilityTimeout) {
+      clearTimeout(this.connectionStabilityTimeout);
+      this.connectionStabilityTimeout = undefined;
+    }
+
+    this.loggingService.log(
+      '🛑 Network monitoring service stopped',
+      'INFO',
+      'network-monitoring',
+    );
+  }
+
   /** 📝 Check network connectivity */
-  checkNetworkConnectivity(): boolean {
+  private async checkNetworkConnectivity(): Promise<boolean> {
     const osType = this.osDetectionService.detectOS();
     const pingCommand = osType === 'termux' ? 'ping -c 1 -W 2' : 'ping -c 1 -w 2';
 
     for (const target of this.pingTargets) {
       try {
-        const result = execSync(`${pingCommand} ${target}`, { encoding: 'utf8' });
+        const result = await this.execCommand(`${pingCommand} ${target}`);
         if (result.includes('1 received')) {
           // Do not reset retry counter here, 
           // let checkAndHandleConnectivity handle the reset logic
@@ -89,7 +124,7 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** 📝 Check basic IP connectivity (without DNS) */
-  checkBasicIPConnectivity(): boolean {
+  private async checkBasicIPConnectivity(): Promise<boolean> {
     const osType = this.osDetectionService.detectOS();
     const pingCommand = osType === 'termux' ? 'ping -c 1 -W 2' : 'ping -c 1 -w 2';
     
@@ -103,7 +138,7 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
 
     for (const ip of ipTargets) {
       try {
-        const result = execSync(`${pingCommand} ${ip}`, { encoding: 'utf8' });
+        const result = await this.execCommand(`${pingCommand} ${ip}`);
         if (result.includes('1 received') || result.includes('1 packets received')) {
           this.loggingService.log(
             `✅ Basic IP connectivity confirmed (${ip})`,
@@ -126,26 +161,26 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** 📝 Check DNS resolution with fallback methods */
-  checkDNSResolution(): boolean {
+  private async checkDNSResolution(): Promise<boolean> {
     const dnsTests = [
-      () => {
-        const result = execSync('nslookup google.com', { encoding: 'utf8' });
+      async () => {
+        const result = await this.execCommand('nslookup google.com');
         return result.includes('Address');
       },
-      () => {
-        const result = execSync('nslookup 8.8.8.8', { encoding: 'utf8' });
+      async () => {
+        const result = await this.execCommand('nslookup 8.8.8.8');
         return result.includes('name =') || result.includes('Address');
       },
-      () => {
+      async () => {
         // Test if we can resolve a simple hostname
-        const result = execSync('getent hosts google.com', { encoding: 'utf8' });
+        const result = await this.execCommand('getent hosts google.com');
         return result.includes('google.com');
       }
     ];
 
     for (const test of dnsTests) {
       try {
-        if (test()) {
+        if (await test()) {
           this.loggingService.log(
             '✅ DNS resolution working',
             'DEBUG',
@@ -167,9 +202,9 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** 📝 Check WiFi signal strength (Termux only) */
-  checkWiFiSignalStrength(): string {
+  private async checkWiFiSignalStrength(): Promise<string> {
     try {
-      const result = execSync('termux-wifi-connectioninfo', { encoding: 'utf8' });
+      const result = await this.execCommand('termux-wifi-connectioninfo');
       const info = JSON.parse(result);
       return `📶 WiFi Signal: ${info.rssi} dBm`;
     } catch {
@@ -184,13 +219,13 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
     let dnsResolutionFailed = false;
 
     // Check for WiFi connected but no SSID issue on Termux
-    if (osType === 'termux' && this.isWiFiEnabledButNotConnected()) {
+    if (osType === 'termux' && await this.isWiFiEnabledButNotConnected()) {
       this.loggingService.log(
         '⚠️ WiFi enabled but not connected to any network',
         'WARN',
         'network-monitoring'
       );
-      this.reconnectToConfiguredNetworks();
+      await this.reconnectToConfiguredNetworks();
       
       // Wait a bit for reconnection to complete before continuing with other checks
       await new Promise((resolve) => setTimeout(resolve, 8000));
@@ -198,7 +233,7 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
     
     // Continue with existing connectivity checks
     // First check basic IP connectivity
-    const hasIPConnectivity = this.checkBasicIPConnectivity();
+    const hasIPConnectivity = await this.checkBasicIPConnectivity();
     
     if (!hasIPConnectivity) {
       connectivityLost = true;
@@ -250,7 +285,7 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
 
     // Only check DNS if we have basic IP connectivity but suspect DNS issues
     // For Termux, we're less strict - if IP works, DNS issues are less critical
-    if (hasIPConnectivity && !this.checkDNSResolution()) {
+    if (hasIPConnectivity && !await this.checkDNSResolution()) {
       if (osType !== 'termux') {
         // On regular systems, DNS failure is more concerning
         dnsResolutionFailed = true;
@@ -262,7 +297,7 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (osType === 'termux') {
-      const wifiSignal = this.checkWiFiSignalStrength();
+      const wifiSignal = await this.checkWiFiSignalStrength();
       this.loggingService.log(wifiSignal, 'INFO', 'network-monitoring');
     }
 
@@ -292,7 +327,7 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
       clearInterval(this.networkMonitoringInterval);
     }
     this.networkMonitoringInterval = setInterval(() => {
-      this.checkAndHandleConnectivity();
+      void this.checkAndHandleConnectivity();
     }, 30000); // Check every minute
   }
 
@@ -311,31 +346,31 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
     try {
       this.loggingService.log('🔄 Starting network recovery process...', 'INFO', 'network-monitoring');
       
-      this.enableDisplay();
+      await this.enableDisplay();
       
       // First try simple interface restart
-      this.restartNetworkInterface();
+      await this.restartNetworkInterface();
       
       // Wait and check if that worked
       await new Promise((resolve) => setTimeout(resolve, 5000));
       
       // If we still can't connect, try more advanced recovery
-      if (!this.checkNetworkConnectivity()) {
+      if (!await this.checkNetworkConnectivity()) {
         this.loggingService.log('🔍 Basic recovery didn\'t work, trying advanced methods...', 'INFO', 'network-monitoring');
         
         if (osType === 'termux') {
           // Try to scan for available networks
           try {
-            execSync('termux-wifi-scaninfo', { encoding: 'utf8', timeout: 10000 });
-            await new Promise((resolve) => setTimeout(resolve, 3000));
+            await this.execCommand('termux-wifi-scaninfo', 10000);
+            await this.delay(3000);
             
             // If still not connected, try reconnection
-            if (!this.checkNetworkConnectivity()) {
-              this.reconnectToConfiguredNetworks();
+            if (!await this.checkNetworkConnectivity()) {
+              await this.reconnectToConfiguredNetworks();
             }
           } catch (scanError) {
             this.loggingService.log(`⚠️ WiFi scan failed, trying alternative methods: ${scanError}`, 'WARN', 'network-monitoring');
-            this.reconnectToConfiguredNetworks();
+            await this.reconnectToConfiguredNetworks();
           }
         }
       }
@@ -353,14 +388,14 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** 📝 Enable display and wake locks */
-  private enableDisplay(): void {
+  private async enableDisplay(): Promise<void> {
     const osType = this.osDetectionService.detectOS();
     try {
       if (osType === 'termux') {
         // First try Termux API approach
         try {
-          execSync('termux-wake-lock');
-          execSync('termux-brightness 255'); // Set max brightness
+          await this.execCommand('termux-wake-lock');
+          await this.execCommand('termux-brightness 255'); // Set max brightness
         } catch (termuxError) {
           this.loggingService.log(
             `ℹ️ Termux API wake lock failed: ${termuxError.message}`, 
@@ -371,10 +406,10 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
   
         // Check if ADB is available and try ADB approach
         try {
-          const adbAvailable = this.checkAdbAvailability();
+          const adbAvailable = await this.checkAdbAvailability();
           if (adbAvailable) {
-            execSync('adb shell input keyevent KEYCODE_POWER');
-            execSync('adb shell svc power stayon true');
+            await this.execCommand('adb shell input keyevent KEYCODE_POWER');
+            await this.execCommand('adb shell svc power stayon true');
             this.loggingService.log('✅ Display enabled via ADB', 'INFO', 'network-monitoring');
           }
         } catch (adbError) {
@@ -387,9 +422,9 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
   
         // Fallback to basic power management
         try {
-          execSync('dumpsys deviceidle disable');
-          execSync('dumpsys battery reset');
-          execSync('dumpsys battery set status 2'); // Simulate charging
+          await this.execCommand('dumpsys deviceidle disable');
+          await this.execCommand('dumpsys battery reset');
+          await this.execCommand('dumpsys battery set status 2'); // Simulate charging
           this.loggingService.log('✅ Basic power management applied', 'INFO', 'network-monitoring');
         } catch (basicError) {
           this.loggingService.log(
@@ -400,7 +435,7 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
         }
   
       } else if (osType === 'raspberry-pi' || osType === 'linux') {
-        execSync('xset dpms force on');
+        await this.execCommand('xset dpms force on');
       }
       
       this.loggingService.log('✅ Display and wake locks enabled', 'INFO', 'network-monitoring');
@@ -414,9 +449,9 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** 📝 Check if ADB is available */
-  private checkAdbAvailability(): boolean {
+  private async checkAdbAvailability(): Promise<boolean> {
     try {
-      execSync('adb devices', { encoding: 'utf8' });
+      await this.execCommand('adb devices');
       return true;
     } catch {
       return false;
@@ -424,15 +459,15 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** 📝 Restart network interface */
-  private restartNetworkInterface(): void {
+  private async restartNetworkInterface(): Promise<void> {
     const osType = this.osDetectionService.detectOS();
     try {
       if (osType === 'termux') {
-        execSync('termux-wifi-enable false');
-        execSync('sleep 2');
-        execSync('termux-wifi-enable true');
+        await this.execCommand('termux-wifi-enable false');
+        await this.delay(2000);
+        await this.execCommand('termux-wifi-enable true');
       } else if (osType === 'raspberry-pi' || osType === 'linux') {
-        execSync('sudo systemctl restart networking');
+        await this.execCommand('sudo systemctl restart networking');
       }
       this.loggingService.log('✅ Network interface restarted', 'INFO', 'network-monitoring');
     } catch (error) {
@@ -447,7 +482,8 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
   /** 📝 Log network restored */
   private async logNetworkRestored(): Promise<void> {
     try {
-      const config = JSON.parse(fs.readFileSync('config/config.json', 'utf8'));
+      const configRaw = await fs.promises.readFile('config/config.json', 'utf8');
+      const config = JSON.parse(configRaw);
       await this.apiService.logMinerError(
         config.minerId,
         'Network connectivity restored after being lost.',
@@ -463,20 +499,12 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** 📝 Cleanup on module destroy */
-  onModuleDestroy() {
-    if (this.networkMonitoringInterval) {
-      clearInterval(this.networkMonitoringInterval);
-    }
-    this.loggingService.log('🛑 Network monitoring service stopped', 'INFO', 'network-monitoring');
-  }
-
   /** ✅ Check if WiFi is enabled but not connected to any network */
-  private isWiFiEnabledButNotConnected(): boolean {
+  private async isWiFiEnabledButNotConnected(): Promise<boolean> {
     try {
       // Try termux-wifi-connectioninfo first (doesn't require root)
       try {
-        const connectionInfo = execSync('termux-wifi-connectioninfo', { encoding: 'utf8' });
+        const connectionInfo = await this.execCommand('termux-wifi-connectioninfo');
         const info = JSON.parse(connectionInfo);
         const wifiInfo = info as { ssid?: string };
         
@@ -496,14 +524,14 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
       // Fallback: Check if we have a WiFi interface but no route to the internet
       try {
         // Check if wlan0 interface exists and is up
-        const ipAddr = execSync('ip addr show wlan0', { encoding: 'utf8', timeout: 3000 });
+        const ipAddr = await this.execCommand('ip addr show wlan0', 3000);
         const isUp = ipAddr.includes('state UP');
         
         // If interface is up but we can't ping anything, WiFi is likely on but not connected
         if (isUp) {
           // Try pinging a reliable target
           try {
-            execSync('ping -c 1 -W 2 8.8.8.8', { encoding: 'utf8', timeout: 3000 });
+            await this.execCommand('ping -c 1 -W 2 8.8.8.8', 3000);
             return false; // We can ping, so we are connected
           } catch {
             return true; // We can't ping, which suggests WiFi is on but not connected
@@ -515,11 +543,11 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
       
       // One more fallback - check if NetworkManager shows WiFi is enabled but disconnected
       try {
-        const nmcli = execSync('nmcli radio wifi', { encoding: 'utf8', timeout: 3000 }).trim();
+        const nmcli = (await this.execCommand('nmcli radio wifi', 3000)).trim();
         if (nmcli === 'enabled') {
           // WiFi is enabled, now check if we're connected
           try {
-            const connections = execSync('nmcli -t -f NAME,DEVICE,STATE c show --active', { encoding: 'utf8', timeout: 3000 });
+            const connections = await this.execCommand('nmcli -t -f NAME,DEVICE,STATE c show --active', 3000);
             return !connections.includes('wlan'); // No active wlan connections
           } catch {
             // Can't check connections
@@ -537,47 +565,47 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** ✅ Attempt to reconnect to configured networks - no root version */
-  private reconnectToConfiguredNetworks(): void {
+  private async reconnectToConfiguredNetworks(): Promise<void> {
     try {
       this.loggingService.log('🔄 Attempting to reconnect to WiFi...', 'INFO', 'network-monitoring');
       
       // Method 1: Force WiFi reconnection via cycling (requires termux-api but not root)
       try {
-        execSync('termux-wifi-enable false', { encoding: 'utf8', timeout: 5000 });
-        execSync('sleep 3', { encoding: 'utf8' });
-        execSync('termux-wifi-enable true', { encoding: 'utf8', timeout: 5000 });
+        await this.execCommand('termux-wifi-enable false', 5000);
+        await this.delay(3000);
+        await this.execCommand('termux-wifi-enable true', 5000);
         this.loggingService.log('🔄 Cycled WiFi to trigger reconnection', 'INFO', 'network-monitoring');
         
         // Wait a bit for Android to reconnect automatically
-        execSync('sleep 5', { encoding: 'utf8' });
+        await this.delay(5000);
       } catch (cycleError: any) {
         this.loggingService.log(`⚠️ WiFi cycling failed: ${cycleError.message}`, 'DEBUG', 'network-monitoring');
       }
       
       // Method 2: Scan for networks to trigger auto-reconnect
       try {
-        execSync('termux-wifi-scaninfo', { encoding: 'utf8', timeout: 10000 });
+        await this.execCommand('termux-wifi-scaninfo', 10000);
         this.loggingService.log('🔍 Triggered WiFi scan to prompt reconnection', 'INFO', 'network-monitoring');
         
         // Wait a bit more
-        execSync('sleep 3', { encoding: 'utf8' });
+        await this.delay(3000);
       } catch (scanError: any) {
         this.loggingService.log(`⚠️ WiFi scan failed: ${scanError.message}`, 'DEBUG', 'network-monitoring');
       }
       
       // Method 3: If we have root, use more direct approaches
-      if (this.isRootAvailable()) {
-        this.reconnectUsingRoot();
+      if (await this.isRootAvailable()) {
+        await this.reconnectUsingRoot();
       } else {
         // Method 4: If no root, try using Android intent to open WiFi settings
         try {
           // This will open the WiFi settings page which often triggers reconnection
-          execSync('am start -n com.android.settings/.wifi.WifiSettings', { encoding: 'utf8', timeout: 3000 });
+          await this.execCommand('am start -n com.android.settings/.wifi.WifiSettings', 3000);
           this.loggingService.log('📱 Opened WiFi settings to prompt reconnection', 'INFO', 'network-monitoring');
         } catch (amError) {
           try {
             // Alternative intent
-            execSync('am start -a android.settings.WIFI_SETTINGS', { encoding: 'utf8', timeout: 3000 });
+            await this.execCommand('am start -a android.settings.WIFI_SETTINGS', 3000);
             this.loggingService.log('📱 Opened WiFi settings (alt method)', 'INFO', 'network-monitoring');
           } catch {
             this.loggingService.log('⚠️ Cannot open WiFi settings', 'WARN', 'network-monitoring');
@@ -587,7 +615,7 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
       
       // Final check if we're reconnected
       try {
-        const connectionInfo = execSync('termux-wifi-connectioninfo', { encoding: 'utf8', timeout: 5000 });
+        const connectionInfo = await this.execCommand('termux-wifi-connectioninfo', 5000);
         const info = JSON.parse(connectionInfo);
         
         if (info.ssid && info.ssid.trim() !== '') {
@@ -604,15 +632,15 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** ✅ Root-based WiFi reconnection methods */
-  private reconnectUsingRoot(): void {
+  private async reconnectUsingRoot(): Promise<void> {
     try {
       this.loggingService.log('🔑 Attempting reconnection with root privileges', 'INFO', 'network-monitoring');
       
       // Force WiFi reconnect via Android framework
       try {
-        execSync('su -c "svc wifi disable"', { encoding: 'utf8', timeout: 3000 });
-        execSync('sleep 2', { encoding: 'utf8' });
-        execSync('su -c "svc wifi enable"', { encoding: 'utf8', timeout: 3000 });
+        await this.execCommand('su -c "svc wifi disable"', 3000);
+        await this.delay(2000);
+        await this.execCommand('su -c "svc wifi enable"', 3000);
         this.loggingService.log('✅ Cycled WiFi using root privileges', 'INFO', 'network-monitoring');
       } catch {
         // Continue to next method if this fails
@@ -620,7 +648,7 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
       
       // Try to force Android to scan for networks
       try {
-        execSync('su -c "cmd wifi force-scan"', { encoding: 'utf8', timeout: 3000 });
+        await this.execCommand('su -c "cmd wifi force-scan"', 3000);
         this.loggingService.log('✅ Forced WiFi scan using root privileges', 'INFO', 'network-monitoring');
       } catch {
         // Continue if this fails
@@ -628,7 +656,7 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
       
       // Try to connect to saved networks using wpa_cli if available
       try {
-        execSync('su -c "wpa_cli reconfigure"', { encoding: 'utf8', timeout: 3000 });
+        await this.execCommand('su -c "wpa_cli reconfigure"', 3000);
         this.loggingService.log('✅ Reconfigured wpa_supplicant', 'INFO', 'network-monitoring');
       } catch {
         // Continue if this fails
@@ -639,9 +667,9 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** ✅ Check if root is available */
-  private isRootAvailable(): boolean {
+  private async isRootAvailable(): Promise<boolean> {
     try {
-      execSync('su -c "echo test"', { encoding: 'utf8', timeout: 2000 });
+      await this.execCommand('su -c "echo test"', 2000);
       return true;
     } catch {
       return false;
@@ -684,7 +712,7 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
         // If the duration of disconnections is increasing, it's a sign of unstable connectivity
         if (this.isIncreasingDisconnectionDuration()) {
           this.loggingService.log('⚠️ Increasing disconnection duration detected, triggering recovery actions...', 'WARN', 'network-monitoring');
-          this.performRecoveryActions(this.osDetectionService.detectOS());
+          void this.performRecoveryActions(this.osDetectionService.detectOS());
         }
       }
     } else {

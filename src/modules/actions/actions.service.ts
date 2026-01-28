@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleInit, OnApplicationShutdown } from '@nestjs/common';
 import { ApiCommunicationService } from '../api-communication/api-communication.service';
 import { LoggingService } from '../logging/logging.service';
 import { ConfigService } from '../config/config.service';
@@ -16,9 +16,10 @@ import {
 const execAsync = promisify(exec);
 
 @Injectable()
-export class ActionsService implements OnModuleInit {
+export class ActionsService implements OnModuleInit, OnApplicationShutdown {
   private actionsInterval?: NodeJS.Timeout;
   private isProcessingActions = false;
+  private actionsCheckInFlight = false;
 
   constructor(
     private readonly apiService: ApiCommunicationService,
@@ -47,12 +48,47 @@ export class ActionsService implements OnModuleInit {
 
     // Check for actions every minute
     this.actionsInterval = setInterval(() => {
-      void this.checkForPendingActions();
+      if (this.actionsCheckInFlight) {
+        this.loggingService.log(
+          '⏳ Action check already running, skipping interval tick',
+          'DEBUG',
+          'actions',
+        );
+        return;
+      }
+
+      this.actionsCheckInFlight = true;
+      this.checkForPendingActions()
+        .catch((error) => {
+          this.loggingService.log(
+            `❌ Action interval failed: ${error instanceof Error ? error.message : String(error)}`,
+            'ERROR',
+            'actions',
+          );
+        })
+        .finally(() => {
+          this.actionsCheckInFlight = false;
+        });
     }, 60000); // Every 60 seconds
 
     // Initial check
     setTimeout(() => {
-      void this.checkForPendingActions();
+      if (this.actionsCheckInFlight) {
+        return;
+      }
+
+      this.actionsCheckInFlight = true;
+      this.checkForPendingActions()
+        .catch((error) => {
+          this.loggingService.log(
+            `❌ Initial action check failed: ${error instanceof Error ? error.message : String(error)}`,
+            'ERROR',
+            'actions',
+          );
+        })
+        .finally(() => {
+          this.actionsCheckInFlight = false;
+        });
     }, 5000); // Start checking after 5 seconds of application boot
   }
 
@@ -72,7 +108,7 @@ export class ActionsService implements OnModuleInit {
       }
 
       // Get minerId from config
-      const config = this.configService.getConfig();
+      const config = await this.configService.getConfig();
       if (!config?.minerId) {
         this.loggingService.log(
           '❌ Cannot check actions: No minerId found',
@@ -85,6 +121,7 @@ export class ActionsService implements OnModuleInit {
         '🔍 Checking for pending actions...',
         'DEBUG',
         'actions',
+        { minerId: config.minerId },
       );
       this.isProcessingActions = true;
 
@@ -165,10 +202,11 @@ export class ActionsService implements OnModuleInit {
         `🎬 Processing action: ${action._id} - ${action.command}`,
         'INFO',
         'actions',
+        { actionId: action._id, command: action.command },
       );
 
       // Check if benchmark mode is active before executing critical actions
-      if (this.shouldSkipActionDuringBenchmark(action.command)) {
+      if (await this.shouldSkipActionDuringBenchmark(action.command)) {
         const message = `Action ${action.command} skipped - benchmark mode is active`;
         this.loggingService.log(`🚫 ${message}`, 'WARN', 'actions');
 
@@ -245,10 +283,10 @@ export class ActionsService implements OnModuleInit {
   /**
    * Check if an action should be skipped during benchmark mode
    */
-  private shouldSkipActionDuringBenchmark(
+  private async shouldSkipActionDuringBenchmark(
     command: MinerActionCommand,
-  ): boolean {
-    const isBenchmarkActive = this.configService.getBenchmarkFlag();
+  ): Promise<boolean> {
+    const isBenchmarkActive = await this.configService.getBenchmarkFlag();
 
     if (!isBenchmarkActive) {
       return false; // Not in benchmark mode, allow all actions
@@ -703,13 +741,16 @@ export class ActionsService implements OnModuleInit {
 
       // Remove existing script if it exists to ensure we get the latest version
       try {
-        if (fs.existsSync(updateScriptPath)) {
-          fs.unlinkSync(updateScriptPath);
+        try {
+          await fs.promises.access(updateScriptPath);
+          await fs.promises.unlink(updateScriptPath);
           this.loggingService.log(
             '🗑️ Removed existing update script to ensure latest version',
             'DEBUG',
             'actions',
           );
+        } catch {
+          // No existing script
         }
       } catch (removeError) {
         this.loggingService.log(
@@ -901,7 +942,7 @@ rm -f ${wrapperPath} 2>/dev/null || true
 
         // Write wrapper script
         try {
-          fs.writeFileSync(wrapperPath, wrapperContent);
+          await fs.promises.writeFile(wrapperPath, wrapperContent);
           await execAsync(`chmod +x ${wrapperPath}`);
 
           this.loggingService.log(
@@ -1004,7 +1045,7 @@ rm -f ${wrapperPath} 2>/dev/null || true
         );
 
         // Write wrapper script
-        fs.writeFileSync(wrapperPath, wrapperContent);
+        await fs.promises.writeFile(wrapperPath, wrapperContent);
         await execAsync(`chmod +x ${wrapperPath}`);
 
         // Launch wrapper with nohup to keep it running after our process exits
@@ -1112,8 +1153,11 @@ rm -f ${wrapperPath} 2>/dev/null || true
   private async checkIfTermux(): Promise<boolean> {
     try {
       // Check for Termux-specific paths
-      if (fs.existsSync('/data/data/com.termux')) {
+      try {
+        await fs.promises.access('/data/data/com.termux');
         return true;
+      } catch {
+        // Continue to command check
       }
 
       // Or try running a Termux-specific command
@@ -1151,7 +1195,7 @@ rm -f ${wrapperPath} 2>/dev/null || true
 
     // Update telemetry to indicate mining was manually stopped
     try {
-      const config = this.configService.getConfig();
+      const config = await this.configService.getConfig();
       if (!config?.minerId) {
         throw new Error('No minerId found in config');
       }
@@ -1266,6 +1310,11 @@ rm -f ${wrapperPath} 2>/dev/null || true
     if (this.actionsInterval) {
       clearInterval(this.actionsInterval);
       this.actionsInterval = undefined;
+      this.loggingService.log(
+        '🛑 Actions monitoring stopped',
+        'INFO',
+        'actions',
+      );
     }
   }
 

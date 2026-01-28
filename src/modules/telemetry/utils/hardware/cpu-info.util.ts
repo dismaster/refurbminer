@@ -1,13 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import * as os from 'os';
 import * as fs from 'fs';
-import { execSync } from 'child_process';
 
 @Injectable()
 export class CpuInfoUtil {
-  getCpuInfo() {
+  async getCpuInfo() {
     // Try to get enhanced CPU information first
-    const enhancedInfo = this.getEnhancedCpuInfo();
+    const enhancedInfo = await this.getEnhancedCpuInfo();
     if (enhancedInfo) {
       return enhancedInfo;
     }
@@ -28,11 +27,16 @@ export class CpuInfoUtil {
   }
   
   /** Enhanced CPU info detection for ARM and other architectures */
-  private getEnhancedCpuInfo() {
+  private async getEnhancedCpuInfo() {
     try {
       // Check if we can get detailed info from /proc/cpuinfo
-      if (fs.existsSync('/proc/cpuinfo')) {
-        const cpuInfo = fs.readFileSync('/proc/cpuinfo', 'utf8');
+      try {
+        await fs.promises.access('/proc/cpuinfo');
+      } catch {
+        return null;
+      }
+
+      const cpuInfo = await fs.promises.readFile('/proc/cpuinfo', 'utf8');
         const processors = this.parseProcCpuInfo(cpuInfo);
         
         if (processors.length > 0) {
@@ -41,7 +45,6 @@ export class CpuInfoUtil {
             cpuModel: processors,
           };
         }
-      }
       
       return null;
     } catch (error) {

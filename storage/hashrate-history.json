@@ -1,242 +1,242 @@
 [
   {
-    "timestamp": 1752244566,
-    "hashrate": 4321240
+    "timestamp": 1769606272,
+    "hashrate": 3687370
   },
   {
-    "timestamp": 1752244603,
-    "hashrate": 4321100
+    "timestamp": 1769606293,
+    "hashrate": 3687370
   },
   {
-    "timestamp": 1752244626,
-    "hashrate": 4321100
+    "timestamp": 1769606320,
+    "hashrate": 3687370
   },
   {
-    "timestamp": 1752244663,
-    "hashrate": 4322050
+    "timestamp": 1769606322,
+    "hashrate": 3687370
   },
   {
-    "timestamp": 1752244686,
-    "hashrate": 4330400
+    "timestamp": 1769606331,
+    "hashrate": 3687370
   },
   {
-    "timestamp": 1752244716,
-    "hashrate": 4334300
+    "timestamp": 1769606354,
+    "hashrate": 3688940
   },
   {
-    "timestamp": 1752244748,
-    "hashrate": 4334380
+    "timestamp": 1769606377,
+    "hashrate": 3688940
   },
   {
-    "timestamp": 1752244776,
-    "hashrate": 4334380
+    "timestamp": 1769606394,
+    "hashrate": 3688940
   },
   {
-    "timestamp": 1752244806,
-    "hashrate": 4334380
+    "timestamp": 1769606395,
+    "hashrate": 3690990
   },
   {
-    "timestamp": 1752244843,
-    "hashrate": 4333960
+    "timestamp": 1769606439,
+    "hashrate": 3687500
   },
   {
-    "timestamp": 1752244866,
-    "hashrate": 4333960
+    "timestamp": 1769606451,
+    "hashrate": 3687500
   },
   {
-    "timestamp": 1752244896,
-    "hashrate": 4336650
+    "timestamp": 1769606455,
+    "hashrate": 3681040
   },
   {
-    "timestamp": 1752244934,
-    "hashrate": 4336650
+    "timestamp": 1769606501,
+    "hashrate": 3594860
   },
   {
-    "timestamp": 1752244956,
-    "hashrate": 4336650
+    "timestamp": 1769606511,
+    "hashrate": 3594860
   },
   {
-    "timestamp": 1752244986,
-    "hashrate": 4323390
+    "timestamp": 1769606515,
+    "hashrate": 3619250
   },
   {
-    "timestamp": 1752245023,
-    "hashrate": 4315530
+    "timestamp": 1769606558,
+    "hashrate": 4210130
   },
   {
-    "timestamp": 1752245046,
-    "hashrate": 4313860
+    "timestamp": 1769606571,
+    "hashrate": 4210130
   },
   {
-    "timestamp": 1752245083,
-    "hashrate": 4313860
+    "timestamp": 1769606575,
+    "hashrate": 4210130
   },
   {
-    "timestamp": 1752245106,
-    "hashrate": 4313860
+    "timestamp": 1769606620,
+    "hashrate": 4152090
   },
   {
-    "timestamp": 1752245143,
-    "hashrate": 4317910
+    "timestamp": 1769606631,
+    "hashrate": 4152090
   },
   {
-    "timestamp": 1752245166,
-    "hashrate": 4317910
+    "timestamp": 1769606635,
+    "hashrate": 4154810.0000000005
   },
   {
-    "timestamp": 1752245196,
-    "hashrate": 4298880
+    "timestamp": 1769606678,
+    "hashrate": 4169939.9999999995
   },
   {
-    "timestamp": 1752245234,
-    "hashrate": 4298880
+    "timestamp": 1769606691,
+    "hashrate": 4169939.9999999995
   },
   {
-    "timestamp": 1752245256,
-    "hashrate": 4319510
+    "timestamp": 1769606695,
+    "hashrate": 4171460
   },
   {
-    "timestamp": 1752245287,
-    "hashrate": 4319790
+    "timestamp": 1769606740,
+    "hashrate": 4165069.9999999995
   },
   {
-    "timestamp": 1752245318,
-    "hashrate": 4322340
+    "timestamp": 1769606751,
+    "hashrate": 4165069.9999999995
   },
   {
-    "timestamp": 1752245346,
-    "hashrate": 4322800
+    "timestamp": 1769606755,
+    "hashrate": 4474450
   },
   {
-    "timestamp": 1752245384,
-    "hashrate": 4322730
+    "timestamp": 1769606801,
+    "hashrate": 4478550
   },
   {
-    "timestamp": 1752245406,
-    "hashrate": 4338170
+    "timestamp": 1769606811,
+    "hashrate": 4478550
   },
   {
-    "timestamp": 1752245439,
-    "hashrate": 4337310
+    "timestamp": 1769606815,
+    "hashrate": 4488600
   },
   {
-    "timestamp": 1752245466,
-    "hashrate": 4337310
+    "timestamp": 1769606861,
+    "hashrate": 4495160
   },
   {
-    "timestamp": 1752245497,
-    "hashrate": 4342790
+    "timestamp": 1769606871,
+    "hashrate": 4495160
   },
   {
-    "timestamp": 1752245534,
-    "hashrate": 4342790
+    "timestamp": 1769606875,
+    "hashrate": 4490230
   },
   {
-    "timestamp": 1752245556,
-    "hashrate": 4343560
+    "timestamp": 1769606941,
+    "hashrate": 0
   },
   {
-    "timestamp": 1752245586,
-    "hashrate": 4343560
+    "timestamp": 1769606953,
+    "hashrate": 0
   },
   {
-    "timestamp": 1752245619,
-    "hashrate": 4343340
+    "timestamp": 1769606995,
+    "hashrate": 1228750
   },
   {
-    "timestamp": 1752245737,
-    "hashrate": 710670
+    "timestamp": 1769606998,
+    "hashrate": 1228750
   },
   {
-    "timestamp": 1752245753,
-    "hashrate": 710670
+    "timestamp": 1769606998,
+    "hashrate": 1228750
   },
   {
-    "timestamp": 1752245789,
-    "hashrate": 710670
+    "timestamp": 1769607006,
+    "hashrate": 1228750
   },
   {
-    "timestamp": 1752245820,
-    "hashrate": 710670
+    "timestamp": 1769607010,
+    "hashrate": 1542840
   },
   {
-    "timestamp": 1752245849,
-    "hashrate": 710670
+    "timestamp": 1769607013,
+    "hashrate": 1542840
   },
   {
-    "timestamp": 1752245880,
-    "hashrate": 710670
+    "timestamp": 1769607016,
+    "hashrate": 1542840
   },
   {
-    "timestamp": 1752245909,
-    "hashrate": 1257900
+    "timestamp": 1769607018,
+    "hashrate": 1542840
   },
   {
-    "timestamp": 1752245933,
-    "hashrate": 1922190
+    "timestamp": 1769607020,
+    "hashrate": 1542840
   },
   {
-    "timestamp": 1752245976,
-    "hashrate": 1922190
+    "timestamp": 1769607054,
+    "hashrate": 1542840
   },
   {
-    "timestamp": 1752245993,
-    "hashrate": 1812100
+    "timestamp": 1769607058,
+    "hashrate": 1542840
   },
   {
-    "timestamp": 1752246036,
-    "hashrate": 1812100
+    "timestamp": 1769607073,
+    "hashrate": 1542840
   },
   {
-    "timestamp": 1752246053,
-    "hashrate": 1789200
+    "timestamp": 1769607077,
+    "hashrate": 1542840
   },
   {
-    "timestamp": 1752246089,
-    "hashrate": 1791900
+    "timestamp": 1769607108,
+    "hashrate": 1542840
   },
   {
-    "timestamp": 1752246199,
-    "hashrate": 350970
+    "timestamp": 1769607118,
+    "hashrate": 1542840
   },
   {
-    "timestamp": 1752246210,
-    "hashrate": 350970
+    "timestamp": 1769607133,
+    "hashrate": 1542840
   },
   {
-    "timestamp": 1752246251,
-    "hashrate": 350970
+    "timestamp": 1769607138,
+    "hashrate": 1542840
   },
   {
-    "timestamp": 1752246277,
-    "hashrate": 350970
+    "timestamp": 1769607170,
+    "hashrate": 1542840
   },
   {
-    "timestamp": 1752246311,
-    "hashrate": 1580960
+    "timestamp": 1769607178,
+    "hashrate": 1542840
   },
   {
-    "timestamp": 1752246329,
-    "hashrate": 2232490
+    "timestamp": 1769607193,
+    "hashrate": 1542840
   },
   {
-    "timestamp": 1752246378,
-    "hashrate": 3139060
+    "timestamp": 1769607198,
+    "hashrate": 1542840
   },
   {
-    "timestamp": 1752246389,
-    "hashrate": 3139060
+    "timestamp": 1769607231,
+    "hashrate": 1542840
   },
   {
-    "timestamp": 1752246431,
-    "hashrate": 3808430
+    "timestamp": 1769607238,
+    "hashrate": 1542840
   },
   {
-    "timestamp": 1752246457,
-    "hashrate": 3805620
+    "timestamp": 1769607253,
+    "hashrate": 1542840
   },
   {
-    "timestamp": 1752246491,
-    "hashrate": 3644780
+    "timestamp": 1769607257,
+    "hashrate": 1542840
   }
 ]

@@ -1,4 +1,25 @@
-import { execSync } from 'child_process';
+import { exec, ExecOptionsWithStringEncoding } from 'child_process';
+import { promisify } from 'util';
+
+type ExecOptionsString = Omit<ExecOptionsWithStringEncoding, 'encoding'> & {
+  encoding?: BufferEncoding;
+};
+
+const execAsync = promisify(exec) as (
+  command: string,
+  options?: ExecOptionsWithStringEncoding,
+) => Promise<{ stdout: string; stderr: string }>;
+
+const execCommand = async (
+  command: string,
+  options: ExecOptionsString = {},
+): Promise<string> => {
+  const { stdout } = await execAsync(command, {
+    encoding: 'utf8',
+    ...options,
+  } as ExecOptionsWithStringEncoding);
+  return stdout ?? '';
+};
 
 export interface MinerApiEndpoint {
   host: string;
@@ -23,7 +44,7 @@ export class MinerApiConfigUtil {
   /**
    * Get the correct API endpoint for a specific miner
    */
-  static getMinerApiEndpoint(minerType: 'ccminer' | 'xmrig'): MinerApiEndpoint {
+  static async getMinerApiEndpoint(minerType: 'ccminer' | 'xmrig'): Promise<MinerApiEndpoint> {
     const cacheKey = minerType;
     
     // Return cached endpoint if available
@@ -32,7 +53,7 @@ export class MinerApiConfigUtil {
     }
 
     // Try to discover the correct endpoint
-    const endpoint = this.discoverMinerEndpoint(minerType);
+    const endpoint = await this.discoverMinerEndpoint(minerType);
     
     // Cache the discovered endpoint
     this.cachedEndpoints.set(cacheKey, endpoint);
@@ -43,7 +64,7 @@ export class MinerApiConfigUtil {
   /**
    * Discover miner API endpoint by testing multiple possibilities
    */
-  private static discoverMinerEndpoint(minerType: 'ccminer' | 'xmrig'): MinerApiEndpoint {
+  private static async discoverMinerEndpoint(minerType: 'ccminer' | 'xmrig'): Promise<MinerApiEndpoint> {
     const possibleHosts = [
       '127.0.0.1',    // Localhost first (most common - miner runs locally)
       'localhost',    // Alternative localhost format
@@ -54,7 +75,7 @@ export class MinerApiConfigUtil {
 
     for (const host of possibleHosts) {
       for (const port of possiblePorts) {
-        if (this.testEndpoint(host, port, minerType)) {
+        if (await this.testEndpoint(host, port, minerType)) {
           return {
             host,
             port,
@@ -71,20 +92,20 @@ export class MinerApiConfigUtil {
   /**
    * Test if an endpoint is responsive
    */
-  private static testEndpoint(host: string, port: number, minerType: 'ccminer' | 'xmrig'): boolean {
+  private static async testEndpoint(host: string, port: number, minerType: 'ccminer' | 'xmrig'): Promise<boolean> {
     try {
       if (minerType === 'xmrig') {
         // Test XMRig HTTP API - simplified test without auth
-        const response = execSync(
+        const response = await execCommand(
           `curl -s --connect-timeout 2 --max-time 3 http://${host}:${port}/1/summary`,
-          { encoding: 'utf8', timeout: 5000 }
+          { timeout: 5000 }
         );
         return response.includes('connection') || response.includes('hashrate') || response.includes('version');
       } else {
         // Test CCMiner TCP API
-        const response = execSync(
+        const response = await execCommand(
           `echo 'summary' | timeout 3 nc -w 2 ${host} ${port}`,
-          { encoding: 'utf8', timeout: 5000 }
+          { timeout: 5000 }
         );
         return response.includes('VER=') || response.includes('ALGO=');
       }
@@ -96,20 +117,20 @@ export class MinerApiConfigUtil {
   /**
    * Get HTTP URL for XMRig API
    */
-  static getXmrigApiUrl(endpoint?: string): string {
+  static async getXmrigApiUrl(endpoint?: string): Promise<string> {
     if (endpoint) {
       return endpoint;
     }
     
-    const config = this.getMinerApiEndpoint('xmrig');
+    const config = await this.getMinerApiEndpoint('xmrig');
     return `http://${config.host}:${config.port}`;
   }
 
   /**
    * Get TCP endpoint for CCMiner API
    */
-  static getCcminerApiEndpoint(): string {
-    const config = this.getMinerApiEndpoint('ccminer');
+  static async getCcminerApiEndpoint(): Promise<string> {
+    const config = await this.getMinerApiEndpoint('ccminer');
     return `${config.host} ${config.port}`;
   }
 
@@ -117,12 +138,14 @@ export class MinerApiConfigUtil {
    * Test connectivity to discovered endpoints
    */
   static async testConnectivity(): Promise<{ccminer: boolean, xmrig: boolean}> {
-    const ccminerEndpoint = this.getMinerApiEndpoint('ccminer');
-    const xmrigEndpoint = this.getMinerApiEndpoint('xmrig');
+    const [ccminerEndpoint, xmrigEndpoint] = await Promise.all([
+      this.getMinerApiEndpoint('ccminer'),
+      this.getMinerApiEndpoint('xmrig')
+    ]);
 
     return {
-      ccminer: this.testEndpoint(ccminerEndpoint.host, ccminerEndpoint.port, 'ccminer'),
-      xmrig: this.testEndpoint(xmrigEndpoint.host, xmrigEndpoint.port, 'xmrig')
+      ccminer: await this.testEndpoint(ccminerEndpoint.host, ccminerEndpoint.port, 'ccminer'),
+      xmrig: await this.testEndpoint(xmrigEndpoint.host, xmrigEndpoint.port, 'xmrig')
     };
   }
 }

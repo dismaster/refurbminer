@@ -11,12 +11,12 @@ export class DeviceMonitoringService {
   }
 
   /** 📝 Returns hardware and OS metadata */
-  getSystemInfo(): any {
+  async getSystemInfo(): Promise<any> {
     return this.osDetectionService.getSystemInfo();
   }
 
   /** 📝 Returns device IP Address */
-  getIPAddress(): string {
+  async getIPAddress(): Promise<string> {
     return this.osDetectionService.getIPAddress();
   }
 }

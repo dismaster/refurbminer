@@ -1,6 +1,28 @@
-import { execSync } from 'child_process';
+import { exec, ExecOptionsWithStringEncoding } from 'child_process';
 import * as os from 'os';
 import { MemoryInfoUtil } from '../../telemetry/utils/hardware/memory-info.util';
+import { promisify } from 'util';
+
+type ExecOptionsString = Omit<ExecOptionsWithStringEncoding, 'encoding'> & {
+  encoding?: BufferEncoding;
+  stdio?: any;
+};
+
+const execAsync = promisify(exec) as (
+  command: string,
+  options?: ExecOptionsWithStringEncoding,
+) => Promise<{ stdout: string; stderr: string }>;
+
+const execCommand = async (
+  command: string,
+  options: ExecOptionsString = {},
+): Promise<string> => {
+  const { stdout } = await execAsync(command, {
+    encoding: 'utf8',
+    ...options,
+  } as ExecOptionsWithStringEncoding);
+  return stdout ?? '';
+};
 
 export interface EnvironmentInfo {
   isTermux: boolean;
@@ -18,15 +40,15 @@ export class EnvironmentConfigUtil {
   /**
    * Detect environment and system resources for optimal XMRig configuration
    */
-  static detectEnvironment(): EnvironmentInfo {
+  static async detectEnvironment(): Promise<EnvironmentInfo> {
     const isTermux = this.isTermuxEnvironment();
     const isLinux = process.platform === 'linux';
     const totalMemoryBytes = MemoryInfoUtil.getTotalMemory();
     const totalMemoryGB = totalMemoryBytes / (1024 * 1024 * 1024);
     const cpuCores = os.cpus().length;
-    const hasRoot = this.hasRootAccess();
+    const hasRoot = await this.hasRootAccess();
     const architecture = process.arch;
-    const hasHugePageSupport = this.checkHugePageSupport();
+    const hasHugePageSupport = await this.checkHugePageSupport();
 
     // Determine optimal RandomX mode
     // Mobile devices (Termux) should use "light" mode for lower memory usage
@@ -70,11 +92,11 @@ export class EnvironmentConfigUtil {
   /**
    * Check if system has root access
    */
-  private static hasRootAccess(): boolean {
+  private static async hasRootAccess(): Promise<boolean> {
     try {
       if (this.isTermuxEnvironment()) {
         // In Termux, check if 'su' command is available
-        execSync('command -v su', { stdio: 'pipe' });
+        await execCommand('command -v su', { stdio: 'pipe' });
         return true;
       } else {
         // On regular Linux, check effective user ID
@@ -88,13 +110,15 @@ export class EnvironmentConfigUtil {
   /**
    * Check if system supports huge pages
    */
-  private static checkHugePageSupport(): boolean {
+  private static async checkHugePageSupport(): Promise<boolean> {
     try {
       // Check if huge pages are available in the system
-      const hugePagesInfo = execSync('cat /proc/meminfo | grep -i hugepage', {
-        encoding: 'utf8',
-        stdio: 'pipe'
-      });
+      const hugePagesInfo = await execCommand(
+        'cat /proc/meminfo | grep -i hugepage',
+        {
+          stdio: 'pipe',
+        },
+      );
       
       // If we can read huge page info, system likely supports it
       return hugePagesInfo.length > 0;

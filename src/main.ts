@@ -1,9 +1,26 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import { LoggingService } from './modules/logging/logging.service';
+import { GlobalExceptionFilter } from './shared/filters/global-exception.filter';
+import * as os from 'os';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
+
+  const loggingService = app.get(LoggingService);
+
+  loggingService.log(
+    `🧾 Startup baseline: node=${process.version}, platform=${process.platform}, arch=${process.arch}, os=${os.release()}`,
+    'INFO',
+    'app',
+  );
+
+  // Global exception filter
+  app.useGlobalFilters(new GlobalExceptionFilter(loggingService));
+
+  // Enable graceful shutdown hooks
+  app.enableShutdownHooks();
 
   // Enable CORS
   app.enableCors();
@@ -12,23 +29,48 @@ async function bootstrap() {
   await app.listen(port);
   console.log(`Application is running on: ${await app.getUrl()}`);
 
-  // Proper signal handlers for graceful shutdown
-  const signals = ['SIGINT', 'SIGTERM', 'SIGQUIT'];
-  
-  signals.forEach(signal => {
-    process.on(signal, async () => {
-      console.log(`Received ${signal} signal - shutting down gracefully`);
-      
-      try {
-        await app.close();
-        console.log('Application has been gracefully closed');
-        process.exit(0);
-      } catch (err) {
-        console.error('Error during graceful shutdown:', err);
-        process.exit(1);
-      }
-    });
+  let isShuttingDown = false;
+  const shutdown = async (reason: string, error?: unknown, exitCode: number = 0) => {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+
+    const errorMessage = error instanceof Error ? error.message : error ? String(error) : '';
+    const stack = error instanceof Error ? error.stack : undefined;
+
+    try {
+      loggingService.log(
+        `🛑 Shutdown requested: ${reason}${errorMessage ? ` - ${errorMessage}` : ''}`,
+        exitCode === 0 ? 'INFO' : 'ERROR',
+        'app',
+        stack ? { stack } : undefined,
+      );
+    } catch {
+      // Fallback to console if logger is unavailable
+      console.error(`Shutdown requested: ${reason}`, errorMessage);
+    }
+
+    try {
+      await Promise.race([
+        app.close(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Shutdown timeout after 10 seconds')), 10000),
+        ),
+      ]);
+    } catch (closeError) {
+      console.error('Error during graceful shutdown:', closeError);
+    } finally {
+      process.exit(exitCode);
+    }
+  };
+
+  process.on('uncaughtException', (error) => {
+    void shutdown('uncaughtException', error, 1);
   });
+
+  process.on('unhandledRejection', (reason) => {
+    void shutdown('unhandledRejection', reason, 1);
+  });
+
 }
 
 bootstrap();

@@ -1,4 +1,4 @@
-import { Injectable, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, Inject, forwardRef, OnApplicationShutdown } from '@nestjs/common';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as dotenv from 'dotenv';
@@ -11,7 +11,8 @@ dotenv.config();
 // Define log file paths
 const LOGS_DIR = path.resolve(process.cwd(), 'logs');
 const LOG_FILE_PATH = path.join(LOGS_DIR, 'app.log');
-const MAX_LOGS = 100;
+const MAX_LOG_SIZE_BYTES = 5 * 1024 * 1024; // 5 MB
+const MAX_LOG_ROTATIONS = 3;
 const DEFAULT_LOG_LEVEL = 'INFO';
 
 // Log levels for backend sending
@@ -36,7 +37,7 @@ interface PendingLog {
 }
 
 @Injectable()
-export class LoggingService {
+export class LoggingService implements OnApplicationShutdown {
   private logLevel: string;
   private logToConsole: boolean;
   
@@ -49,6 +50,7 @@ export class LoggingService {
   private bufferTimer?: NodeJS.Timeout;
   private readonly BUFFER_SIZE = 10;
   private readonly BUFFER_TIMEOUT = 5000; // 5 seconds
+  private flushQueue: Promise<void> = Promise.resolve();
 
   // Backend logging configuration
   private sendToBackend: boolean;
@@ -78,16 +80,24 @@ export class LoggingService {
     this.sendToBackend = process.env.SEND_LOGS_TO_BACKEND === 'true';
     this.backendLogLevel = (process.env.BACKEND_LOG_LEVEL || 'WARN').toUpperCase().trim();
 
-    this.ensureLogFileExists();
+    void this.ensureLogFileExists();
   }
 
   /** ✅ Ensure logs directory and file exist */
-  private ensureLogFileExists(): void {
-    if (!fs.existsSync(LOGS_DIR)) {
-      fs.mkdirSync(LOGS_DIR, { recursive: true });
-    }
-    if (!fs.existsSync(LOG_FILE_PATH)) {
-      fs.writeFileSync(LOG_FILE_PATH, '', { flag: 'w' });
+  private async ensureLogFileExists(): Promise<void> {
+    try {
+      await fs.promises.mkdir(LOGS_DIR, { recursive: true });
+      try {
+        await fs.promises.access(LOG_FILE_PATH);
+      } catch {
+        await fs.promises.writeFile(LOG_FILE_PATH, '', { flag: 'w' });
+      }
+    } catch (error) {
+      console.error(
+        `[ERROR] LoggingService failed to initialize log file: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
     }
   }
 
@@ -121,7 +131,8 @@ export class LoggingService {
     }
 
     const timestamp = new Date();
-    const logEntry = `${timestamp.toISOString()} [${normalizedLevel}] [${module}] ${message}`;
+    const metadataSuffix = metadata ? ` | meta=${JSON.stringify(metadata)}` : '';
+    const logEntry = `${timestamp.toISOString()} [${normalizedLevel}] [${module}] ${message}${metadataSuffix}`;
 
     // Add to buffer for batch write
     this.addToBuffer(logEntry);
@@ -172,51 +183,89 @@ export class LoggingService {
 
     // Write immediately if buffer is full
     if (this.logBuffer.length >= this.BUFFER_SIZE) {
-      this.flushBuffer();
+      void this.flushBuffer();
     } else {
       // Set timer to flush buffer after timeout
       if (!this.bufferTimer) {
         this.bufferTimer = setTimeout(() => {
-          this.flushBuffer();
+          void this.flushBuffer();
         }, this.BUFFER_TIMEOUT);
       }
     }
   }
 
   /** ✅ Flush buffer to file */
-  private flushBuffer(): void {
+  private async flushBuffer(): Promise<void> {
+    this.flushQueue = this.flushQueue
+      .then(() => this.flushBufferInternal())
+      .catch((error) => {
+        console.error(
+          `[ERROR] LoggingService failed to write to log file: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      });
+
+    return this.flushQueue;
+  }
+
+  private async flushBufferInternal(): Promise<void> {
     if (this.logBuffer.length === 0) return;
 
+    // Append buffered logs to avoid read-modify-write on every flush
     try {
-      // Read existing logs
-      const logs = fs.existsSync(LOG_FILE_PATH)
-        ? fs.readFileSync(LOG_FILE_PATH, 'utf8').split('\n').filter(Boolean)
-        : [];
-
-      // Add buffered logs
-      logs.push(...this.logBuffer);
-
-      // Keep only last MAX_LOGS entries
-      if (logs.length > MAX_LOGS) {
-        logs.splice(0, logs.length - MAX_LOGS);
-      }
-
-      // Write updated logs
-      fs.writeFileSync(LOG_FILE_PATH, logs.join('\n') + '\n', 'utf8');
-
-      // Clear buffer and timer
-      this.logBuffer = [];
-      if (this.bufferTimer) {
-        clearTimeout(this.bufferTimer);
-        this.bufferTimer = undefined;
-      }
-    } catch (error) {
-      console.error(
-        `[ERROR] LoggingService failed to write to log file: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
+      await fs.promises.access(LOG_FILE_PATH);
+    } catch {
+      await fs.promises.writeFile(LOG_FILE_PATH, '', { flag: 'w' });
     }
+
+    const payload = this.logBuffer.join('\n') + '\n';
+    await this.rotateLogsIfNeeded(Buffer.byteLength(payload, 'utf8'));
+    await fs.promises.appendFile(LOG_FILE_PATH, payload, 'utf8');
+
+    // Clear buffer and timer
+    this.logBuffer = [];
+    if (this.bufferTimer) {
+      clearTimeout(this.bufferTimer);
+      this.bufferTimer = undefined;
+    }
+  }
+
+  private async rotateLogsIfNeeded(nextWriteBytes: number): Promise<void> {
+    try {
+      const stats = await fs.promises.stat(LOG_FILE_PATH);
+      if (stats.size + nextWriteBytes < MAX_LOG_SIZE_BYTES) {
+        return;
+      }
+    } catch {
+      return;
+    }
+
+    for (let i = MAX_LOG_ROTATIONS; i >= 1; i -= 1) {
+      const source = `${LOG_FILE_PATH}.${i}`;
+      const target = `${LOG_FILE_PATH}.${i + 1}`;
+      if (i === MAX_LOG_ROTATIONS) {
+        try {
+          await fs.promises.unlink(source);
+        } catch {
+          // ignore
+        }
+        continue;
+      }
+      try {
+        await fs.promises.rename(source, target);
+      } catch {
+        // ignore missing files
+      }
+    }
+
+    try {
+      await fs.promises.rename(LOG_FILE_PATH, `${LOG_FILE_PATH}.1`);
+    } catch {
+      // ignore
+    }
+
+    await fs.promises.writeFile(LOG_FILE_PATH, '', { flag: 'w' });
   }
 
   /** ✅ Print logs to console */
@@ -235,24 +284,29 @@ export class LoggingService {
   }
 
   /** ✅ Retrieve last N logs */
-  getLogs(limit: number = 50): string[] {
+  async getLogs(limit: number = 50): Promise<string[]> {
     // Flush any pending logs first
-    this.flushBuffer();
-    
-    return fs.existsSync(LOG_FILE_PATH)
-      ? fs.readFileSync(LOG_FILE_PATH, 'utf8').split('\n').filter(Boolean).slice(-limit)
-      : [];
+    await this.flushBuffer();
+
+    try {
+      await fs.promises.access(LOG_FILE_PATH);
+    } catch {
+      return [];
+    }
+
+    const contents = await fs.promises.readFile(LOG_FILE_PATH, 'utf8');
+    return contents.split('\n').filter(Boolean).slice(-limit);
   }
 
   /** ✅ Clean up resources on shutdown */
-  onApplicationShutdown(): void {
-    this.flushBuffer();
+  async onApplicationShutdown(): Promise<void> {
+    await this.flushBuffer();
     if (this.bufferTimer) {
       clearTimeout(this.bufferTimer);
     }
     
     // Send any pending backend logs
-    this.flushBackendLogs();
+    await this.flushBackendLogs();
     if (this.backendSendTimer) {
       clearTimeout(this.backendSendTimer);
     }
@@ -328,7 +382,7 @@ export class LoggingService {
     }
 
     try {
-      const config = this.configService.getConfig();
+      const config = await this.configService.getConfig();
       if (!config?.minerId) return;
 
       // Send each log individually to match your backend's expected format

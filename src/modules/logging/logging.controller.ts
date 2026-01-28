@@ -6,7 +6,7 @@ export class LoggingController {
   constructor(private readonly loggingService: LoggingService) {}
 
   @Get()
-  getLogs(@Query('limit') limit?: number): string[] {
-    return this.loggingService.getLogs(limit ? Number(limit) : 50);
+  async getLogs(@Query('limit') limit?: number): Promise<string[]> {
+    return await this.loggingService.getLogs(limit ? Number(limit) : 50);
   }
 }

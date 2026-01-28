@@ -17,6 +17,10 @@ dotenv.config();
 export class ApiCommunicationService {
   private readonly apiUrl: string;
   private readonly rigToken: string;
+  private readonly DEFAULT_RETRY_DELAY = 1000;
+  private readonly CIRCUIT_FAILURE_THRESHOLD = 3;
+  private readonly CIRCUIT_COOLDOWN_MS = 30000;
+  private breakerState = new Map<string, { failures: number; openUntil?: number }>();
 
   constructor(
     private readonly httpService: HttpService,
@@ -30,6 +34,61 @@ export class ApiCommunicationService {
       'INFO',
       'api',
     );
+  }
+
+  private async withRetry<T>(
+    operation: () => Promise<T>,
+    context: string,
+    retries: number = 2,
+    delayMs: number = this.DEFAULT_RETRY_DELAY,
+  ): Promise<T> {
+    let attempt = 0;
+    let lastError: unknown;
+
+    const state = this.breakerState.get(context) ?? { failures: 0 };
+    if (state.openUntil && Date.now() < state.openUntil) {
+      throw new Error(`Circuit open for ${context} until ${new Date(state.openUntil).toISOString()}`);
+    }
+
+    while (attempt <= retries) {
+      try {
+        const result = await operation();
+        this.breakerState.set(context, { failures: 0 });
+        return result;
+      } catch (error) {
+        lastError = error;
+        attempt++;
+
+        const updatedFailures = (this.breakerState.get(context)?.failures ?? state.failures) + 1;
+        const shouldOpen = updatedFailures >= this.CIRCUIT_FAILURE_THRESHOLD;
+        this.breakerState.set(context, {
+          failures: updatedFailures,
+          openUntil: shouldOpen ? Date.now() + this.CIRCUIT_COOLDOWN_MS : undefined,
+        });
+
+        if (shouldOpen) {
+          this.loggingService.log(
+            `🚫 Circuit opened for ${context} after ${updatedFailures} failures (cooldown ${this.CIRCUIT_COOLDOWN_MS}ms)`,
+            'WARN',
+            'api',
+          );
+        }
+
+        if (attempt > retries) {
+          break;
+        }
+
+        this.loggingService.log(
+          `⚠️ ${context} failed (attempt ${attempt}/${retries + 1}). Retrying in ${delayMs}ms...`,
+          'WARN',
+          'api',
+        );
+
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+
+    throw lastError;
   }
 
   /** 📝 Get API URL */
@@ -53,27 +112,32 @@ export class ApiCommunicationService {
       );
 
       // Add timeout protection to prevent hanging
-      const response = (await Promise.race([
-        firstValueFrom(
-          this.httpService.post(
-            url,
-            {
-              rigToken: this.rigToken,
-              metadata,
-              minerIp,
-            },
-            {
-              timeout: 30000, // 30 second timeout for registration
-            },
-          ),
-        ),
-        new Promise((_, reject) =>
-          setTimeout(
-            () => reject(new Error('Registration timeout after 30 seconds')),
-            30000,
-          ),
-        ),
-      ])) as any;
+      const response = await this.withRetry(
+        async () =>
+          (await Promise.race([
+            firstValueFrom(
+              this.httpService.post(
+                url,
+                {
+                  rigToken: this.rigToken,
+                  metadata,
+                  minerIp,
+                },
+                {
+                  timeout: 30000, // 30 second timeout for registration
+                },
+              ),
+            ),
+            new Promise((_, reject) =>
+              setTimeout(
+                () => reject(new Error('Registration timeout after 30 seconds')),
+                30000,
+              ),
+            ),
+          ])) as any,
+        'Registration',
+        2,
+      );
 
       if (!response.data || !response.data.minerId) {
         this.loggingService.log(
@@ -114,22 +178,26 @@ export class ApiCommunicationService {
   /** 📝 Fetch miner configuration (flight sheet, schedules, etc.) */
   async getMinerConfig(): Promise<any> {
     try {
-      const response = (await Promise.race([
-        firstValueFrom(
-          this.httpService.get(
-            `${this.apiUrl}/api/miners/config?rigToken=${this.rigToken}`,
-            {
-              timeout: 15000,
-            },
-          ),
-        ),
-        new Promise((_, reject) =>
-          setTimeout(
-            () => reject(new Error('Config fetch timeout after 15 seconds')),
-            15000,
-          ),
-        ),
-      ])) as any;
+      const response = await this.withRetry(
+        async () =>
+          (await Promise.race([
+            firstValueFrom(
+              this.httpService.get(
+                `${this.apiUrl}/api/miners/config?rigToken=${this.rigToken}`,
+                {
+                  timeout: 15000,
+                },
+              ),
+            ),
+            new Promise((_, reject) =>
+              setTimeout(
+                () => reject(new Error('Config fetch timeout after 15 seconds')),
+                15000,
+              ),
+            ),
+          ])) as any,
+        'Config fetch',
+      );
 
       return response.data;
     } catch (error: any) {
@@ -165,28 +233,32 @@ export class ApiCommunicationService {
       );
 
       // Add timeout protection to prevent hanging
-      const response = (await Promise.race([
-        firstValueFrom(
-          this.httpService.put(
-            url,
-            {
-              rigToken: this.rigToken,
-              minerId,
-              telemetry,
-            },
-            {
-              timeout: 15000, // 15 second timeout for telemetry
-            },
-          ),
-        ),
-        new Promise((_, reject) =>
-          setTimeout(
-            () =>
-              reject(new Error('Telemetry update timeout after 15 seconds')),
-            15000,
-          ),
-        ),
-      ])) as any; // Type assertion for Promise.race result
+      const response = await this.withRetry(
+        async () =>
+          (await Promise.race([
+            firstValueFrom(
+              this.httpService.put(
+                url,
+                {
+                  rigToken: this.rigToken,
+                  minerId,
+                  telemetry,
+                },
+                {
+                  timeout: 15000, // 15 second timeout for telemetry
+                },
+              ),
+            ),
+            new Promise((_, reject) =>
+              setTimeout(
+                () =>
+                  reject(new Error('Telemetry update timeout after 15 seconds')),
+                15000,
+              ),
+            ),
+          ])) as any,
+        'Telemetry update',
+      );
 
       if (response.status !== 200) {
         throw new Error(`API returned ${response.status}`);
@@ -222,16 +294,22 @@ export class ApiCommunicationService {
         url += `&minerId=${minerId}`;
       }
 
-      const response = (await Promise.race([
-        firstValueFrom(this.httpService.get(url)),
-        new Promise((_, reject) =>
-          setTimeout(
-            () =>
-              reject(new Error('Flightsheet fetch timeout after 15 seconds')),
-            15000,
-          ),
-        ),
-      ])) as any;
+      const response = await this.withRetry(
+        async () =>
+          (await Promise.race([
+            firstValueFrom(this.httpService.get(url)),
+            new Promise((_, reject) =>
+              setTimeout(
+                () =>
+                  reject(
+                    new Error('Flightsheet fetch timeout after 15 seconds'),
+                  ),
+                15000,
+              ),
+            ),
+          ])) as any,
+        'Flightsheet fetch',
+      );
 
       return response.data;
     } catch (error: any) {
@@ -263,22 +341,27 @@ export class ApiCommunicationService {
     additionalInfo?: any,
   ): Promise<any> {
     try {
-      const response = (await Promise.race([
-        firstValueFrom(
-          this.httpService.post(`${this.apiUrl}/api/miners/error`, {
-            minerId,
-            message,
-            stack,
-            additionalInfo,
-          }),
-        ),
-        new Promise((_, reject) =>
-          setTimeout(
-            () => reject(new Error('Error logging timeout after 10 seconds')),
-            10000,
-          ),
-        ),
-      ])) as any;
+      const response = await this.withRetry(
+        async () =>
+          (await Promise.race([
+            firstValueFrom(
+              this.httpService.post(`${this.apiUrl}/api/miners/error`, {
+                minerId,
+                message,
+                stack,
+                additionalInfo,
+              }),
+            ),
+            new Promise((_, reject) =>
+              setTimeout(
+                () => reject(new Error('Error logging timeout after 10 seconds')),
+                10000,
+              ),
+            ),
+          ])) as any,
+        'Error logging',
+        1,
+      );
 
       return response.data;
     } catch (error: any) {
@@ -305,7 +388,7 @@ export class ApiCommunicationService {
   /** 📝 Fetch pending miner actions */
   async getPendingMinerActions(minerId: string): Promise<any> {
     try {
-      const rigToken = this.getRigToken();
+      const rigToken = await this.getRigToken();
       if (!rigToken) {
         this.loggingService.log(
           '❌ Cannot fetch actions: No rig token found',
@@ -323,22 +406,27 @@ export class ApiCommunicationService {
       );
 
       // Add timeout protection to prevent hanging
-      const response = (await Promise.race([
-        firstValueFrom(
-          this.httpService.get(url, {
-            headers: {
-              'rig-token': rigToken,
-            },
-            timeout: 10000, // 10 second timeout
-          }),
-        ),
-        new Promise((_, reject) =>
-          setTimeout(
-            () => reject(new Error('API request timeout after 10 seconds')),
-            10000,
-          ),
-        ),
-      ])) as any; // Type assertion for Promise.race result
+      const response = await this.withRetry(
+        async () =>
+          (await Promise.race([
+            firstValueFrom(
+              this.httpService.get(url, {
+                headers: {
+                  'rig-token': rigToken,
+                },
+                timeout: 10000, // 10 second timeout
+              }),
+            ),
+            new Promise((_, reject) =>
+              setTimeout(
+                () => reject(new Error('API request timeout after 10 seconds')),
+                10000,
+              ),
+            ),
+          ])) as any,
+        'Actions fetch',
+        1,
+      );
 
       if (!response.data) {
         return [];
@@ -370,7 +458,7 @@ export class ApiCommunicationService {
     error?: string,
   ): Promise<any> {
     try {
-      const rigToken = this.getRigToken();
+      const rigToken = await this.getRigToken();
       if (!rigToken) {
         this.loggingService.log(
           '❌ Cannot update action status: No rig token found',
@@ -387,28 +475,33 @@ export class ApiCommunicationService {
         'api',
       );
 
-      const response = (await Promise.race([
-        firstValueFrom(
-          this.httpService.put(
-            url,
-            { status, error },
-            {
-              headers: {
-                'rig-token': rigToken,
-              },
-            },
-          ),
-        ),
-        new Promise((_, reject) =>
-          setTimeout(
-            () =>
-              reject(
-                new Error('Action status update timeout after 10 seconds'),
+      const response = await this.withRetry(
+        async () =>
+          (await Promise.race([
+            firstValueFrom(
+              this.httpService.put(
+                url,
+                { status, error },
+                {
+                  headers: {
+                    'rig-token': rigToken,
+                  },
+                },
               ),
-            10000,
-          ),
-        ),
-      ])) as any;
+            ),
+            new Promise((_, reject) =>
+              setTimeout(
+                () =>
+                  reject(
+                    new Error('Action status update timeout after 10 seconds'),
+                  ),
+                10000,
+              ),
+            ),
+          ])) as any,
+        'Action status update',
+        1,
+      );
 
       return response.data;
     } catch (error: any) {
@@ -430,7 +523,7 @@ export class ApiCommunicationService {
   }
 
   /** 📝 Get rig token for authentication */
-  private getRigToken(): string | null {
+  private async getRigToken(): Promise<string | null> {
     try {
       // First try from environment variable
       if (process.env.RIG_TOKEN) {
@@ -438,8 +531,12 @@ export class ApiCommunicationService {
       }
 
       // Try reading from a config file as fallback
-      if (fs.existsSync('config/rig-token.txt')) {
-        return fs.readFileSync('config/rig-token.txt', 'utf8').trim();
+      try {
+        await fs.promises.access('config/rig-token.txt');
+        const token = await fs.promises.readFile('config/rig-token.txt', 'utf8');
+        return token.trim();
+      } catch {
+        // Ignore missing token file
       }
 
       this.loggingService.log(

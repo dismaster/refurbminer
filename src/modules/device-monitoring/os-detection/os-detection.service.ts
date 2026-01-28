@@ -1,12 +1,15 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, OnModuleInit } from '@nestjs/common';
 import { LoggingService } from '../../logging/logging.service';
 import * as fs from 'fs';
 import * as os from 'os';
-import { execSync } from 'child_process';
+import { exec } from 'child_process';
 import { HardwareInfoUtil } from '../../telemetry/utils/hardware/hardware-info.util';
+import { promisify } from 'util';
+
+const execAsync = promisify(exec);
 
 @Injectable()
-export class OsDetectionService {
+export class OsDetectionService implements OnModuleInit {
   // Cache detection results to avoid repeated calls
   private cachedOS: string | null = null;
   private cachedIs64Bit: boolean | null = null;
@@ -17,6 +20,33 @@ export class OsDetectionService {
   private cachedIPAddress: string | null = null;
 
   constructor(private readonly loggingService: LoggingService) {}
+
+  async onModuleInit(): Promise<void> {
+    try {
+      this.cachedOS = await this.detectOSAsync();
+    } catch {
+      // Ignore init failures; fallback detection will be used
+    }
+  }
+
+  private async fileExists(filePath: string): Promise<boolean> {
+    try {
+      await fs.promises.access(filePath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async readFileTrim(filePath: string): Promise<string> {
+    const data = await fs.promises.readFile(filePath, 'utf8');
+    return data.trim();
+  }
+
+  private async execCommand(command: string, timeout?: number): Promise<string> {
+    const { stdout } = await execAsync(command, { encoding: 'utf8', timeout });
+    return stdout ?? '';
+  }
   /** ✅ Detects OS type (Raspberry Pi, Termux, Linux) */
   detectOS(): string {
     if (this.cachedOS !== null) {
@@ -24,12 +54,7 @@ export class OsDetectionService {
     }
 
     let detectedOS = 'unknown';
-
-    if (fs.existsSync('/data/data/com.termux/files/usr/bin/termux-info')) {
-      detectedOS = 'termux';
-    } else if (fs.existsSync('/usr/bin/raspi-config')) {
-      detectedOS = 'raspberry-pi';
-    } else if (os.platform().includes('linux')) {
+    if (os.platform().includes('linux')) {
       detectedOS = 'linux';
     }
 
@@ -41,21 +66,32 @@ export class OsDetectionService {
     );
     return detectedOS;
   }
+
+  private async detectOSAsync(): Promise<string> {
+    if (await this.fileExists('/data/data/com.termux/files/usr/bin/termux-info')) {
+      return 'termux';
+    }
+    if (await this.fileExists('/usr/bin/raspi-config')) {
+      return 'raspberry-pi';
+    }
+    if (os.platform().includes('linux')) {
+      return 'linux';
+    }
+    return 'unknown';
+  }
   /** ✅ Check if OS is 64-bit */
-  is64Bit(): boolean {
+  async is64Bit(): Promise<boolean> {
     if (this.cachedIs64Bit !== null) {
       return this.cachedIs64Bit;
     }
 
     try {
-      const arch = execSync('uname -m', { encoding: 'utf8' }).trim();
+      const arch = (await this.execCommand('uname -m')).trim();
       const is64 = arch === 'aarch64' || arch === 'x86_64';
 
       if (!is64) {
         try {
-          const bitCheck = execSync('getconf LONG_BIT', {
-            encoding: 'utf8',
-          }).trim();
+          const bitCheck = (await this.execCommand('getconf LONG_BIT')).trim();
           this.cachedIs64Bit = bitCheck === '64';
           return this.cachedIs64Bit;
         } catch {
@@ -82,7 +118,7 @@ export class OsDetectionService {
     }
   }
   /** ✅ Detects hardware brand (e.g., Raspberry, Termux, Debian) */
-  getHardwareBrand(): string {
+  async getHardwareBrand(): Promise<string> {
     if (this.cachedHardwareBrand !== null) {
       return this.cachedHardwareBrand;
     }
@@ -93,11 +129,11 @@ export class OsDetectionService {
         const suspicious = /superuser|rooted|no\s*are/i;
         let brand = '';
         try {
-          brand = execSync('getprop ro.product.brand', { encoding: 'utf8' }).trim();
+          brand = (await this.execCommand('getprop ro.product.brand')).trim();
         } catch {}
-        if (!brand && this.isSuAvailable()) {
+        if (!brand && await this.isSuAvailable()) {
           try {
-            brand = execSync('su -c "getprop ro.product.brand"', { encoding: 'utf8' }).trim();
+            brand = (await this.execCommand('su -c "getprop ro.product.brand"')).trim();
           } catch {}
         }
         if (brand && !suspicious.test(brand)) {
@@ -107,11 +143,11 @@ export class OsDetectionService {
         // Fallback to manufacturer
         let manufacturer = '';
         try {
-          manufacturer = execSync('getprop ro.product.manufacturer', { encoding: 'utf8' }).trim();
+          manufacturer = (await this.execCommand('getprop ro.product.manufacturer')).trim();
         } catch {}
-        if (!manufacturer && this.isSuAvailable()) {
+        if (!manufacturer && await this.isSuAvailable()) {
           try {
-            manufacturer = execSync('su -c "getprop ro.product.manufacturer"', { encoding: 'utf8' }).trim();
+            manufacturer = (await this.execCommand('su -c "getprop ro.product.manufacturer"')).trim();
           } catch {}
         }
         if (manufacturer && !suspicious.test(manufacturer)) {
@@ -122,9 +158,9 @@ export class OsDetectionService {
         return this.cachedHardwareBrand;
       }
       // Enhanced detection for ARM boards including Radxa
-      if (fs.existsSync('/sys/firmware/devicetree/base/model')) {
+      if (await this.fileExists('/sys/firmware/devicetree/base/model')) {
         try {
-          const modelContent = fs.readFileSync('/sys/firmware/devicetree/base/model', 'utf8').trim().replace(/\0/g, '');
+          const modelContent = (await this.readFileTrim('/sys/firmware/devicetree/base/model')).replace(/\0/g, '');
           
           // Check for specific board manufacturers
           if (modelContent.toLowerCase().includes('radxa') || modelContent.toLowerCase().includes('rock')) {
@@ -144,7 +180,7 @@ export class OsDetectionService {
           
           // For unknown SoC identifiers, try alternative detection
           if (modelContent.match(/^[A-Z0-9]+$/)) {
-            const altBrand = this.detectBrandFromSystem();
+            const altBrand = await this.detectBrandFromSystem();
             if (altBrand !== 'Unknown') {
               this.cachedHardwareBrand = altBrand;
               return this.cachedHardwareBrand;
@@ -167,16 +203,14 @@ export class OsDetectionService {
       }
       
       // Try alternative detection methods
-      const altBrand = this.detectBrandFromSystem();
+      const altBrand = await this.detectBrandFromSystem();
       if (altBrand !== 'Unknown') {
         this.cachedHardwareBrand = altBrand;
         return this.cachedHardwareBrand;
       }
       
       // Final fallback to lsb_release
-      this.cachedHardwareBrand = execSync('lsb_release -si', {
-        encoding: 'utf8',
-      }).trim();
+      this.cachedHardwareBrand = (await this.execCommand('lsb_release -si')).trim();
       return this.cachedHardwareBrand;
     } catch (error) {
       this.loggingService.log(
@@ -190,18 +224,18 @@ export class OsDetectionService {
   }
 
   /** ✅ Alternative brand detection from system files */
-  private detectBrandFromSystem(): string {
+  private async detectBrandFromSystem(): Promise<string> {
     try {
       // Try DMI information
-      if (fs.existsSync('/sys/class/dmi/id/board_vendor')) {
-        const vendor = fs.readFileSync('/sys/class/dmi/id/board_vendor', 'utf8').trim();
+      if (await this.fileExists('/sys/class/dmi/id/board_vendor')) {
+        const vendor = await this.readFileTrim('/sys/class/dmi/id/board_vendor');
         if (vendor && vendor !== 'To be filled by O.E.M.' && vendor !== 'Unknown') {
           return vendor;
         }
       }
       
-      if (fs.existsSync('/sys/class/dmi/id/sys_vendor')) {
-        const vendor = fs.readFileSync('/sys/class/dmi/id/sys_vendor', 'utf8').trim();
+      if (await this.fileExists('/sys/class/dmi/id/sys_vendor')) {
+        const vendor = await this.readFileTrim('/sys/class/dmi/id/sys_vendor');
         if (vendor && vendor !== 'To be filled by O.E.M.' && vendor !== 'Unknown') {
           return vendor;
         }
@@ -214,19 +248,19 @@ export class OsDetectionService {
   }
 
   /** ✅ Alternative model detection from system files */
-  private detectModelFromSystem(): string {
+  private async detectModelFromSystem(): Promise<string> {
     try {
       // Try DMI product name
-      if (fs.existsSync('/sys/class/dmi/id/product_name')) {
-        const productName = fs.readFileSync('/sys/class/dmi/id/product_name', 'utf8').trim();
+      if (await this.fileExists('/sys/class/dmi/id/product_name')) {
+        const productName = await this.readFileTrim('/sys/class/dmi/id/product_name');
         if (productName && productName !== 'To be filled by O.E.M.' && productName !== 'Unknown') {
           return productName;
         }
       }
       
       // Try board name
-      if (fs.existsSync('/sys/class/dmi/id/board_name')) {
-        const boardName = fs.readFileSync('/sys/class/dmi/id/board_name', 'utf8').trim();
+      if (await this.fileExists('/sys/class/dmi/id/board_name')) {
+        const boardName = await this.readFileTrim('/sys/class/dmi/id/board_name');
         if (boardName && boardName !== 'To be filled by O.E.M.' && boardName !== 'Unknown') {
           return boardName;
         }
@@ -237,8 +271,10 @@ export class OsDetectionService {
     } catch {
       return 'Unknown';
     }
-  }  /** ✅ Detects hardware model (e.g., Pi 5, ARM64) */
-  getHardwareModel(): string {
+  }
+
+  /** ✅ Detects hardware model (e.g., Pi 5, ARM64) */
+  async getHardwareModel(): Promise<string> {
     if (this.cachedHardwareModel !== null) {
       return this.cachedHardwareModel;
     }
@@ -263,7 +299,7 @@ export class OsDetectionService {
         for (const prop of hardwareProperties) {
           let model = '';
           try {
-            model = execSync(`getprop ${prop}`, { encoding: 'utf8' }).trim();
+            model = (await this.execCommand(`getprop ${prop}`)).trim();
             if (model && model !== '' && !model.includes('no such property')) {
               this.loggingService.log(
                 `✅ Found hardware model from ${prop}: ${model}`,
@@ -276,9 +312,9 @@ export class OsDetectionService {
           } catch {}
           
           // Try with su if available
-          if (!model && this.isSuAvailable()) {
+          if (!model && await this.isSuAvailable()) {
             try {
-              model = execSync(`su -c "getprop ${prop}"`, { encoding: 'utf8' }).trim();
+              model = (await this.execCommand(`su -c "getprop ${prop}"`)).trim();
               if (model && model !== '' && !model.includes('no such property')) {
                 this.loggingService.log(
                   `✅ Found hardware model from ${prop} (with su): ${model}`,
@@ -310,7 +346,7 @@ export class OsDetectionService {
         for (const prop of standardProperties) {
           let model = '';
           try {
-            model = execSync(`getprop ${prop}`, { encoding: 'utf8' }).trim();
+            model = (await this.execCommand(`getprop ${prop}`)).trim();
             if (model && !suspicious.test(model)) {
               this.loggingService.log(
                 `✅ Found model from fallback ${prop}: ${model}`,
@@ -322,9 +358,9 @@ export class OsDetectionService {
             }
           } catch {}
           
-          if (!model && this.isSuAvailable()) {
+          if (!model && await this.isSuAvailable()) {
             try {
-              model = execSync(`su -c "getprop ${prop}"`, { encoding: 'utf8' }).trim();
+              model = (await this.execCommand(`su -c "getprop ${prop}"`)).trim();
               if (model && !suspicious.test(model)) {
                 this.loggingService.log(
                   `✅ Found model from fallback ${prop} (with su): ${model}`,
@@ -340,7 +376,7 @@ export class OsDetectionService {
         
         // Final fallback to architecture
         try {
-          const arch = execSync('uname -m', { encoding: 'utf8' }).trim();
+          const arch = (await this.execCommand('uname -m')).trim();
           this.loggingService.log(
             `⚠️ Using architecture as final fallback: ${arch}`,
             'WARN',
@@ -354,15 +390,15 @@ export class OsDetectionService {
         }
       }
       // Enhanced ARM board model detection
-      if (fs.existsSync('/sys/firmware/devicetree/base/model')) {
+      if (await this.fileExists('/sys/firmware/devicetree/base/model')) {
         try {
-          const modelContent = fs.readFileSync('/sys/firmware/devicetree/base/model', 'utf8').trim().replace(/\0/g, '');
+          const modelContent = (await this.readFileTrim('/sys/firmware/devicetree/base/model')).replace(/\0/g, '');
           
           // For Radxa devices, try to extract the specific model
           if (modelContent.toLowerCase().includes('radxa') || modelContent.toLowerCase().includes('rock')) {
             // Try to get more specific model information from compatible string
-            if (fs.existsSync('/sys/firmware/devicetree/base/compatible')) {
-              const compatible = fs.readFileSync('/sys/firmware/devicetree/base/compatible', 'utf8').trim().replace(/\0/g, '');
+            if (await this.fileExists('/sys/firmware/devicetree/base/compatible')) {
+              const compatible = (await this.readFileTrim('/sys/firmware/devicetree/base/compatible')).replace(/\0/g, '');
               const compatibleParts = compatible.split(',');
               
               // Look for Radxa-specific identifiers
@@ -406,7 +442,7 @@ export class OsDetectionService {
           
           // If model content looks like SoC identifier, try alternative detection
           if (modelContent.match(/^[A-Z0-9]+$/)) {
-            const altModel = this.detectModelFromSystem();
+            const altModel = await this.detectModelFromSystem();
             if (altModel !== 'Unknown') {
               this.cachedHardwareModel = altModel;
               return this.cachedHardwareModel;
@@ -422,7 +458,7 @@ export class OsDetectionService {
       }
       
       // Try alternative detection methods
-      const altModel = this.detectModelFromSystem();
+      const altModel = await this.detectModelFromSystem();
       if (altModel !== 'Unknown') {
         this.cachedHardwareModel = altModel;
         return this.cachedHardwareModel;
@@ -441,7 +477,7 @@ export class OsDetectionService {
   }
 
   /** ✅ Retrieves CPU information with better fallbacks */
-  getCPUInfo(): any {
+  async getCPUInfo(): Promise<any> {
     if (this.cachedCPUInfo !== null) {
       return this.cachedCPUInfo;
     }
@@ -449,7 +485,7 @@ export class OsDetectionService {
     try {
       let aesSupport = false;
       let pmullSupport = false;
-      const architecture = this.is64Bit() ? '64-bit' : '32-bit';
+      const architecture = await this.is64Bit() ? '64-bit' : '32-bit';
       let cpuModel = 'Unknown';
       let cores = 0;
 
@@ -457,9 +493,7 @@ export class OsDetectionService {
       // So we'll primarily use lscpu and only fall back to os.cpus()
       try {
         // Primary method: lscpu
-        const lscpuOutput = execSync('lscpu', {
-          encoding: 'utf8',
-        }).toLowerCase();
+        const lscpuOutput = (await this.execCommand('lscpu')).toLowerCase();
         aesSupport = lscpuOutput.includes('aes');
         pmullSupport = lscpuOutput.includes('pmull');
 
@@ -483,9 +517,7 @@ export class OsDetectionService {
 
         try {
           // First fallback: /proc/cpuinfo
-          const cpuinfoOutput = execSync('cat /proc/cpuinfo', {
-            encoding: 'utf8',
-          }).toLowerCase();
+          const cpuinfoOutput = (await this.execCommand('cat /proc/cpuinfo')).toLowerCase();
           aesSupport = cpuinfoOutput.includes('aes');
           pmullSupport = cpuinfoOutput.includes('pmull');
         } catch (cpuinfoError) {
@@ -543,7 +575,7 @@ export class OsDetectionService {
       );
       // Return default values that will allow the app to continue
       this.cachedCPUInfo = {
-        architecture: this.is64Bit() ? '64-bit' : '32-bit',
+        architecture: await this.is64Bit() ? '64-bit' : '32-bit',
         model: os.cpus()[0]?.model || 'Unknown',
         cores: os.cpus().length,
         aesSupport: true, // Assume AES support to prevent blocking the app
@@ -554,7 +586,7 @@ export class OsDetectionService {
   }
 
   /** ✅ Retrieves system metadata */
-  getSystemInfo(): any {
+  async getSystemInfo(): Promise<any> {
     if (this.cachedSystemInfo !== null) {
       return this.cachedSystemInfo;
     }
@@ -566,14 +598,14 @@ export class OsDetectionService {
     let hwModel = 'Unknown';
     
     try {
-      const enhancedInfo = HardwareInfoUtil.getDeviceInfo(
+      const enhancedInfo = await HardwareInfoUtil.getDeviceInfo(
         osType,
         this.loggingService.log.bind(this.loggingService),
       );
       
       if (enhancedInfo?.hardwareDetectionMethod === 'lshw') {
-        hwBrand = enhancedInfo.hwBrand || this.getHardwareBrand();
-        hwModel = enhancedInfo.hwModel || this.getHardwareModel();
+        hwBrand = enhancedInfo.hwBrand || await this.getHardwareBrand();
+        hwModel = enhancedInfo.hwModel || await this.getHardwareModel();
         
         this.loggingService.log(
           `Using enhanced hardware detection: ${hwBrand} ${hwModel}`,
@@ -582,8 +614,8 @@ export class OsDetectionService {
         );
       } else {
         // Fallback to basic detection
-        hwBrand = this.getHardwareBrand();
-        hwModel = this.getHardwareModel();
+        hwBrand = await this.getHardwareBrand();
+        hwModel = await this.getHardwareModel();
         
         this.loggingService.log(
           `Using basic hardware detection: ${hwBrand} ${hwModel}`,
@@ -597,8 +629,8 @@ export class OsDetectionService {
         'WARN',
         'os-detection',
       );
-      hwBrand = this.getHardwareBrand();
-      hwModel = this.getHardwareModel();
+      hwBrand = await this.getHardwareBrand();
+      hwModel = await this.getHardwareModel();
     }
 
     const systemInfo = {
@@ -606,7 +638,7 @@ export class OsDetectionService {
       hwBrand,
       hwModel,
       os: osType === 'termux' ? 'Termux (Linux)' : os.version(),
-      cpuInfo: this.getCPUInfo(),
+      cpuInfo: await this.getCPUInfo(),
     };
 
     this.loggingService.log(
@@ -619,7 +651,7 @@ export class OsDetectionService {
   }
 
   /** ✅ Gets device IP Address */
-  getIPAddress(): string {
+  async getIPAddress(): Promise<string> {
     if (this.cachedIPAddress !== null) {
       return this.cachedIPAddress;
     }
@@ -629,10 +661,7 @@ export class OsDetectionService {
       
       // Method 1: Try ifconfig first (most reliable on Termux)
       try {
-        ip = execSync("ifconfig | grep 'inet ' | grep -v '127.0.0.1' | head -n1 | awk '{print $2}'", {
-          encoding: 'utf8',
-          timeout: 5000,
-        }).trim();
+        ip = (await this.execCommand("ifconfig | grep 'inet ' | grep -v '127.0.0.1' | head -n1 | awk '{print $2}'", 5000)).trim();
         
         if (ip && ip !== '' && ip !== '127.0.0.1' && /^\d+\.\d+\.\d+\.\d+$/.test(ip)) {
           this.loggingService.log(
@@ -649,10 +678,7 @@ export class OsDetectionService {
 
       // Method 2: Try ip command (alternative)
       try {
-        const routeOutput = execSync('ip route get 8.8.8.8', {
-          encoding: 'utf8',
-          timeout: 5000,
-        }).trim();
+        const routeOutput = (await this.execCommand('ip route get 8.8.8.8', 5000)).trim();
         
         // Extract IP from "src X.X.X.X" pattern
         const srcMatch = routeOutput.match(/src\s+(\d+\.\d+\.\d+\.\d+)/);
@@ -672,10 +698,7 @@ export class OsDetectionService {
 
       // Method 3: Try hostname -I (traditional method, may not work on Termux)
       try {
-        ip = execSync("hostname -I | awk '{print $1}'", {
-          encoding: 'utf8',
-          timeout: 5000,
-        }).trim();
+        ip = (await this.execCommand("hostname -I | awk '{print $1}'", 5000)).trim();
         
         if (ip && ip !== '' && ip !== '127.0.0.1') {
           this.loggingService.log(
@@ -710,11 +733,9 @@ export class OsDetectionService {
   }
 
   /** ✅ Check if SU (root) is available */
-  isSuAvailable(): boolean {
+  async isSuAvailable(): Promise<boolean> {
     try {
-      const result = execSync('su -c "echo rooted" 2>/dev/null', {
-        encoding: 'utf8',
-      });
+      const result = await this.execCommand('su -c "echo rooted" 2>/dev/null');
       return result.includes('rooted');
     } catch {
       return false;
@@ -722,31 +743,24 @@ export class OsDetectionService {
   }
 
   /** ✅ Gets better OS version string */
-  getOsVersion(): string {
+  async getOsVersion(): Promise<string> {
     try {
       if (this.detectOS() === 'termux') {
         // Try to get Android version
         try {
-          const releaseVer = execSync('getprop ro.build.version.release', {
-            encoding: 'utf8',
-          }).trim();
-          const sdkVer = execSync('getprop ro.build.version.sdk', {
-            encoding: 'utf8',
-          }).trim();
+          const releaseVer = (await this.execCommand('getprop ro.build.version.release')).trim();
+          const sdkVer = (await this.execCommand('getprop ro.build.version.sdk')).trim();
           if (releaseVer && sdkVer) {
             return `Android ${releaseVer} (API ${sdkVer})`;
           }
         } catch (error) {
           // Try with su
           try {
-            if (this.isSuAvailable()) {
-              const releaseVer = execSync(
+            if (await this.isSuAvailable()) {
+              const releaseVer = (await this.execCommand(
                 'su -c "getprop ro.build.version.release"',
-                { encoding: 'utf8' },
-              ).trim();
-              const sdkVer = execSync('su -c "getprop ro.build.version.sdk"', {
-                encoding: 'utf8',
-              }).trim();
+              )).trim();
+              const sdkVer = (await this.execCommand('su -c "getprop ro.build.version.sdk"')).trim();
               if (releaseVer && sdkVer) {
                 return `Android ${releaseVer} (API ${sdkVer})`;
               }
@@ -759,8 +773,8 @@ export class OsDetectionService {
       }
 
       // Check for /etc/os-release
-      if (fs.existsSync('/etc/os-release')) {
-        const osRelease = fs.readFileSync('/etc/os-release', 'utf8');
+      if (await this.fileExists('/etc/os-release')) {
+        const osRelease = await fs.promises.readFile('/etc/os-release', 'utf8');
         const prettyName = osRelease
           .split('\n')
           .find((line) => line.startsWith('PRETTY_NAME='))

@@ -1,8 +1,11 @@
 import { Controller, Post, Get } from '@nestjs/common';
 import { MinerManagerService } from './miner-manager.service';
 import { ConfigService } from '../config/config.service';
-import { execSync } from 'child_process';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import * as fs from 'fs';
+
+const execAsync = promisify(exec);
 
 @Controller('miner')
 export class MinerManagerController {
@@ -28,8 +31,8 @@ export class MinerManagerController {
     };
   }
   @Post('stop')
-  stopMiner() {
-    const result = this.minerManagerService.stopMiner(true); // Set manual stop flag
+  async stopMiner() {
+    const result = await this.minerManagerService.stopMiner(true); // Set manual stop flag
     return {
       message: result ? 'Miner stopped successfully.' : 'No miner was running.',
     };
@@ -49,16 +52,16 @@ export class MinerManagerController {
   }
 
   @Get('status')
-  getStatus() {
-    const isRunning = this.minerManagerService.isMinerRunning();
-    const shouldBeMining = this.minerManagerService.shouldBeMining();
-    const config = this.configService.getConfig();
+  async getStatus() {
+    const isRunning = await this.minerManagerService.isMinerRunningAsync();
+    const shouldBeMining = await this.minerManagerService.shouldBeMining();
+    const config = await this.configService.getConfig();
 
     return {
       status: isRunning ? 'running' : 'stopped',
       shouldBeMining,
       benchmark: config?.benchmark ?? false,
-      scheduleStatus: this.minerManagerService.getScheduleStatus(),
+      scheduleStatus: await this.minerManagerService.getScheduleStatus(),
       rigInfo: {
         rigId: config?.rigId || 'Unknown',
         minerId: config?.minerId || 'Unknown',
@@ -76,8 +79,8 @@ export class MinerManagerController {
 
   @Get('health')
   async getHealthStatus() {
-    const isRunning = this.minerManagerService.isMinerRunning();
-    const shouldBeMining = this.minerManagerService.shouldBeMining();
+    const isRunning = await this.minerManagerService.isMinerRunningAsync();
+    const shouldBeMining = await this.minerManagerService.shouldBeMining();
     
     if (!isRunning) {
       return {
@@ -113,13 +116,17 @@ export class MinerManagerController {
   /**
    * Ensure storage directory exists and is writable
    */
-  private ensureStorageDirectory(): void {
+  private async ensureStorageDirectory(): Promise<void> {
     try {
-      if (!fs.existsSync('storage')) {
-        fs.mkdirSync('storage', { recursive: true });
+      const storagePath = 'storage';
+      const exists = await this.fileExists(storagePath);
+      if (!exists) {
+        await fs.promises.mkdir(storagePath, { recursive: true });
       }
     } catch (error) {
-      throw new Error(`Failed to create storage directory: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(
+        `Failed to create storage directory: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 
@@ -128,23 +135,19 @@ export class MinerManagerController {
     
     try {
       // Ensure storage directory exists
-      this.ensureStorageDirectory();
+      await this.ensureStorageDirectory();
       
       // Create hardcopy of screen session with timeout
-      execSync(`screen -S miner-session -X hardcopy ${hardcopyFile}`, {
+      await execAsync(`screen -S miner-session -X hardcopy ${hardcopyFile}`, {
         timeout: 10000,
       });
       
       // Wait for file to be written
       await new Promise((resolve) => setTimeout(resolve, 1000));
       
-      if (fs.existsSync(hardcopyFile)) {
-        const output = fs.readFileSync(hardcopyFile, 'utf8');
-        try {
-          fs.unlinkSync(hardcopyFile);
-        } catch {
-          // Ignore cleanup errors
-        }
+      if (await this.fileExists(hardcopyFile)) {
+        const output = await fs.promises.readFile(hardcopyFile, 'utf8');
+        await this.safeUnlink(hardcopyFile);
         return output;
       }
       
@@ -153,20 +156,16 @@ export class MinerManagerController {
         // Use a temporary file instead of /dev/stdout for better compatibility
         const tempFile = `storage/temp-output-${Date.now()}.txt`;
         
-        execSync(`screen -S miner-session -X hardcopy ${tempFile}`, {
+        await execAsync(`screen -S miner-session -X hardcopy ${tempFile}`, {
           timeout: 5000,
         });
         
         // Wait for file to be written
         await new Promise((resolve) => setTimeout(resolve, 500));
         
-        if (fs.existsSync(tempFile)) {
-          const output = fs.readFileSync(tempFile, 'utf8');
-          try {
-            fs.unlinkSync(tempFile);
-          } catch {
-            // Ignore cleanup errors
-          }
+        if (await this.fileExists(tempFile)) {
+          const output = await fs.promises.readFile(tempFile, 'utf8');
+          await this.safeUnlink(tempFile);
           return output;
         }
       } catch {
@@ -176,6 +175,23 @@ export class MinerManagerController {
       return 'Unable to capture miner output - screen session may not be responsive';
     } catch (error) {
       return `Error capturing output: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+
+  private async fileExists(filePath: string): Promise<boolean> {
+    try {
+      await fs.promises.access(filePath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async safeUnlink(filePath: string): Promise<void> {
+    try {
+      await fs.promises.unlink(filePath);
+    } catch {
+      // Ignore cleanup errors
     }
   }
 

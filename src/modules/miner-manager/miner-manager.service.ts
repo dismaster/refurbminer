@@ -8,7 +8,7 @@ import { FlightsheetService } from '../flightsheet/flightsheet.service';
 import { ConfigService } from '../config/config.service';
 import { ApiCommunicationService } from '../api-communication/api-communication.service';
 import { MinerSoftwareService } from '../miner-software/miner-software.service';
-import { execSync, exec } from 'child_process';
+import { exec } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -26,6 +26,22 @@ export class MinerManagerService
 
   // Monitoring cycle counters for staggered operations
   private monitoringCycle = 0;
+  private monitoringCycleId = 0;
+  private healthCheckCycleId = 0;
+  private cleanupCycleId = 0;
+
+  // Interval reentrancy guards
+  private monitoringInFlight = false;
+  private healthCheckInFlight = false;
+  private cleanupInFlight = false;
+
+  private isShuttingDown = false;
+
+  private screenAvailabilityCache?: { value: boolean; timestamp: number };
+  private readonly SCREEN_AVAILABILITY_TTL = 60000; // 60 seconds
+
+  private minerRunningCache?: { value: boolean; timestamp: number };
+  private readonly MINER_RUNNING_TTL = 15000; // 15 seconds
 
   private lastScheduleCheck: Date | null = null;
   private crashCount = 0;
@@ -51,6 +67,12 @@ export class MinerManagerService
 
   // Prevent multiple simultaneous auto-starts
   private isAutoStarting: boolean = false;
+
+  private lastMinerStartAt?: string;
+
+  // Startup grace period to avoid false error reports right after restart
+  private startupGraceUntil?: number;
+  private readonly STARTUP_GRACE_PERIOD = 2 * 60 * 1000; // 2 minutes
 
   // Smart error tracking to prevent spam to API backend
   private errorTracker = new Map<
@@ -79,6 +101,7 @@ export class MinerManagerService
     }
 
     MinerManagerService.isInitialized = true;
+    this.startupGraceUntil = Date.now() + this.STARTUP_GRACE_PERIOD;
     this.loggingService.log(
       '🚀 MinerManager initializing...',
       'INFO',
@@ -110,7 +133,7 @@ export class MinerManagerService
       // Clean up any existing miner sessions first
       this.cleanupAllMinerSessions();
 
-      const miner = this.getMinerFromFlightsheet();
+      const miner = await this.getMinerFromFlightsheet();
       if (!miner) {
         const error =
           'No miner found from flightsheet. Will try again after flightsheet is fetched.';
@@ -136,23 +159,23 @@ export class MinerManagerService
   private initializeMonitoring(): void {
     // Consolidated main monitoring interval - staggered operations
     this.mainMonitoringInterval = setInterval(() => {
-      void this.performStaggeredMonitoring();
+      void this.runMonitoringCycle();
     }, 60000); // Every 1 minute
 
     // More frequent health check interval to catch miner crashes quickly
     this.healthCheckInterval = setInterval(() => {
-      void this.checkMinerHealth();
+      void this.runHealthCheck();
     }, 30000); // Every 30 seconds for responsive crash detection
 
     // Cleanup interval - runs every hour
-    this.cleanupInterval = setInterval(() => {
-      this.performCleanup();
-    }, 3600000); // Every hour
+        this.cleanupInterval = setInterval(() => {
+          void this.runCleanup();
+        }, 3600000); // Every hour
 
     // Run initial checks
-    void this.performStaggeredMonitoring();
+    void this.runMonitoringCycle();
     void this.checkSchedules();
-    this.dumpScheduleStatus();
+    void this.dumpScheduleStatus();
 
     // Log configuration for monitoring intervals
     this.loggingService.log(
@@ -221,7 +244,16 @@ export class MinerManagerService
         );
         const updated = await this.fetchAndUpdateFlightsheet();
         if (updated) {
-          await this.logMinerError('Flightsheet changed, restarting miner');
+          const config = await this.configService.getConfig();
+          if (!config?.benchmark) {
+            await this.logMinerError('Flightsheet changed, restarting miner');
+          } else {
+            this.loggingService.log(
+              '🧪 Benchmark active - skipping flightsheet change error report',
+              'DEBUG',
+              'miner-manager',
+            );
+          }
           void this.restartMiner();
         }
       }
@@ -263,16 +295,51 @@ export class MinerManagerService
     }
   }
 
+  private async runMonitoringCycle(): Promise<void> {
+    if (this.isShuttingDown) {
+      return;
+    }
+
+    this.monitoringCycleId++;
+    this.loggingService.log(
+      `🔁 Monitoring cycle ${this.monitoringCycleId} started`,
+      'DEBUG',
+      'miner-manager',
+      { cycleId: this.monitoringCycleId },
+    );
+    if (this.monitoringInFlight) {
+      this.loggingService.log(
+        '⏳ Monitoring cycle already running, skipping interval tick',
+        'DEBUG',
+        'miner-manager',
+      );
+      return;
+    }
+
+    this.monitoringInFlight = true;
+    try {
+      await this.performStaggeredMonitoring();
+    } catch (error) {
+      this.loggingService.log(
+        `❌ Monitoring cycle failed: ${error instanceof Error ? error.message : String(error)}`,
+        'ERROR',
+        'miner-manager',
+      );
+    } finally {
+      this.monitoringInFlight = false;
+    }
+  }
+
   /**
    * Perform periodic cleanup to prevent resource leaks
    */
-  private performCleanup(): void {
+  private async performCleanup(): Promise<void> {
     try {
       // Clear old cache entries in config service
       this.configService.clearApiCache?.();
 
       // Clean up old log files and storage files
-      this.cleanupOldFiles();
+      await this.cleanupOldFiles();
 
       // Force garbage collection if available
       if (global.gc) {
@@ -293,33 +360,69 @@ export class MinerManagerService
     }
   }
 
+  private async runCleanup(): Promise<void> {
+    if (this.isShuttingDown) {
+      return;
+    }
+
+    this.cleanupCycleId++;
+    this.loggingService.log(
+      `🧹 Cleanup cycle ${this.cleanupCycleId} started`,
+      'DEBUG',
+      'miner-manager',
+    );
+    if (this.cleanupInFlight) {
+      this.loggingService.log(
+        '⏳ Cleanup already running, skipping interval tick',
+        'DEBUG',
+        'miner-manager',
+      );
+      return;
+    }
+
+    this.cleanupInFlight = true;
+        try {
+          await this.performCleanup();
+    } catch (error) {
+      this.loggingService.log(
+        `❌ Cleanup failed: ${error instanceof Error ? error.message : String(error)}`,
+        'ERROR',
+        'miner-manager',
+      );
+    } finally {
+      this.cleanupInFlight = false;
+    }
+  }
+
   /**
    * Clean up old storage files
    */
-  private cleanupOldFiles(): void {
+  private async cleanupOldFiles(): Promise<void> {
     try {
       const storageDir = 'storage';
-      if (!fs.existsSync(storageDir)) return;
+      if (!(await this.fileExists(storageDir))) return;
 
-      const files = fs.readdirSync(storageDir);
+      const files = await fs.promises.readdir(storageDir);
       const now = Date.now();
       const oneHourAgo = now - 60 * 60 * 1000;
 
       let cleanedCount = 0;
-      files.forEach((file: string) => {
-        if (file.startsWith('miner-output-')) {
-          const filePath = path.join(storageDir, file);
-          try {
-            const stats = fs.statSync(filePath);
-            if (stats.mtime.getTime() < oneHourAgo) {
-              fs.unlinkSync(filePath);
-              cleanedCount++;
-            }
-          } catch {
-            // Ignore cleanup errors for individual files
-          }
+      for (const file of files) {
+        if (!file.startsWith('miner-output-')) {
+          continue;
         }
-      });
+
+        const filePath = path.join(storageDir, file);
+        try {
+          const stats = await fs.promises.stat(filePath);
+          if (stats.mtime.getTime() < oneHourAgo) {
+            await fs.promises.unlink(filePath);
+            cleanedCount++;
+          }
+        } catch {
+          // Ignore cleanup errors for individual files
+        }
+      }
 
       if (cleanedCount > 0) {
         this.loggingService.log(
@@ -338,7 +441,7 @@ export class MinerManagerService
    */
   private async checkMinerSoftwareChange(): Promise<void> {
     try {
-      const config = this.configService.getConfig();
+      const config = await this.configService.getConfig();
       if (!config || !config.minerSoftware) {
         return;
       }
@@ -368,14 +471,14 @@ export class MinerManagerService
         this.currentMinerSoftware = newMinerSoftware;
 
         // Stop the current miner and start the new one
-        if (this.isMinerRunning()) {
+        if (await this.isMinerRunningAsync()) {
           this.loggingService.log(
             '⚠️ Stopping current miner due to software change...',
             'INFO',
             'miner-manager',
           );
 
-          const stopped = this.stopMiner();
+          const stopped = await this.stopMiner();
           if (!stopped) {
             this.loggingService.log(
               '❌ Failed to stop current miner for software change',
@@ -462,9 +565,31 @@ export class MinerManagerService
         }
       }
 
-      const config = this.configService.getConfig();
-      const shouldBeMining = this.shouldBeMining();
-      const isMinerRunning = this.isMinerRunning();
+      const config = await this.configService.getConfig();
+      const shouldBeMining = await this.shouldBeMining();
+      const isMinerRunning = await this.isMinerRunningAsync();
+
+      // Skip error reporting during startup grace period
+      if (this.startupGraceUntil && Date.now() < this.startupGraceUntil) {
+        this.loggingService.log(
+          '⏳ Startup grace period active - skipping health check errors',
+          'DEBUG',
+          'miner-manager',
+        );
+        if (!isMinerRunning && shouldBeMining) {
+          // Still attempt to start miner, just avoid error reporting
+          const started = await this.startMiner();
+          if (started) {
+            this.loggingService.log(
+              '✅ Miner started during startup grace period',
+              'INFO',
+              'miner-manager',
+            );
+            this.startupGraceUntil = undefined;
+          }
+        }
+        return;
+      }
 
       // Track benchmark mode activation for grace period
       const currentBenchmarkStatus = config?.benchmark ?? false;
@@ -544,6 +669,7 @@ export class MinerManagerService
           );
           // Reset crash count on successful restart
           this.crashCount = 0;
+          this.startupGraceUntil = undefined;
         } else {
           this.loggingService.log(
             '❌ Failed to restart miner in health check',
@@ -595,13 +721,50 @@ export class MinerManagerService
     }
   }
 
+  private async runHealthCheck(): Promise<void> {
+    if (this.isShuttingDown) {
+      return;
+    }
+
+    this.healthCheckCycleId++;
+    this.loggingService.log(
+      `🩺 Health check ${this.healthCheckCycleId} started`,
+      'DEBUG',
+      'miner-manager',
+      { cycleId: this.healthCheckCycleId },
+    );
+    if (this.healthCheckInFlight) {
+      this.loggingService.log(
+        '⏳ Health check already running, skipping interval tick',
+        'DEBUG',
+        'miner-manager',
+      );
+      return;
+    }
+
+    this.healthCheckInFlight = true;
+    try {
+      await this.checkMinerHealth();
+    } catch (error) {
+      this.loggingService.log(
+        `❌ Health check failed: ${error instanceof Error ? error.message : String(error)}`,
+        'ERROR',
+        'miner-manager',
+      );
+    } finally {
+      this.healthCheckInFlight = false;
+    }
+  }
+
   /**
    * Ensure storage directory exists and is writable
    */
-  private ensureStorageDirectory(): void {
+  private async ensureStorageDirectory(): Promise<void> {
     try {
-      if (!fs.existsSync('storage')) {
-        fs.mkdirSync('storage', { recursive: true });
+      const storagePath = 'storage';
+      const exists = await this.fileExists(storagePath);
+      if (!exists) {
+        await fs.promises.mkdir(storagePath, { recursive: true });
         this.loggingService.log(
           '📁 Created storage directory for miner output files',
           'DEBUG',
@@ -624,7 +787,8 @@ export class MinerManagerService
   private async checkMinerOutput(): Promise<boolean> {
     try {
       // First, verify the screen session is actually running
-      if (!this.isMinerRunning()) {
+      const isRunning = await this.isMinerRunningAsync();
+      if (!isRunning) {
         this.loggingService.log(
           '⚠️ Miner screen session not found during health check',
           'DEBUG',
@@ -634,7 +798,7 @@ export class MinerManagerService
       }
 
       // Detect which miner is running for appropriate health checks
-      const minerSoftware = this.getMinerFromFlightsheet();
+      const minerSoftware = await this.getMinerFromFlightsheet();
       this.loggingService.log(
         `🔍 Performing health check for ${minerSoftware || 'unknown'} miner`,
         'DEBUG',
@@ -654,20 +818,17 @@ export class MinerManagerService
         // Method 1: Direct file-based capture using screen hardcopy to temporary file
         const tempOutput1 = `storage/temp-output1-${Date.now()}.txt`;
         try {
-          execSync(`screen -S ${this.minerScreen} -X hardcopy ${tempOutput1}`, {
-            timeout: 5000,
-          });
+          await this.execCommand(
+            `screen -S ${this.minerScreen} -X hardcopy ${tempOutput1}`,
+            5000,
+          );
 
           // Wait for file to be written
           await new Promise((resolve) => setTimeout(resolve, 500));
 
-          if (fs.existsSync(tempOutput1)) {
-            output = fs.readFileSync(tempOutput1, 'utf8');
-            try {
-              fs.unlinkSync(tempOutput1);
-            } catch {
-              // Ignore cleanup errors
-            }
+          if (await this.fileExists(tempOutput1)) {
+            output = await fs.promises.readFile(tempOutput1, 'utf8');
+            await this.safeUnlink(tempOutput1);
 
             this.loggingService.log(
               `✅ Successfully captured miner output via method 1 (${output.length} chars)`,
@@ -679,23 +840,17 @@ export class MinerManagerService
           // Method 2: Alternative approach with different timeout
           try {
             const tempOutput2 = `storage/temp-output2-${Date.now()}.txt`;
-            execSync(
+            await this.execCommand(
               `screen -S ${this.minerScreen} -X hardcopy ${tempOutput2}`,
-              {
-                timeout: 3000,
-              },
+              3000,
             );
 
             // Wait for file to be written
             await new Promise((resolve) => setTimeout(resolve, 300));
 
-            if (fs.existsSync(tempOutput2)) {
-              output = fs.readFileSync(tempOutput2, 'utf8');
-              try {
-                fs.unlinkSync(tempOutput2);
-              } catch {
-                // Ignore cleanup errors
-              }
+            if (await this.fileExists(tempOutput2)) {
+              output = await fs.promises.readFile(tempOutput2, 'utf8');
+              await this.safeUnlink(tempOutput2);
 
               this.loggingService.log(
                 `✅ Successfully captured miner output via method 2 (${output.length} chars)`,
@@ -729,33 +884,27 @@ export class MinerManagerService
 
         try {
           // Ensure storage directory exists
-          this.ensureStorageDirectory();
+          await this.ensureStorageDirectory();
 
           const hardcopyFile = `storage/miner-health-${Date.now()}.txt`;
 
           // Create hardcopy of screen session with timeout
-          execSync(
+          await this.execCommand(
             `screen -S ${this.minerScreen} -X hardcopy ${hardcopyFile}`,
-            {
-              timeout: 10000,
-            },
+            10000,
           );
 
           // Wait for file to be written
           await new Promise((resolve) => setTimeout(resolve, 1000));
 
-          if (fs.existsSync(hardcopyFile)) {
-            output = fs.readFileSync(hardcopyFile, 'utf8');
+          if (await this.fileExists(hardcopyFile)) {
+            output = await fs.promises.readFile(hardcopyFile, 'utf8');
             this.loggingService.log(
               `✅ Successfully captured miner output via file method (${output.length} chars)`,
               'DEBUG',
               'miner-manager',
             );
-            try {
-              fs.unlinkSync(hardcopyFile);
-            } catch {
-              // Ignore cleanup errors
-            }
+            await this.safeUnlink(hardcopyFile);
           } else {
             this.loggingService.log(
               `⚠️ Hardcopy file was not created: ${hardcopyFile}`,
@@ -783,28 +932,22 @@ export class MinerManagerService
         try {
           // Alternative: Try to capture output to a temporary file with explicit timeout command
           const altHardcopyFile = `storage/miner-alt-${Date.now()}.txt`;
-          execSync(
+          await this.execCommand(
             `timeout 5 screen -S ${this.minerScreen} -X hardcopy ${altHardcopyFile} 2>/dev/null`,
-            {
-              timeout: 10000,
-            },
+            10000,
           );
 
           // Wait a bit longer for the file
           await new Promise((resolve) => setTimeout(resolve, 1500));
 
-          if (fs.existsSync(altHardcopyFile)) {
-            output = fs.readFileSync(altHardcopyFile, 'utf8');
+          if (await this.fileExists(altHardcopyFile)) {
+            output = await fs.promises.readFile(altHardcopyFile, 'utf8');
             this.loggingService.log(
               `✅ Successfully captured miner output with alternative approach (${output.length} chars)`,
               'DEBUG',
               'miner-manager',
             );
-            try {
-              fs.unlinkSync(altHardcopyFile);
-            } catch {
-              // Ignore cleanup errors
-            }
+            await this.safeUnlink(altHardcopyFile);
           }
         } catch (altError) {
           this.loggingService.log(
@@ -825,7 +968,7 @@ export class MinerManagerService
 
         // Check if the screen session is responsive by sending a simple command
         try {
-          execSync(`screen -S ${this.minerScreen} -X info`, { timeout: 5000 });
+          await this.execCommand(`screen -S ${this.minerScreen} -X info`, 5000);
           // If we get here, the session exists but we can't read output
           // This is not necessarily an error, so return false (no errors detected)
           return false;
@@ -842,7 +985,7 @@ export class MinerManagerService
 
       // If we have output, analyze it for errors
       if (output) {
-        return this.analyzeOutput(output, minerSoftware);
+        return await this.analyzeOutput(output, minerSoftware);
       }
 
       return false;
@@ -856,15 +999,32 @@ export class MinerManagerService
     }
   }
 
+  private async fileExists(filePath: string): Promise<boolean> {
+    try {
+      await fs.promises.access(filePath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async safeUnlink(filePath: string): Promise<void> {
+    try {
+      await fs.promises.unlink(filePath);
+    } catch {
+      // Ignore cleanup errors
+    }
+  }
+
   /**
    * Analyze miner output for errors and issues
    */
-  private analyzeOutput(output: string, minerSoftware?: string): boolean {
+  private async analyzeOutput(output: string, minerSoftware?: string): Promise<boolean> {
     try {
       // Detect miner software if not provided
       if (!minerSoftware) {
         minerSoftware =
-          this.detectMinerFromOutput(output) || this.getMinerFromFlightsheet();
+          this.detectMinerFromOutput(output) || (await this.getMinerFromFlightsheet());
       }
 
       this.loggingService.log(
@@ -1145,8 +1305,8 @@ export class MinerManagerService
     ];
   }
 
-  public shouldBeMining(): boolean {
-    const config = this.configService.getConfig();
+  public async shouldBeMining(): Promise<boolean> {
+    const config = await this.configService.getConfig();
     if (!config) {
       this.loggingService.log(
         'ℹ️ No config available, defaulting to always mining',
@@ -1160,7 +1320,7 @@ export class MinerManagerService
     if (config.benchmark === true) {
       this.loggingService.log(
         '🚀 Benchmark mode active - bypassing schedules and ensuring mining',
-        'INFO',
+        'DEBUG',
         'miner-manager',
       );
 
@@ -1264,10 +1424,10 @@ export class MinerManagerService
     return shouldMine;
   }
 
-  public getMinerFromFlightsheet(): string | undefined {
+  public async getMinerFromFlightsheet(): Promise<string | undefined> {
     try {
       // Get the miner software from main config
-      const minerSoftware = this.configService.getMinerSoftware();
+      const minerSoftware = await this.configService.getMinerSoftware();
       if (minerSoftware) {
         this.loggingService.log(
           `🔍 Using miner from config: ${minerSoftware}`,
@@ -1294,14 +1454,59 @@ export class MinerManagerService
   }
 
   public isMinerRunning(): boolean {
-    try {
-      // First check if screen session exists
-      const screenOutput = execSync(`screen -ls`, {
-        encoding: 'utf8',
-        timeout: 5000,
+    const cached = this.getCachedMinerRunning();
+    if (cached !== undefined) {
+      return cached;
+    }
+    return false;
+  }
+
+  private async execCommand(command: string, timeout: number = 5000): Promise<string> {
+    if (process.platform === 'win32' && command.includes('screen')) {
+      this.loggingService.log(
+        `⚠️ Skipping screen command on Windows: ${command}`,
+        'DEBUG',
+        'miner-manager',
+      );
+      return '';
+    }
+
+    if (command.includes('screen') && !(await this.isScreenAvailable())) {
+      this.loggingService.log(
+        `⚠️ Screen not available, skipping command: ${command}`,
+        'DEBUG',
+        'miner-manager',
+      );
+      return '';
+    }
+
+    return new Promise((resolve, reject) => {
+      const child = exec(command, { timeout, encoding: 'utf8' }, (error, stdout, stderr) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        if (stderr && stderr.trim().length > 0) {
+          // Treat stderr as non-fatal; return stdout for compatibility
+          resolve(stdout ?? '');
+          return;
+        }
+        resolve(stdout ?? '');
       });
 
-      // Look for our specific session name
+      child.on('error', (err) => reject(err));
+    });
+  }
+
+  public async isMinerRunningAsync(): Promise<boolean> {
+    try {
+      if (!(await this.isScreenAvailable())) {
+        this.updateMinerRunningCache(false);
+        return false;
+      }
+
+      const screenOutput = await this.execCommand('screen -ls', 5000);
+
       const sessionExists = screenOutput.includes(this.minerScreen);
 
       if (!sessionExists) {
@@ -1310,53 +1515,104 @@ export class MinerManagerService
           'DEBUG',
           'miner-manager',
         );
+        this.updateMinerRunningCache(false);
         return false;
       }
 
-      // Additional check: verify the session is actually attached/detached (not dead)
       const sessionLines = screenOutput.split('\n');
       for (const line of sessionLines) {
         if (line.includes(this.minerScreen)) {
-          // Check if session shows as Dead, Detached, or Attached
           if (line.includes('(Dead)')) {
             this.loggingService.log(
               `💀 Screen session '${this.minerScreen}' is dead, cleaning up`,
               'WARN',
               'miner-manager',
             );
-            this.cleanupAllMinerSessions();
+            await this.cleanupAllMinerSessions();
+            this.updateMinerRunningCache(false);
             return false;
           }
 
-          // Session exists and is not dead
           this.loggingService.log(
             `✅ Screen session '${this.minerScreen}' is running: ${line.trim()}`,
             'DEBUG',
             'miner-manager',
           );
+          this.updateMinerRunningCache(true);
           return true;
         }
       }
 
+      this.updateMinerRunningCache(false);
       return false;
     } catch (error) {
       this.loggingService.log(
-        `❌ Error checking miner status: ${error instanceof Error ? error.message : String(error)}`,
+        `❌ Error checking miner status (async): ${error instanceof Error ? error.message : String(error)}`,
         'DEBUG',
         'miner-manager',
       );
+      this.updateMinerRunningCache(false);
       return false;
     }
+  }
+
+  private updateMinerRunningCache(value: boolean): void {
+    this.minerRunningCache = { value, timestamp: Date.now() };
+  }
+
+  private getCachedMinerRunning(): boolean | undefined {
+    if (!this.minerRunningCache) {
+      return undefined;
+    }
+
+    if (Date.now() - this.minerRunningCache.timestamp > this.MINER_RUNNING_TTL) {
+      return undefined;
+    }
+
+    return this.minerRunningCache.value;
+  }
+
+  private isScreenAvailabilityCacheValid(): boolean {
+    if (!this.screenAvailabilityCache) {
+      return false;
+    }
+
+    return Date.now() - this.screenAvailabilityCache.timestamp < this.SCREEN_AVAILABILITY_TTL;
+  }
+
+  private async isScreenAvailable(): Promise<boolean> {
+    if (this.isScreenAvailabilityCacheValid()) {
+      return this.screenAvailabilityCache?.value ?? false;
+    }
+
+    const available = await new Promise<boolean>((resolve) => {
+      exec('command -v screen', { timeout: 2000 }, (error, stdout) => {
+        resolve(!error && !!stdout?.trim());
+      });
+    });
+
+    this.screenAvailabilityCache = { value: available, timestamp: Date.now() };
+    return available;
+  }
+
+  private isScreenAvailableSync(): boolean {
+    if (this.isScreenAvailabilityCacheValid()) {
+      return this.screenAvailabilityCache?.value ?? false;
+    }
+
+    return false;
   }
 
   /**
    * Get the count of running miner sessions
    */
-  public getMinerSessionCount(): number {
+  public async getMinerSessionCount(): Promise<number> {
     try {
-      const output = execSync(`screen -ls | grep ${this.minerScreen}`, {
-        encoding: 'utf8',
-      });
+      if (!(await this.isScreenAvailable())) {
+        return 0;
+      }
+
+      const output = await this.execCommand(`screen -ls | grep ${this.minerScreen}`, 5000);
 
       if (!output.trim()) {
         return 0;
@@ -1377,14 +1633,45 @@ export class MinerManagerService
     }
   }
 
+  private async getMinerSessionCountAsync(): Promise<number> {
+    try {
+      const output = await this.execCommand('screen -ls', 5000);
+
+      if (!output.trim()) {
+        return 0;
+      }
+
+      const lines = output.split('\n');
+      let count = 0;
+
+      const sessionPattern = new RegExp(`^\\s*\\d+\\.${this.minerScreen}`);
+      for (const line of lines) {
+        if (sessionPattern.test(line)) {
+          count++;
+        }
+      }
+
+      return count;
+    } catch {
+      return 0;
+    }
+  }
+
   /**
    * Clean up all miner sessions (useful when multiple sessions exist)
    */
-  private cleanupAllMinerSessions(): void {
+  private async cleanupAllMinerSessions(): Promise<void> {
     try {
-      const output = execSync(`screen -ls | grep ${this.minerScreen}`, {
-        encoding: 'utf8',
-      });
+      if (!(await this.isScreenAvailable())) {
+        this.loggingService.log(
+          'ℹ️ Screen not available, skipping session cleanup',
+          'DEBUG',
+          'miner-manager',
+        );
+        return;
+      }
+
+      const output = await this.execCommand(`screen -ls | grep ${this.minerScreen}`, 5000);
 
       if (output.trim()) {
         // Extract session IDs from screen -ls output
@@ -1408,9 +1695,7 @@ export class MinerManagerService
           // Kill all miner sessions
           for (const sessionId of sessionIds) {
             try {
-              execSync(`screen -X -S ${sessionId}.${this.minerScreen} quit`, {
-                timeout: 5000,
-              });
+              await this.execCommand(`screen -X -S ${sessionId}.${this.minerScreen} quit`, 5000);
               this.loggingService.log(
                 `✅ Cleaned up session: ${sessionId}.${this.minerScreen}`,
                 'DEBUG',
@@ -1424,7 +1709,7 @@ export class MinerManagerService
               );
 
               // If screen command failed, try to remove the session file manually
-              this.cleanupOrphanedSessionFile(sessionId);
+              await this.cleanupOrphanedSessionFile(sessionId);
             }
           }
         }
@@ -1439,10 +1724,64 @@ export class MinerManagerService
     }
   }
 
+  private async cleanupAllMinerSessionsAsync(): Promise<void> {
+    try {
+      const output = await this.execCommand(`screen -ls`, 5000);
+
+      if (output.trim()) {
+        const lines = output.split('\n');
+        const sessionIds: string[] = [];
+        const sessionPattern = new RegExp(`^\\s*(\\d+)\\.${this.minerScreen}`);
+
+        for (const line of lines) {
+          const match = line.match(sessionPattern);
+          if (match) {
+            sessionIds.push(match[1]);
+          }
+        }
+
+        if (sessionIds.length > 0) {
+          this.loggingService.log(
+            `🧹 Found ${sessionIds.length} miner sessions to clean up: ${sessionIds.join(', ')}`,
+            'INFO',
+            'miner-manager',
+          );
+
+          for (const sessionId of sessionIds) {
+            try {
+              await this.execCommand(
+                `screen -X -S ${sessionId}.${this.minerScreen} quit`,
+                5000,
+              );
+              this.loggingService.log(
+                `✅ Cleaned up session: ${sessionId}.${this.minerScreen}`,
+                'DEBUG',
+                'miner-manager',
+              );
+            } catch (error) {
+              this.loggingService.log(
+                `⚠️ Failed to clean up session ${sessionId}.${this.minerScreen}: ${error instanceof Error ? error.message : String(error)}`,
+                'WARN',
+                'miner-manager',
+              );
+              await this.cleanupOrphanedSessionFile(sessionId);
+            }
+          }
+        }
+      }
+    } catch {
+      this.loggingService.log(
+        'No miner sessions found to clean up (async)',
+        'DEBUG',
+        'miner-manager',
+      );
+    }
+  }
+
   /**
    * Manually remove orphaned screen session files when screen command fails
    */
-  private cleanupOrphanedSessionFile(sessionId: string): void {
+  private async cleanupOrphanedSessionFile(sessionId: string): Promise<void> {
     try {
       // Screen session files are typically stored in /tmp/uscreens/S-username/ or /var/run/screen/S-username/
       // We'll try common locations
@@ -1459,8 +1798,8 @@ export class MinerManagerService
       let removed = false;
       for (const sessionPath of possiblePaths) {
         try {
-          if (fs.existsSync(sessionPath)) {
-            fs.unlinkSync(sessionPath);
+          if (await this.fileExists(sessionPath)) {
+            await this.safeUnlink(sessionPath);
             this.loggingService.log(
               `🗑️ Manually removed orphaned session file: ${sessionPath}`,
               'INFO',
@@ -1478,12 +1817,9 @@ export class MinerManagerService
       if (!removed) {
         // If we couldn't find the file in common locations, try using find command
         try {
-          const findResult = execSync(
+          const findResult = await this.execCommand(
             `find /tmp /var/run /run -name "${sessionFileName}" 2>/dev/null || true`,
-            {
-              encoding: 'utf8',
-              timeout: 3000,
-            },
+            3000,
           );
 
           const foundPaths = findResult
@@ -1493,8 +1829,8 @@ export class MinerManagerService
 
           for (const foundPath of foundPaths) {
             try {
-              if (fs.existsSync(foundPath)) {
-                fs.unlinkSync(foundPath);
+              if (await this.fileExists(foundPath)) {
+                await this.safeUnlink(foundPath);
                 this.loggingService.log(
                   `🗑️ Manually removed orphaned session file: ${foundPath}`,
                   'INFO',
@@ -1529,7 +1865,7 @@ export class MinerManagerService
 
   public async startMiner(): Promise<boolean> {
     try {
-      const miner = this.getMinerFromFlightsheet();
+      const miner = await this.getMinerFromFlightsheet();
       if (!miner) {
         const error = 'Cannot start miner: No miner found in flightsheet';
         this.loggingService.log(`❌ ${error}`, 'ERROR', 'miner-manager');
@@ -1540,19 +1876,22 @@ export class MinerManagerService
       const configPath = `apps/${miner}/config.json`;
       const minerExecutable = `apps/${miner}/${miner}`;
 
-      if (!fs.existsSync(configPath) || !fs.existsSync(minerExecutable)) {
+      const configExists = await this.fileExists(configPath);
+      const execExists = await this.fileExists(minerExecutable);
+
+      if (!configExists || !execExists) {
         this.loggingService.log(
           `⚠️ Miner ${miner} not found. Attempting automatic installation...`,
           'WARN',
           'miner-manager',
         );
         this.loggingService.log(
-          `  Initial check - Config: ${configPath} exists: ${fs.existsSync(configPath)}`,
+          `  Initial check - Config: ${configPath} exists: ${configExists}`,
           'INFO',
           'miner-manager',
         );
         this.loggingService.log(
-          `  Initial check - Executable: ${minerExecutable} exists: ${fs.existsSync(minerExecutable)}`,
+          `  Initial check - Executable: ${minerExecutable} exists: ${execExists}`,
           'INFO',
           'miner-manager',
         );
@@ -1572,18 +1911,20 @@ export class MinerManagerService
           'INFO',
           'miner-manager',
         );
+        const configExistsAfter = await this.fileExists(configPath);
+        const execExistsAfter = await this.fileExists(minerExecutable);
         this.loggingService.log(
-          `  Config path: ${configPath} - exists: ${fs.existsSync(configPath)}`,
+          `  Config path: ${configPath} - exists: ${configExistsAfter}`,
           'INFO',
           'miner-manager',
         );
         this.loggingService.log(
-          `  Executable path: ${minerExecutable} - exists: ${fs.existsSync(minerExecutable)}`,
+          `  Executable path: ${minerExecutable} - exists: ${execExistsAfter}`,
           'INFO',
           'miner-manager',
         );
 
-        if (!fs.existsSync(configPath) || !fs.existsSync(minerExecutable)) {
+        if (!configExistsAfter || !execExistsAfter) {
           const error = `Cannot start miner: Missing files at ${configPath} or ${minerExecutable} after installation`;
           this.loggingService.log(`❌ ${error}`, 'ERROR', 'miner-manager');
           void this.logMinerError(error);
@@ -1592,9 +1933,9 @@ export class MinerManagerService
       }
 
       // Clean up any existing miner sessions before starting a new one
-      this.cleanupAllMinerSessions();
+      await this.cleanupAllMinerSessions();
 
-      execSync(`chmod +x ${minerExecutable}`);
+      await this.execCommand(`chmod +x ${minerExecutable}`);
       exec(
         `screen -dmS ${this.minerScreen} ${minerExecutable} -c ${configPath}`,
       );
@@ -1604,6 +1945,8 @@ export class MinerManagerService
         'INFO',
         'miner-manager',
       );
+      this.lastMinerStartAt = new Date().toISOString();
+      this.updateMinerRunningCache(true);
       return true;
     } catch (error) {
       void this.logMinerError(
@@ -1614,9 +1957,18 @@ export class MinerManagerService
     }
   }
 
-  public stopMiner(isManualStop: boolean = false): boolean {
+  public async stopMiner(isManualStop: boolean = false): Promise<boolean> {
     try {
-      if (!this.isMinerRunning()) {
+      if (!(await this.isScreenAvailable())) {
+        this.loggingService.log(
+          'ℹ️ Screen not available, skipping miner stop',
+          'DEBUG',
+          'miner-manager',
+        );
+        return true;
+      }
+
+      if (!(await this.isMinerRunningAsync())) {
         this.loggingService.log(
           'ℹ️ No miner session found to stop',
           'INFO',
@@ -1626,7 +1978,8 @@ export class MinerManagerService
       }
 
       // Clean up all miner sessions instead of just trying to stop one
-      this.cleanupAllMinerSessions();
+      await this.cleanupAllMinerSessions();
+      this.updateMinerRunningCache(false);
 
       // Set the manual stop flag if applicable
       if (isManualStop) {
@@ -1655,13 +2008,17 @@ export class MinerManagerService
     }
   }
 
+  getLastMinerStartAt(): string | undefined {
+    return this.lastMinerStartAt;
+  }
+
   public async restartMiner(): Promise<boolean> {
     this.loggingService.log('🔄 Restarting miner...', 'INFO', 'miner-manager');
 
     // Record restart time for cooldown tracking
     this.lastRestartTime = new Date();
 
-    const stopped = this.stopMiner();
+    const stopped = await this.stopMiner();
     if (!stopped) {
       const error = 'Failed to restart: Could not stop miner';
       this.loggingService.log(`❌ ${error}`, 'ERROR', 'miner-manager');
@@ -1699,7 +2056,7 @@ export class MinerManagerService
         ),
       ])) as boolean;
 
-      const miner = this.getMinerFromFlightsheet();
+      const miner = await this.getMinerFromFlightsheet();
 
       if (!miner) {
         await this.logMinerError('No miner found from flightsheet.');
@@ -1746,7 +2103,7 @@ export class MinerManagerService
           'miner-manager',
         );
 
-        const miner = this.getMinerFromFlightsheet();
+        const miner = await this.getMinerFromFlightsheet();
         if (miner) {
           void this.startMiner();
         } else {
@@ -1782,7 +2139,7 @@ export class MinerManagerService
 
   private async checkSchedules() {
     // First check if benchmark mode is active - if so, skip all schedule logic
-    const config = this.configService.getConfig();
+    const config = await this.configService.getConfig();
     if (config && config.benchmark === true) {
       this.loggingService.log(
         '🚀 Benchmark mode active - skipping schedule checks',
@@ -1825,7 +2182,7 @@ export class MinerManagerService
       .toLowerCase();
 
     // Check for multiple sessions and log warning (only every 5 minutes to reduce noise)
-    const sessionCount = this.getMinerSessionCount();
+    const sessionCount = await this.getMinerSessionCountAsync();
     if (sessionCount > 1 && currentTime.endsWith(':00')) {
       // Only log on hour boundaries
       this.loggingService.log(
@@ -1849,6 +2206,7 @@ export class MinerManagerService
       const periods = config.schedules.scheduledMining.periods || [];
 
       let shouldMine = false;
+      let isRunning = await this.isMinerRunningAsync();
 
       // First check if we're in any mining period
       for (const period of periods) {
@@ -1872,7 +2230,7 @@ export class MinerManagerService
             this.isTimeInRange(currentTime, period.startTime, period.endTime)
           ) {
             shouldMine = true;
-            if (!this.isMinerRunning()) {
+            if (!isRunning) {
               this.loggingService.log(
                 `⏰ Starting miner for scheduled period: ${period.startTime} - ${period.endTime} on ${currentDay}`,
                 'INFO',
@@ -1886,6 +2244,8 @@ export class MinerManagerService
                   'ERROR',
                   'miner-manager',
                 );
+              } else {
+                isRunning = true;
               }
             } else {
               this.loggingService.log(
@@ -1900,17 +2260,19 @@ export class MinerManagerService
       }
 
       // If we shouldn't be mining but miner is running, stop it
-      if (!shouldMine && this.isMinerRunning()) {
+      if (!shouldMine && isRunning) {
         this.loggingService.log(
           `⏰ Stopping miner outside scheduled periods on ${currentDay} at ${currentTime}`,
           'INFO',
           'miner-manager',
         );
-        this.stopMiner();
+        await this.stopMiner();
+        isRunning = false;
       }
     } else {
       // If scheduling is disabled, make sure miner is running
-      if (!this.isMinerRunning()) {
+      const isRunning = await this.isMinerRunningAsync();
+      if (!isRunning) {
         this.loggingService.log(
           'ℹ️ Schedule disabled, ensuring miner is running',
           'INFO',
@@ -2109,7 +2471,7 @@ export class MinerManagerService
 
   private async logMinerError(message: string, stack?: string): Promise<void> {
     try {
-      const config = this.configService.getConfig();
+      const config = await this.configService.getConfig();
       if (!config?.minerId) {
         this.loggingService.log(
           '❌ Cannot log error: No minerId found',
@@ -2120,7 +2482,7 @@ export class MinerManagerService
       }
 
       const additionalInfo = {
-        minerSoftware: this.getMinerFromFlightsheet(),
+        minerSoftware: await this.getMinerFromFlightsheet(),
         wasRunning: this.isMinerRunning(),
         crashCount: this.crashCount,
         lastCrashTime: this.lastCrashTime?.toISOString(),
@@ -2152,9 +2514,9 @@ export class MinerManagerService
   /**
    * Debug function to dump current schedule status
    */
-  private dumpScheduleStatus(): void {
+  private async dumpScheduleStatus(): Promise<void> {
     try {
-      const config = this.configService.getConfig();
+      const config = await this.configService.getConfig();
       if (!config) {
         this.loggingService.log(
           'No config available for schedule status',
@@ -2214,9 +2576,9 @@ export class MinerManagerService
    * Get current schedule status for debugging
    * @returns Schedule status information
    */
-  public getScheduleStatus(): any {
+  public async getScheduleStatus(): Promise<any> {
     try {
-      const config = this.configService.getConfig();
+      const config = await this.configService.getConfig();
       if (!config) {
         return {
           status: 'error',
@@ -2304,7 +2666,7 @@ export class MinerManagerService
         allPeriods: periodStatuses,
         nextRestart,
         restartTimes: restarts,
-        shouldMine: this.shouldBeMining(),
+        shouldMine: await this.shouldBeMining(),
         isRunning: this.isMinerRunning(),
       };
     } catch (error) {
@@ -2315,10 +2677,15 @@ export class MinerManagerService
     }
   }
 
-  onApplicationShutdown() {
+  async onApplicationShutdown() {
+    if (this.isShuttingDown) {
+      return;
+    }
+    this.isShuttingDown = true;
+
     this.clearIntervals();
     MinerManagerService.isInitialized = false;
-    this.stopMiner();
+    await this.stopMiner();
     this.loggingService.log(
       '🛑 MinerManager shutdown complete',
       'INFO',

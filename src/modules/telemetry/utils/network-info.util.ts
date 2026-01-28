@@ -1,7 +1,10 @@
-import { execSync } from 'child_process';
+import { exec } from 'child_process';
 import * as https from 'https';
 import { LRUCache } from '../../device-monitoring/os-detection/lru-cache';
 import { NETWORK_CONSTANTS } from './network-info-constants';
+import { promisify } from 'util';
+
+const execAsync = promisify(exec);
 
 // Define NetworkInfo interface outside of class
 export interface NetworkInfo {
@@ -103,6 +106,8 @@ interface HttpRequest {
 }
 
 export class NetworkInfoUtil {
+  private static networkInfoCache: { data: NetworkInfo; timestamp: number } | null = null;
+  private static readonly NETWORK_INFO_TTL = 30000; // 30 seconds
   // Use LRU Cache for ping values with TTL support
   private static pingCache = new LRUCache<string, PingData>(20); // Limit to 20 hosts
   private static readonly PING_CACHE_TTL = 60000; // 60 seconds
@@ -131,10 +136,31 @@ export class NetworkInfoUtil {
   // Active HTTP requests to manage and abort if needed - using proper AbortController instead of timeouts
   private static activeRequests: { [key: string]: HttpRequest } = {};
 
+  private static async execCommand(command: string, timeout?: number): Promise<string> {
+    const { stdout } = await execAsync(command, { encoding: 'utf8', timeout });
+    return stdout ?? '';
+  }
+
+  private static delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
   /** ✅ Get network details based on system type */
-  static getNetworkInfo(systemType: string): NetworkInfo {
+  static async getNetworkInfo(systemType: string): Promise<NetworkInfo> {
+    if (process.platform === 'win32') {
+      return this.getDefaultNetworkInfo();
+    }
+
+    const now = Date.now();
+    if (
+      this.networkInfoCache &&
+      now - this.networkInfoCache.timestamp < this.NETWORK_INFO_TTL
+    ) {
+      return this.networkInfoCache.data;
+    }
+
     // Get base network info
-    const baseInfo = (() => {
+    const baseInfo = await (async () => {
       switch (systemType) {
         case 'termux':
           return this.getTermuxNetworkInfo();
@@ -144,15 +170,15 @@ export class NetworkInfoUtil {
         default:
           return this.getDefaultNetworkInfo();
       }
-    })() as NetworkInfo;
+    })();
     
     // Add ping metrics
     baseInfo.ping = {
-      refurbminer: this.getPingLatency('refurbminer.de')
+      refurbminer: await this.getPingLatency('refurbminer.de')
     };
 
     // Add MAC address information
-    const interfaceDetails = this.getInterfaceDetails(systemType);
+    const interfaceDetails = await this.getInterfaceDetails(systemType);
     baseInfo.interfaceDetails = this.filterRelevantInterfaces(interfaceDetails);
 
     // Set primary MAC address (from primary interface) - only if not already set by system-specific function
@@ -171,7 +197,7 @@ export class NetworkInfoUtil {
 
     // Add traffic metrics for the primary interface
     if (primaryInterface) {
-      baseInfo.traffic = this.getNetworkTraffic(primaryInterface);
+      baseInfo.traffic = await this.getNetworkTraffic(primaryInterface);
     } else {
       baseInfo.traffic = {
         rxBytes: 0,
@@ -182,6 +208,8 @@ export class NetworkInfoUtil {
       };
     }
     
+    baseInfo.timestamp = Date.now();
+    this.networkInfoCache = { data: baseInfo, timestamp: Date.now() };
     return baseInfo;
   }
 
@@ -225,7 +253,7 @@ export class NetworkInfoUtil {
   }
 
   /** ✅ Get detailed interface information including MAC addresses */
-  private static getInterfaceDetails(systemType: string): InterfaceDetail[] {
+  private static async getInterfaceDetails(systemType: string): Promise<InterfaceDetail[]> {
     switch (systemType) {
       case 'termux':
         return this.getTermuxInterfaceDetails();
@@ -238,15 +266,12 @@ export class NetworkInfoUtil {
   }
 
   /** ✅ Get Linux interface details with MAC addresses */
-  private static getLinuxInterfaceDetails(): InterfaceDetail[] {
+  private static async getLinuxInterfaceDetails(): Promise<InterfaceDetail[]> {
     const details: InterfaceDetail[] = [];
 
     try {
       // Get all network interfaces
-      const interfaces = execSync('ls /sys/class/net', {
-        encoding: 'utf8',
-        timeout: 2000,
-      })
+      const interfaces = (await this.execCommand('ls /sys/class/net', 2000))
         .trim()
         .split('\n');
 
@@ -261,13 +286,10 @@ export class NetworkInfoUtil {
 
           // Get MAC address
           try {
-            const macAddress = execSync(
+            const macAddress = (await this.execCommand(
               `cat /sys/class/net/${interfaceName}/address`,
-              {
-                encoding: 'utf8',
-                timeout: 1000,
-              },
-            ).trim();
+              1000,
+            )).trim();
             if (macAddress && macAddress !== '00:00:00:00:00:00') {
               detail.macAddress = macAddress.toUpperCase();
             }
@@ -277,10 +299,7 @@ export class NetworkInfoUtil {
 
           // Get IP address using ip command
           try {
-            const ipOutput = execSync(`ip -4 addr show ${interfaceName}`, {
-              encoding: 'utf8',
-              timeout: 1000,
-            });
+            const ipOutput = await this.execCommand(`ip -4 addr show ${interfaceName}`, 1000);
             const ipMatch = ipOutput.match(/inet\s+([0-9.]+)/);
             if (ipMatch && ipMatch[1]) {
               detail.ipAddress = ipMatch[1];
@@ -291,13 +310,10 @@ export class NetworkInfoUtil {
 
           // Get interface state
           try {
-            const operstate = execSync(
+            const operstate = (await this.execCommand(
               `cat /sys/class/net/${interfaceName}/operstate`,
-              {
-                encoding: 'utf8',
-                timeout: 1000,
-              },
-            )
+              1000,
+            ))
               .trim()
               .toLowerCase();
             detail.state =
@@ -315,10 +331,10 @@ export class NetworkInfoUtil {
 
           // Get IP address for this interface
           try {
-            const ipOutput = execSync(
+            const ipOutput = (await this.execCommand(
               `ip -4 addr show ${interfaceName} | grep inet | head -1 | awk '{print $2}' | cut -d/ -f1`,
-              { encoding: 'utf8', timeout: 1000 },
-            ).trim();
+              1000,
+            )).trim();
             if (ipOutput && ipOutput !== '') {
               detail.ipAddress = ipOutput;
             }
@@ -339,17 +355,13 @@ export class NetworkInfoUtil {
   }
 
   /** ✅ Get Termux interface details with MAC addresses */
-  private static getTermuxInterfaceDetails(): InterfaceDetail[] {
+  private static async getTermuxInterfaceDetails(): Promise<InterfaceDetail[]> {
     const details: InterfaceDetail[] = [];
 
     try {
       // Primary method: Use 'ip link show' for better MAC address detection
       try {
-        const ipLinkOutput = execSync('ip link show', {
-          encoding: 'utf8',
-          timeout: 3000,
-          stdio: ['pipe', 'pipe', 'ignore'], // Suppress stderr
-        });
+        const ipLinkOutput = await this.execCommand('ip link show', 3000);
 
         // Parse ip link show output
         const lines = ipLinkOutput.split('\n');
@@ -398,11 +410,7 @@ export class NetworkInfoUtil {
         // Now get IP addresses for all detected interfaces using 'ip addr show'
         if (details.length > 0) {
           try {
-            const ipAddrOutput = execSync('ip addr show', {
-              encoding: 'utf8',
-              timeout: 3000,
-              stdio: ['pipe', 'pipe', 'ignore'], // Suppress stderr
-            });
+            const ipAddrOutput = await this.execCommand('ip addr show', 3000);
 
             // Parse IP addresses for each interface
             for (const detail of details) {
@@ -426,10 +434,7 @@ export class NetworkInfoUtil {
         
         // Fallback: Try ifconfig if ip link fails
         try {
-          const ifconfigOutput = execSync('ifconfig 2>/dev/null', {
-            encoding: 'utf8',
-            timeout: 3000,
-          });
+          const ifconfigOutput = await this.execCommand('ifconfig 2>/dev/null', 3000);
           const sections = ifconfigOutput.split(/\n\n+/);
 
           for (const section of sections) {
@@ -487,11 +492,7 @@ export class NetworkInfoUtil {
       if (details.some((d) => d.type === 'wifi')) {
         try {
           const wifiInfo = JSON.parse(
-            execSync('termux-wifi-connectioninfo', {
-              encoding: 'utf8',
-              timeout: 3000,
-              stdio: ['pipe', 'pipe', 'ignore'], // Suppress stderr
-            }),
+            await this.execCommand('termux-wifi-connectioninfo', 3000),
           ) as { bssid?: string };
 
           if (wifiInfo?.bssid) {
@@ -569,13 +570,13 @@ export class NetworkInfoUtil {
   }
 
   /** ✅ Get DNS servers */
-  private static getDnsServers(): string[] {
+  private static async getDnsServers(): Promise<string[]> {
     try {
       // Detect system type for appropriate DNS method
       let systemType = 'linux'; // default
       try {
         // Check if we're in Termux
-        execSync('command -v termux-info', { stdio: 'ignore', timeout: 1000 });
+        await this.execCommand('command -v termux-info', 1000);
         systemType = 'termux';
       } catch {
         // Not Termux, assume Linux
@@ -592,22 +593,14 @@ export class NetworkInfoUtil {
   }
 
   /** ✅ Get DNS servers on Termux */
-  private static getTermuxDnsServers(): string[] {
+  private static async getTermuxDnsServers(): Promise<string[]> {
     const dnsServers: string[] = [];
 
     try {
       // Method 1: Try getprop for Android DNS settings
       try {
-        const dns1 = execSync('getprop net.dns1', {
-          encoding: 'utf8',
-          timeout: 2000,
-          stdio: ['pipe', 'pipe', 'ignore'], // Ignore stderr
-        }).trim();
-        const dns2 = execSync('getprop net.dns2', {
-          encoding: 'utf8',
-          timeout: 2000,
-          stdio: ['pipe', 'pipe', 'ignore'], // Ignore stderr
-        }).trim();
+        const dns1 = (await this.execCommand('getprop net.dns1', 2000)).trim();
+        const dns2 = (await this.execCommand('getprop net.dns2', 2000)).trim();
 
         if (dns1 && dns1 !== '' && !dns1.startsWith('127.')) {
           dnsServers.push(dns1);
@@ -622,11 +615,7 @@ export class NetworkInfoUtil {
       // Method 2: Try to read from /system/etc/resolv.conf (Android)
       if (dnsServers.length === 0) {
         try {
-          const resolveOutput = execSync('cat /system/etc/resolv.conf', {
-            encoding: 'utf8',
-            timeout: 2000,
-            stdio: ['pipe', 'pipe', 'ignore'], // Ignore stderr
-          });
+          const resolveOutput = await this.execCommand('cat /system/etc/resolv.conf', 2000);
           
           const lines = resolveOutput.split('\n');
           for (const line of lines) {
@@ -649,10 +638,7 @@ export class NetworkInfoUtil {
           const testDns = ['8.8.8.8', '1.1.1.1', '9.9.9.9'];
           for (const dns of testDns) {
             try {
-              execSync(`nslookup google.com ${dns}`, {
-                encoding: 'utf8',
-                timeout: 3000,
-              });
+              await this.execCommand(`nslookup google.com ${dns}`, 3000);
               dnsServers.push(dns);
               break; // Use first working DNS
             } catch {
@@ -677,13 +663,9 @@ export class NetworkInfoUtil {
   }
 
   /** ✅ Get DNS servers on Linux */
-  private static getLinuxDnsServers(): string[] {
+  private static async getLinuxDnsServers(): Promise<string[]> {
     try {
-      const dnsOutput = execSync('cat /etc/resolv.conf', {
-        encoding: 'utf8',
-        timeout: 2000,
-        stdio: ['pipe', 'pipe', 'ignore'], // Ignore stderr
-      });
+      const dnsOutput = await this.execCommand('cat /etc/resolv.conf', 2000);
 
       const dnsServers: string[] = [];
       const lines = dnsOutput.split('\n');
@@ -730,33 +712,27 @@ export class NetworkInfoUtil {
   }
 
   /** ✅ Get network info on Linux / Raspberry Pi */
-  private static getLinuxNetworkInfo(): NetworkInfo {
+  private static async getLinuxNetworkInfo(): Promise<NetworkInfo> {
     try {
       // Get all IPv4 addresses excluding loopback
-      const ipOutput = execSync(
+      const ipOutput = (await this.execCommand(
         "ip -4 addr show | grep inet | grep -v '127.0.0.1' | awk '{print $2}'",
-        { encoding: 'utf8', timeout: NETWORK_CONSTANTS.HTTP_TIMEOUT },
-      )
+        NETWORK_CONSTANTS.HTTP_TIMEOUT,
+      ))
         .split('\n')
         .filter(Boolean);
 
-      const gateway = execSync("ip route | awk '/default/ {print $3}'", {
-        encoding: 'utf8',
-        timeout: 2000,
-      }).trim();
+      const gateway = (await this.execCommand("ip route | awk '/default/ {print $3}'", 2000)).trim();
 
-      const interfaces = execSync('ls /sys/class/net', {
-        encoding: 'utf8',
-        timeout: 2000,
-      })
+      const interfaces = (await this.execCommand('ls /sys/class/net', 2000))
         .trim()
         .split('\n');
 
       // Get external IP (cached or fresh)
-      const externalIp = this.getCachedExternalIp();
+      const externalIp = await this.getCachedExternalIp();
 
       // Get interface details with MAC addresses
-      const interfaceDetails = this.getInterfaceDetails('linux');
+      const interfaceDetails = await this.getInterfaceDetails('linux');
       const primaryIp = ipOutput.length > 0 ? ipOutput[0].split('/')[0] : 'Unknown';
 
       return {
@@ -768,7 +744,7 @@ export class NetworkInfoUtil {
             ? interfaces.slice(0, this.MAX_INTERFACES)
             : ['Unknown'],
         interfaceDetails: interfaceDetails.slice(0, this.MAX_INTERFACES),
-        dns: this.getDnsServers(),
+        dns: await this.getDnsServers(),
         externalIp: externalIp || 'Unknown',
         timestamp: Date.now(),
       };
@@ -778,7 +754,7 @@ export class NetworkInfoUtil {
   }
 
   /** ✅ Get network info on Termux (Android) */
-  private static getTermuxNetworkInfo(): NetworkInfo {
+  private static async getTermuxNetworkInfo(): Promise<NetworkInfo> {
     try {
       let primaryIp = 'Unknown';
       let gateway = 'Unknown';
@@ -789,11 +765,7 @@ export class NetworkInfoUtil {
       try {
         // Method 1: Try 'ip route get' to a reliable external IP (most accurate)
         try {
-          const routeGetOutput = execSync('ip route get 8.8.8.8', {
-            encoding: 'utf8',
-            timeout: 2000,
-            stdio: ['pipe', 'pipe', 'ignore'], // Suppress stderr
-          });
+          const routeGetOutput = await this.execCommand('ip route get 8.8.8.8', 2000);
           
           // Parse output like: "8.8.8.8 via 10.0.10.1 dev eth0 table 1021 src 10.0.10.187"
           const getViaMatch = routeGetOutput.match(/via\s+([0-9.]+)/);
@@ -821,11 +793,7 @@ export class NetworkInfoUtil {
 
         // Method 2: If route get failed, try standard ip route commands
         if (gateway === 'Unknown') {
-          const routeOutput = execSync('ip route', {
-            encoding: 'utf8',
-            timeout: 3000,
-            stdio: ['pipe', 'pipe', 'ignore'], // Suppress stderr
-          });
+          const routeOutput = await this.execCommand('ip route', 3000);
 
           // Look for default route first (most common)
           const defaultRouteMatch = routeOutput.match(/default\s+via\s+([0-9.]+)/);
@@ -855,10 +823,7 @@ export class NetworkInfoUtil {
 
       // Try to get additional interfaces from ifconfig (only if we need more info)
       try {
-        const ifconfigOutput = execSync('ifconfig 2>/dev/null', {
-          encoding: 'utf8',
-          timeout: 3000,
-        });
+        const ifconfigOutput = await this.execCommand('ifconfig 2>/dev/null', 3000);
         const sections = ifconfigOutput.split(/\n\n+/);
 
         for (const section of sections) {
@@ -889,10 +854,7 @@ export class NetworkInfoUtil {
       if (primaryIp === 'Unknown') {
         try {
           const wifiInfo = JSON.parse(
-            execSync('termux-wifi-connectioninfo', {
-              encoding: 'utf8',
-              timeout: 3000,
-            }),
+            await this.execCommand('termux-wifi-connectioninfo', 3000),
           ) as { ip?: string; gateway?: string };
 
           if (wifiInfo?.ip) {
@@ -909,7 +871,7 @@ export class NetworkInfoUtil {
       }
 
       // Get interface details with MAC addresses
-      const interfaceDetails = this.getInterfaceDetails('termux');
+      const interfaceDetails = await this.getInterfaceDetails('termux');
       
       // If we have primary IP and primary interface from ip route get, assign the IP to the correct interface
       if (primaryIp !== 'Unknown' && interfaces.length > 0) {
@@ -923,7 +885,7 @@ export class NetworkInfoUtil {
       const filteredInterfaceDetails = this.filterRelevantInterfaces(interfaceDetails);
 
       // Get external IP
-      externalIp = this.getCachedExternalIp() || 'Unknown';
+      externalIp = (await this.getCachedExternalIp()) || 'Unknown';
 
             // Final network info object
 
@@ -933,7 +895,7 @@ export class NetworkInfoUtil {
         gateway,
         interfaces,
         interfaceDetails: filteredInterfaceDetails,
-        dns: this.getDnsServers(),
+        dns: await this.getDnsServers(),
         externalIp,
         timestamp: Date.now(),
       };
@@ -964,13 +926,13 @@ export class NetworkInfoUtil {
   }
 
   /** ✅ Get gateway using traceroute */
-  private static getGatewayFromTraceroute(): string {
+  private static async getGatewayFromTraceroute(): Promise<string> {
     try {
       // Run traceroute and get first hop directly
-      const tracerouteOutput = execSync(
+      const tracerouteOutput = (await this.execCommand(
         'traceroute -n -w 1 -q 1 -m 1 8.8.8.8 | grep -v traceroute | head -n 1',
-        { encoding: 'utf8', timeout: 3000 }
-      ).trim();
+        3000,
+      )).trim();
 
       // Extract first hop IP address more reliably
       const match = tracerouteOutput.match(/^\s*1\s+([0-9.]+)/);
@@ -983,10 +945,10 @@ export class NetworkInfoUtil {
       }
 
       // If first attempt fails, try alternative method
-      const pingOutput = execSync(
+      const pingOutput = (await this.execCommand(
         'ping -c 1 8.8.8.8 | grep "^From .* Time to live exceeded"',
-        { encoding: 'utf8', timeout: 3000 }
-      ).trim();
+        3000,
+      )).trim();
       
       const pingMatch = pingOutput.match(/From ([0-9.]+)/);
       if (pingMatch && pingMatch[1]) {
@@ -997,7 +959,7 @@ export class NetworkInfoUtil {
       
       // Last resort: try to derive gateway from IP
       try {
-        const ip = execSync('getprop dhcp.wlan0.ipaddress', { encoding: 'utf8', timeout: 1000 }).trim();
+        const ip = (await this.execCommand('getprop dhcp.wlan0.ipaddress', 1000)).trim();
         if (ip) {
           const parts = ip.split('.');
           if (parts.length === 4) {
@@ -1013,7 +975,7 @@ export class NetworkInfoUtil {
   }
 
   /** ✅ Get ping latency to a target host with proper TTL caching */
-  private static getPingLatency(host: string): number {
+  private static async getPingLatency(host: string): Promise<number> {
     const now = Date.now();
     
     // Check if we can use cached value
@@ -1025,10 +987,10 @@ export class NetworkInfoUtil {
     try {
       // First try the standard ping command
       try {
-        const pingOutput = execSync(
+        const pingOutput = (await this.execCommand(
           `ping -c 3 -W 2 ${host} 2>/dev/null | grep "avg"`,
-          { encoding: 'utf8', timeout: 5000 }
-        ).trim();
+          5000,
+        )).trim();
         
         // Extract the avg ping time
         const match = pingOutput.match(/[0-9.]+\/([0-9.]+)\//);
@@ -1049,13 +1011,13 @@ export class NetworkInfoUtil {
       try {
         // Try to resolve hostname first
         const nslookupCommand = `nslookup ${host} | grep -i address | tail -n 1 | awk '{print $2}'`;
-        const ip = execSync(nslookupCommand, { encoding: 'utf8', timeout: 3000 }).trim();
+        const ip = (await this.execCommand(nslookupCommand, 3000)).trim();
         
         if (ip && ip.match(/^\d+\.\d+\.\d+\.\d+$/)) {
-          const altPingOutput = execSync(
+          const altPingOutput = (await this.execCommand(
             `ping -c 3 -W 2 ${ip} 2>/dev/null | grep "avg"`,
-            { encoding: 'utf8', timeout: 5000 }
-          ).trim();
+            5000,
+          )).trim();
           
           // Extract ping time from alternative output
           const altMatch = altPingOutput.match(/[0-9.]+\/([0-9.]+)\//);
@@ -1082,7 +1044,7 @@ export class NetworkInfoUtil {
   }
 
   /** ✅ Get network traffic stats for an interface with improved caching */
-  private static getNetworkTraffic(interfaceName: string): TrafficData {
+  private static async getNetworkTraffic(interfaceName: string): Promise<TrafficData> {
     const now = Date.now();
     
     // Return cached value if recent enough (within TRAFFIC_CACHE_TTL)
@@ -1108,7 +1070,7 @@ export class NetworkInfoUtil {
       // Try multiple methods to get network stats
       if (interfaceName !== 'Unknown') {
         // Check if we can use su (root)
-        const hasSu = this.isSuAvailable();
+        const hasSu = await this.isSuAvailable();
         
         // Method 1: Try reading from /proc/net/dev with su if available
         try {
@@ -1117,7 +1079,7 @@ export class NetworkInfoUtil {
             'su -c "cat /proc/net/dev" 2>/dev/null' : 
             'cat /proc/net/dev 2>/dev/null';
             
-          const netDevContent = execSync(command, { encoding: 'utf8', timeout: 2000 });
+          const netDevContent = await this.execCommand(command, 2000);
           const lines = netDevContent.split('\n');
           
           for (const line of lines) {
@@ -1143,7 +1105,7 @@ export class NetworkInfoUtil {
               `su -c "ifconfig ${interfaceName}" 2>/dev/null` : 
               `ifconfig ${interfaceName} 2>/dev/null`;
               
-            const ifconfigOutput = execSync(command, { encoding: 'utf8', timeout: 3000 });
+            const ifconfigOutput = await this.execCommand(command, 3000);
             
             // Different formats for different ifconfig implementations
             let rxMatch = ifconfigOutput.match(/RX packets \d+\s+bytes (\d+)/);
@@ -1165,10 +1127,10 @@ export class NetworkInfoUtil {
         // Method 3: For Android/Termux with root, try dumpsys
         if (!success && hasSu && interfaceName === 'wlan0') {
           try {
-            const rxBytesStr = execSync(
-              'su -c "dumpsys netstats | grep -E \\"iface=wlan.*NetworkStatsHistory\\" | head -1"', 
-              { encoding: 'utf8', timeout: 3000 }
-            ).trim();
+            const rxBytesStr = (await this.execCommand(
+              'su -c "dumpsys netstats | grep -E \\"iface=wlan.*NetworkStatsHistory\\" | head -1"',
+              3000,
+            )).trim();
             
             const rxBytesMatch = rxBytesStr.match(/rxBytes=(\d+)/);
             const txBytesMatch = rxBytesStr.match(/txBytes=(\d+)/);
@@ -1237,9 +1199,9 @@ export class NetworkInfoUtil {
   }
 
   /** ✅ Check if we can use su (root) */
-  private static isSuAvailable(): boolean {
+  private static async isSuAvailable(): Promise<boolean> {
     try {
-      const result = execSync('su -c "echo test" 2>/dev/null', { encoding: 'utf8', timeout: 1000 });
+      const result = await this.execCommand('su -c "echo test" 2>/dev/null', 1000);
       return result.includes('test');
     } catch {
       return false;
@@ -1250,7 +1212,7 @@ export class NetworkInfoUtil {
    * Uses a 5-minute cache to reduce external requests
    * Implements error handling and retry mechanism
    */
-  private static getCachedExternalIp(): string {
+  private static async getCachedExternalIp(): Promise<string> {
     const now = Date.now();
     
     // Check if cache is valid
@@ -1277,10 +1239,7 @@ export class NetworkInfoUtil {
           while (retries < NETWORK_CONSTANTS.MAX_RETRIES) {
             try {
               // Use timeout to prevent hanging
-              const result = execSync(
-                `curl -s --max-time 3 ${url}`,
-                { encoding: 'utf8', timeout: 5000 }
-              ).trim();
+              const result = (await this.safeHttpGet(url, 5000)).trim();
               
               if (result && result.match(/^\d+\.\d+\.\d+\.\d+$/)) {
                 // Update cache
@@ -1300,10 +1259,7 @@ export class NetworkInfoUtil {
               // Wait before retry (except on last attempt)
               if (retries < NETWORK_CONSTANTS.MAX_RETRIES) {
                 // Sleep using a setTimeout-like approach that works synchronously
-                const waitUntil = Date.now() + NETWORK_CONSTANTS.RETRY_DELAY;
-                while (Date.now() < waitUntil) {
-                  // Busy wait
-                }
+                await this.delay(NETWORK_CONSTANTS.RETRY_DELAY);
               }
             }
           }

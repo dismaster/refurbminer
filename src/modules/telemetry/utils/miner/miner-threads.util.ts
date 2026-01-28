@@ -1,30 +1,62 @@
-import { execSync } from 'child_process';
+import { exec, ExecOptionsWithStringEncoding } from 'child_process';
 import * as os from 'os';
+import { promisify } from 'util';
 import { MinerApiConfigUtil } from './miner-api-config.util';
 
+type ExecOptionsString = Omit<ExecOptionsWithStringEncoding, 'encoding'> & {
+  encoding?: BufferEncoding;
+};
+
+const execAsync = promisify(exec) as (
+  command: string,
+  options?: ExecOptionsWithStringEncoding,
+) => Promise<{ stdout: string; stderr: string }>;
+
+const execCommand = async (
+  command: string,
+  options: ExecOptionsString = {},
+): Promise<string> => {
+  const { stdout } = await execAsync(command, {
+    encoding: 'utf8',
+    ...options,
+  } as ExecOptionsWithStringEncoding);
+  return stdout ?? '';
+};
+
 export class MinerThreadsUtil {
+  private static threadsCache: { data: any[]; timestamp: number } | null = null;
+  private static readonly THREADS_CACHE_TTL = 15000; // 15 seconds
+
   /** ✅ Get thread performance data */
   static async getThreadPerformance(): Promise<any[]> {
     try {
-      const miner = this.detectMiner();
-      const cpuInfo = this.getCpuInfo();
+      const now = Date.now();
+      if (this.threadsCache && now - this.threadsCache.timestamp < this.THREADS_CACHE_TTL) {
+        return this.threadsCache.data;
+      }
+
+      const miner = await this.detectMiner();
+      const cpuInfo = await this.getCpuInfo();
       
       // Get hashrates from miner if running
       let minerHashrates: number[] = [];
       if (miner) {
         const threadStats = miner === 'ccminer' 
-          ? this.getCcminerThreadStats()
+          ? await this.getCcminerThreadStats()
           : await this.getXmrigThreadStats();
           
         minerHashrates = threadStats.map((t: any) => t.hashrate || 0);
       }
       
       // Combine CPU info with hashrates
-      return cpuInfo.map((cpu, index) => ({
+      const data = cpuInfo.map((cpu, index) => ({
         ...cpu,
         // Convert to consistent naming: hashrate in hash/s for both miners
         hashrate: minerHashrates[index] || 0
       }));
+
+      this.threadsCache = { data, timestamp: Date.now() };
+      return data;
     } catch (error) {
       console.error('Failed to get thread performance:', error);
       return this.getDefaultThreadStats();
@@ -32,10 +64,10 @@ export class MinerThreadsUtil {
   }
 
   /** ✅ Get CPU information with improved parsing */
-  private static getCpuInfo(): any[] {
+  private static async getCpuInfo(): Promise<any[]> {
     try {
       // Try using lscpu first with improved parsing
-      const lscpuOutput = execSync('lscpu', { encoding: 'utf8' }).split('\n');
+      const lscpuOutput = (await execCommand('lscpu')).split('\n');
       
       // Extract basic CPU info
       const modelNameLine = lscpuOutput.find(l => l.includes('Model name'));
@@ -61,7 +93,7 @@ export class MinerThreadsUtil {
       }
 
       // Fallback to /proc/cpuinfo with improved parsing
-      const cpuinfo = execSync('cat /proc/cpuinfo', { encoding: 'utf8' });
+      const cpuinfo = await execCommand('cat /proc/cpuinfo');
       const processors = cpuinfo.split('\n\n').filter(block => block.trim());
 
       if (processors.length > 0) {
@@ -100,9 +132,9 @@ export class MinerThreadsUtil {
   }
 
   /** ✅ Detect which miner is running */
-  private static detectMiner(): string | null {
+  private static async detectMiner(): Promise<string | null> {
     try {
-      const runningProcesses = execSync('ps aux', { encoding: 'utf8' });
+      const runningProcesses = await execCommand('ps aux');
 
       if (runningProcesses.includes('ccminer')) return 'ccminer';
       if (runningProcesses.includes('xmrig')) return 'xmrig';
@@ -114,14 +146,14 @@ export class MinerThreadsUtil {
   }
 
   /** ✅ Get CCMiner thread statistics with fallback methods */
-  private static getCcminerThreadStats(): any[] {
+  private static async getCcminerThreadStats(): Promise<any[]> {
     try {
       // Method 1: Try the threads command
       let threadsRaw = '';
       try {
-        const endpoint = MinerApiConfigUtil.getCcminerApiEndpoint();
-        threadsRaw = execSync(`echo 'threads' | nc -w 1 ${endpoint}`, {
-          encoding: 'utf8',
+        const endpoint = await MinerApiConfigUtil.getCcminerApiEndpoint();
+        threadsRaw = await execCommand(`echo 'threads' | nc -w 1 ${endpoint}`, {
+          timeout: 3000,
         });
         if (threadsRaw && threadsRaw.trim()) {
           const stats = this.parseCcminerThreads(threadsRaw);
@@ -135,9 +167,9 @@ export class MinerThreadsUtil {
 
       // Method 2: Try to get total hashrate from summary and distribute evenly
       try {
-        const endpoint = MinerApiConfigUtil.getCcminerApiEndpoint();
-        const summaryRaw = execSync(`echo 'summary' | nc -w 1 ${endpoint}`, {
-          encoding: 'utf8',
+        const endpoint = await MinerApiConfigUtil.getCcminerApiEndpoint();
+        const summaryRaw = await execCommand(`echo 'summary' | nc -w 1 ${endpoint}`, {
+          timeout: 3000,
         });
         const hashMatch = summaryRaw.match(/KHS=([\d.]+)/);
         if (hashMatch) {
@@ -158,9 +190,9 @@ export class MinerThreadsUtil {
 
       // Method 3: Try hwinfo for CPU count and estimate
       try {
-        const endpoint = MinerApiConfigUtil.getCcminerApiEndpoint();
-        const hwinfoRaw = execSync(`echo 'hwinfo' | nc -w 1 ${endpoint}`, {
-          encoding: 'utf8',
+        const endpoint = await MinerApiConfigUtil.getCcminerApiEndpoint();
+        const hwinfoRaw = await execCommand(`echo 'hwinfo' | nc -w 1 ${endpoint}`, {
+          timeout: 3000,
         });
         const cpusMatch = hwinfoRaw.match(/CPUS=(\d+)/);
         if (cpusMatch) {
@@ -190,7 +222,7 @@ export class MinerThreadsUtil {
     
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        const baseUrl = MinerApiConfigUtil.getXmrigApiUrl();
+        const baseUrl = await MinerApiConfigUtil.getXmrigApiUrl();
         
         if (attempt > 1) {
           // XMRig threads retry

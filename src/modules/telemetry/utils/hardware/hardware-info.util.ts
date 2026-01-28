@@ -1,9 +1,12 @@
-import { execSync } from 'child_process';
+import { exec } from 'child_process';
 import * as os from 'os';
 import * as fs from 'fs';
 import * as path from 'path';
 import { MemoryInfoUtil } from './memory-info.util';
 import { StorageInfoUtil } from './storage-info.util';
+import { promisify } from 'util';
+
+const execAsync = promisify(exec);
 
 export class HardwareInfoUtil {
   private static readonly VCGENCMD_PATH = path.join(
@@ -13,13 +16,54 @@ export class HardwareInfoUtil {
     'vcgencmd',
   );
 
+  private static deviceInfoCache: { systemType: string; data: any; timestamp: number } | null = null;
+  private static readonly DEVICE_INFO_TTL = 30000; // 30 seconds
+  private static lastTemperatureLogAt?: number;
+  private static readonly TEMPERATURE_LOG_TTL = 30000; // 30 seconds
+
+  private static async execCommand(command: string, timeout?: number): Promise<string> {
+    const { stdout } = await execAsync(command, { encoding: 'utf8', timeout });
+    return stdout ?? '';
+  }
+
+  private static async fileExists(filePath: string): Promise<boolean> {
+    try {
+      await fs.promises.access(filePath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private static async readFile(filePath: string): Promise<string> {
+    return await fs.promises.readFile(filePath, 'utf8');
+  }
+
+  private static async readFileTrim(filePath: string): Promise<string> {
+    const data = await fs.promises.readFile(filePath, 'utf8');
+    return data.trim();
+  }
+
+  private static async readDir(dirPath: string): Promise<string[]> {
+    return await fs.promises.readdir(dirPath);
+  }
+
   /** ✅ Get full hardware info with enhanced detection */
-  static getDeviceInfo(systemType: string, logger?: (message: string, level: string, category: string) => void): any {
+  static async getDeviceInfo(systemType: string, logger?: (message: string, level: string, category: string) => void): Promise<any> {
     const log = logger || (() => {});
+
+    const now = Date.now();
+    if (
+      this.deviceInfoCache &&
+      this.deviceInfoCache.systemType === systemType &&
+      now - this.deviceInfoCache.timestamp < this.DEVICE_INFO_TTL
+    ) {
+      return this.deviceInfoCache.data;
+    }
     
     // For non-Termux systems, try enhanced detection first
     if (systemType !== 'termux') {
-      const enhancedInfo = this.getEnhancedDeviceInfo(systemType, log);
+      const enhancedInfo = await this.getEnhancedDeviceInfo(systemType, log);
       if (enhancedInfo.hardwareDetectionMethod === 'lshw') {
         return enhancedInfo;
       }
@@ -31,39 +75,39 @@ export class HardwareInfoUtil {
     const totalStorage = StorageInfoUtil.getTotalStorage();
     const freeStorage = StorageInfoUtil.getFreeStorage();
 
-    return {
-      hwBrand: this.getBrand(systemType),
-      hwModel: this.getModel(systemType),
+    const data = {
+      hwBrand: await this.getBrand(systemType),
+      hwModel: await this.getModel(systemType),
       architecture: this.getArchitecture(),
-      os: this.getOsVersion(),
-      cpuCount: this.getCpuCount(),
-      cpuModel: this.getCpuThreads(),
-      cpuTemperature: this.getCpuTemperature(systemType, logger),
-      systemUptime: this.getSystemUptime(systemType),
+      os: await this.getOsVersion(),
+      cpuCount: await this.getCpuCount(),
+      cpuModel: await this.getCpuThreads(),
+      cpuTemperature: await this.getCpuTemperature(systemType, logger),
+      systemUptime: await this.getSystemUptime(systemType),
       totalMemory: totalMemory,
       freeMemory: freeMemory,
       totalStorage: totalStorage,
       freeStorage: freeStorage,
-      adbEnabled: this.isAdbEnabled(systemType),
-      suAvailable: this.isSuAvailable(systemType),
+      adbEnabled: await this.isAdbEnabled(systemType),
+      suAvailable: await this.isSuAvailable(systemType),
       hardwareDetectionMethod: 'basic'
     };
+
+    this.deviceInfoCache = { systemType, data, timestamp: Date.now() };
+    return data;
   }
 
   /** ✅ Get enhanced hardware info using lshw */
-  static getEnhancedDeviceInfo(systemType: string, logger: (message: string, level: string, category: string) => void): any {
+  static async getEnhancedDeviceInfo(systemType: string, logger: (message: string, level: string, category: string) => void): Promise<any> {
     const log = logger;
     
     try {
       log('Attempting to get enhanced hardware info using lshw...', 'DEBUG', 'hardware');
       
       // Check if lshw is available
-      execSync('command -v lshw > /dev/null 2>&1');
+      await this.execCommand('command -v lshw > /dev/null 2>&1');
       
-      const lshwOutput = execSync('lshw -short -quiet 2>/dev/null', { 
-        encoding: 'utf8',
-        timeout: 10000 // 10 second timeout
-      });
+      const lshwOutput = await this.execCommand('lshw -short -quiet 2>/dev/null', 10000);
       
       const enhancedInfo = this.parseLshwOutput(lshwOutput, log);
       
@@ -75,8 +119,8 @@ export class HardwareInfoUtil {
       
       // Merge with basic info, preferring lshw data
       return {
-        hwBrand: enhancedInfo.hwBrand || this.getBrand(systemType),
-        hwModel: enhancedInfo.hwModel || this.getModel(systemType),
+        hwBrand: enhancedInfo.hwBrand || await this.getBrand(systemType),
+        hwModel: enhancedInfo.hwModel || await this.getModel(systemType),
         detailedCpuModel: enhancedInfo.detailedCpuModel,
         detailedSystemInfo: enhancedInfo.systemDescription,
         primaryStorage: enhancedInfo.primaryStorage,
@@ -84,22 +128,30 @@ export class HardwareInfoUtil {
         networkController: enhancedInfo.networkController,
         memoryDescription: enhancedInfo.memoryDescription,
         architecture: this.getArchitecture(),
-        os: this.getOsVersion(),
-        cpuCount: this.getCpuCount(),
-        cpuModel: this.getCpuThreads(),
-        cpuTemperature: this.getCpuTemperature(systemType, logger),
-        systemUptime: this.getSystemUptime(systemType),
+        os: await this.getOsVersion(),
+        cpuCount: await this.getCpuCount(),
+        cpuModel: await this.getCpuThreads(),
+        cpuTemperature: await this.getCpuTemperature(systemType, logger),
+        systemUptime: await this.getSystemUptime(systemType),
         totalMemory: enhancedInfo.detailedTotalMemory || totalMemory,
         freeMemory: freeMemory,
         totalStorage: totalStorage,
         freeStorage: freeStorage,
-        adbEnabled: this.isAdbEnabled(systemType),
-        suAvailable: this.isSuAvailable(systemType),
+        adbEnabled: await this.isAdbEnabled(systemType),
+        suAvailable: await this.isSuAvailable(systemType),
         hardwareDetectionMethod: 'lshw'
       };
       
     } catch (error) {
-      log(`lshw not available or failed, using basic detection: ${error instanceof Error ? error.message : String(error)}`, 'WARN', 'hardware');
+      const now = Date.now();
+      if (!this.lastTemperatureLogAt || now - this.lastTemperatureLogAt > this.TEMPERATURE_LOG_TTL) {
+        log(
+          `lshw not available or failed, using basic detection: ${error instanceof Error ? error.message : String(error)}`,
+          'WARN',
+          'hardware',
+        );
+        this.lastTemperatureLogAt = now;
+      }
       return {
         hardwareDetectionMethod: 'basic'
       };
@@ -217,7 +269,7 @@ export class HardwareInfoUtil {
   }
 
   /** ✅ Get system uptime in seconds */
-  static getSystemUptime(systemType: string): number {
+  static async getSystemUptime(systemType: string): Promise<number> {
     try {
       // Method 1: Use Node.js os.uptime() (works on most systems)
       const nodeUptime = os.uptime();
@@ -234,7 +286,7 @@ export class HardwareInfoUtil {
         systemType === 'raspberry-pi'
       ) {
         // Get uptime in seconds from 'uptime -s' which returns the boot time
-        const uptimeOutput = execSync('uptime -p', { encoding: 'utf8' }).trim();
+        const uptimeOutput = (await this.execCommand('uptime -p')).trim();
 
         // Parse "up X days, Y hours, Z minutes" format
         const days = uptimeOutput.match(/(\d+) day/);
@@ -252,10 +304,8 @@ export class HardwareInfoUtil {
       }
 
       // Method 3: For Linux/RPi, try reading /proc/uptime
-      if (fs.existsSync('/proc/uptime')) {
-        const uptimeContent = fs
-          .readFileSync('/proc/uptime', 'utf8')
-          .split(' ')[0];
+      if (await this.fileExists('/proc/uptime')) {
+        const uptimeContent = (await this.readFile('/proc/uptime')).split(' ')[0];
         const uptime = parseFloat(uptimeContent);
         if (!isNaN(uptime)) {
           return Math.floor(uptime);
@@ -272,23 +322,23 @@ export class HardwareInfoUtil {
   }
 
   /** ✅ Get hardware brand */
-  static getBrand(systemType: string): string {
+  static async getBrand(systemType: string): Promise<string> {
     try {
       if (systemType === 'termux') {
-        return this.runCommandWithSuFallback('getprop ro.product.brand');
+        return await this.runCommandWithSuFallback('getprop ro.product.brand');
       }
       
       // Enhanced Allwinner/Radxa detection using device-tree compatible
-      if (fs.existsSync('/proc/device-tree/compatible')) {
+      if (await this.fileExists('/proc/device-tree/compatible')) {
         try {
-          const compatibleData = fs.readFileSync('/proc/device-tree/compatible', 'utf8');
+          const compatibleData = await this.readFile('/proc/device-tree/compatible');
           const compatibleEntries = compatibleData.split('\0').filter(entry => entry.length > 0);
           
           for (const entry of compatibleEntries) {
             if (entry.includes('allwinner')) {
               // Check if it's a Radxa device with Allwinner chip
-              if (fs.existsSync('/proc/device-tree/model')) {
-                const modelData = fs.readFileSync('/proc/device-tree/model', 'utf8').trim();
+              if (await this.fileExists('/proc/device-tree/model')) {
+                const modelData = await this.readFileTrim('/proc/device-tree/model');
                 // For Radxa devices, even with Allwinner chips, we want to identify as Radxa
                 if (process.env.HOSTNAME && process.env.HOSTNAME.includes('radxa')) {
                   return 'Radxa';
@@ -313,8 +363,8 @@ export class HardwareInfoUtil {
       }
       
       // Enhanced Radxa and ARM board detection
-      if (fs.existsSync('/sys/firmware/devicetree/base/model')) {
-        const modelContent = fs.readFileSync('/sys/firmware/devicetree/base/model', 'utf8').trim().replace(/\0/g, '');
+      if (await this.fileExists('/sys/firmware/devicetree/base/model')) {
+        const modelContent = (await this.readFileTrim('/sys/firmware/devicetree/base/model')).replace(/\0/g, '');
         
         // Check for Radxa devices
         if (modelContent.toLowerCase().includes('radxa') || modelContent.toLowerCase().includes('rock')) {
@@ -339,7 +389,7 @@ export class HardwareInfoUtil {
         // For unknown SoC identifiers like SUN55IW3, try other detection methods
         if (modelContent.match(/^[A-Z0-9]+$/)) {
           // This looks like a SoC identifier, try alternative detection
-          return this.detectBrandFromSystem();
+          return await this.detectBrandFromSystem();
         }
         
         // Fallback to first word if it looks like a brand name
@@ -350,40 +400,40 @@ export class HardwareInfoUtil {
       }
       
       // Try alternative detection methods
-      return this.detectBrandFromSystem();
+      return await this.detectBrandFromSystem();
     } catch {
       return 'Unknown';
     }
   }
 
   /** ✅ Alternative brand detection from system files and commands */
-  private static detectBrandFromSystem(): string {
+  private static async detectBrandFromSystem(): Promise<string> {
     try {
       // Try DMI information (works on many x86 and some ARM systems)
-      if (fs.existsSync('/sys/class/dmi/id/board_vendor')) {
-        const vendor = fs.readFileSync('/sys/class/dmi/id/board_vendor', 'utf8').trim();
+      if (await this.fileExists('/sys/class/dmi/id/board_vendor')) {
+        const vendor = await this.readFileTrim('/sys/class/dmi/id/board_vendor');
         if (vendor && vendor !== 'To be filled by O.E.M.' && vendor !== 'Unknown') {
           return vendor;
         }
       }
       
       // Try system vendor
-      if (fs.existsSync('/sys/class/dmi/id/sys_vendor')) {
-        const vendor = fs.readFileSync('/sys/class/dmi/id/sys_vendor', 'utf8').trim();
+      if (await this.fileExists('/sys/class/dmi/id/sys_vendor')) {
+        const vendor = await this.readFileTrim('/sys/class/dmi/id/sys_vendor');
         if (vendor && vendor !== 'To be filled by O.E.M.' && vendor !== 'Unknown') {
           return vendor;
         }
       }
       
       // Try lsb_release as final fallback
-      return execSync('lsb_release -si', { encoding: 'utf8' }).trim();
+      return (await this.execCommand('lsb_release -si')).trim();
     } catch {
       return 'Unknown';
     }
   }
 
   /** ✅ Get hardware model */
-  static getModel(systemType: string): string {
+  static async getModel(systemType: string): Promise<string> {
     try {
       if (systemType === 'termux') {
         // Use hardware-specific properties first for more accurate detection
@@ -399,7 +449,7 @@ export class HardwareInfoUtil {
         // Try hardware-specific properties first
         for (const prop of hardwareProperties) {
           try {
-            const model = this.runCommandWithSuFallback(`getprop ${prop}`);
+            const model = await this.runCommandWithSuFallback(`getprop ${prop}`);
             if (model && model !== '' && !model.includes('no such property')) {
               return model;
             }
@@ -417,7 +467,7 @@ export class HardwareInfoUtil {
         
         for (const prop of standardProperties) {
           try {
-            const model = this.runCommandWithSuFallback(`getprop ${prop}`);
+            const model = await this.runCommandWithSuFallback(`getprop ${prop}`);
             if (model && model !== '') {
               return model;
             }
@@ -431,16 +481,16 @@ export class HardwareInfoUtil {
       }
       
       // Enhanced Allwinner device model detection using device-tree compatible
-      if (fs.existsSync('/proc/device-tree/compatible')) {
+      if (await this.fileExists('/proc/device-tree/compatible')) {
         try {
-          const compatibleData = fs.readFileSync('/proc/device-tree/compatible', 'utf8');
+          const compatibleData = await this.readFile('/proc/device-tree/compatible');
           const compatibleEntries = compatibleData.split('\0').filter(entry => entry.length > 0);
           
           for (const entry of compatibleEntries) {
             if (entry.includes('allwinner')) {
               // Check the model file for specific SoC information
-              if (fs.existsSync('/proc/device-tree/model')) {
-                const modelData = fs.readFileSync('/proc/device-tree/model', 'utf8').trim();
+              if (await this.fileExists('/proc/device-tree/model')) {
+                const modelData = await this.readFileTrim('/proc/device-tree/model');
                 
                 // Map Allwinner SoC identifiers to proper model names
                 if (modelData.includes('sun55iw3')) {
@@ -474,14 +524,14 @@ export class HardwareInfoUtil {
       }
       
       // Enhanced ARM board model detection
-      if (fs.existsSync('/sys/firmware/devicetree/base/model')) {
-        const modelContent = fs.readFileSync('/sys/firmware/devicetree/base/model', 'utf8').trim().replace(/\0/g, '');
+      if (await this.fileExists('/sys/firmware/devicetree/base/model')) {
+        const modelContent = (await this.readFileTrim('/sys/firmware/devicetree/base/model')).replace(/\0/g, '');
         
         // For Radxa devices, try to extract the specific model
         if (modelContent.toLowerCase().includes('radxa') || modelContent.toLowerCase().includes('rock')) {
           // Try to get more specific model information from compatible string
-          if (fs.existsSync('/sys/firmware/devicetree/base/compatible')) {
-            const compatible = fs.readFileSync('/sys/firmware/devicetree/base/compatible', 'utf8').trim().replace(/\0/g, '');
+          if (await this.fileExists('/sys/firmware/devicetree/base/compatible')) {
+            const compatible = (await this.readFileTrim('/sys/firmware/devicetree/base/compatible')).replace(/\0/g, '');
             const compatibleParts = compatible.split(',');
             
             // Look for Radxa-specific identifiers
@@ -505,7 +555,7 @@ export class HardwareInfoUtil {
           }
           
           // If we detect it's a Radxa but can't get specific model, try alternative detection
-          return this.detectRadxaModel();
+          return await this.detectRadxaModel();
         }
         
         // For other devices, clean up the model content
@@ -515,23 +565,23 @@ export class HardwareInfoUtil {
         
         // If model content looks like SoC identifier, try alternative detection
         if (modelContent.match(/^[A-Z0-9]+$/)) {
-          return this.detectModelFromSystem();
+          return await this.detectModelFromSystem();
         }
       }
       
       // Try alternative detection methods
-      return this.detectModelFromSystem();
+      return await this.detectModelFromSystem();
     } catch {
       return 'Unknown';
     }
   }
 
   /** ✅ Detect Radxa model from system information */
-  private static detectRadxaModel(): string {
+  private static async detectRadxaModel(): Promise<string> {
     try {
       // Enhanced detection for Allwinner-based Radxa devices
-      if (fs.existsSync('/proc/cpuinfo')) {
-        const cpuInfo = fs.readFileSync('/proc/cpuinfo', 'utf8');
+      if (await this.fileExists('/proc/cpuinfo')) {
+        const cpuInfo = await this.readFile('/proc/cpuinfo');
         
         // Look for CPU part information to identify specific ARM cores
         const cpuPartMatch = cpuInfo.match(/CPU part\s*:\s*0x([a-fA-F0-9]+)/);
@@ -540,16 +590,16 @@ export class HardwareInfoUtil {
           // 0xd05 is Cortex-A55, commonly used in Allwinner H618 (Radxa Cubie A5E)
           if (cpuPart === 'd05') {
             // Check for sun55iw3 identifier which is specific to H618
-            if (fs.existsSync('/proc/device-tree/model')) {
-              const modelData = fs.readFileSync('/proc/device-tree/model', 'utf8').trim();
+            if (await this.fileExists('/proc/device-tree/model')) {
+              const modelData = await this.readFileTrim('/proc/device-tree/model');
               if (modelData.includes('sun55iw3')) {
                 return 'Cubie A5E'; // H618-based Radxa board
               }
             }
             
             // Check device-tree compatible for Allwinner confirmation
-            if (fs.existsSync('/proc/device-tree/compatible')) {
-              const compatibleData = fs.readFileSync('/proc/device-tree/compatible', 'utf8');
+            if (await this.fileExists('/proc/device-tree/compatible')) {
+              const compatibleData = await this.readFile('/proc/device-tree/compatible');
               if (compatibleData.includes('allwinner')) {
                 return 'Cubie A5E'; // Allwinner H618 in Radxa device
               }
@@ -569,8 +619,8 @@ export class HardwareInfoUtil {
       }
       
       // Try board name from DMI
-      if (fs.existsSync('/sys/class/dmi/id/board_name')) {
-        const boardName = fs.readFileSync('/sys/class/dmi/id/board_name', 'utf8').trim();
+      if (await this.fileExists('/sys/class/dmi/id/board_name')) {
+        const boardName = await this.readFileTrim('/sys/class/dmi/id/board_name');
         if (boardName && boardName !== 'Unknown') {
           return boardName;
         }
@@ -583,19 +633,19 @@ export class HardwareInfoUtil {
   }
 
   /** ✅ Alternative model detection from system files */
-  private static detectModelFromSystem(): string {
+  private static async detectModelFromSystem(): Promise<string> {
     try {
       // Try DMI product name
-      if (fs.existsSync('/sys/class/dmi/id/product_name')) {
-        const productName = fs.readFileSync('/sys/class/dmi/id/product_name', 'utf8').trim();
+      if (await this.fileExists('/sys/class/dmi/id/product_name')) {
+        const productName = await this.readFileTrim('/sys/class/dmi/id/product_name');
         if (productName && productName !== 'To be filled by O.E.M.' && productName !== 'Unknown') {
           return productName;
         }
       }
       
       // Try board name
-      if (fs.existsSync('/sys/class/dmi/id/board_name')) {
-        const boardName = fs.readFileSync('/sys/class/dmi/id/board_name', 'utf8').trim();
+      if (await this.fileExists('/sys/class/dmi/id/board_name')) {
+        const boardName = await this.readFileTrim('/sys/class/dmi/id/board_name');
         if (boardName && boardName !== 'To be filled by O.E.M.' && boardName !== 'Unknown') {
           return boardName;
         }
@@ -614,22 +664,22 @@ export class HardwareInfoUtil {
   }
 
   /** ✅ Get OS version */
-  static getOsVersion(): string {
+  static async getOsVersion(): Promise<string> {
     try {
       if (process.env.TERMUX_VERSION) {
         // We're in Termux, get Android version
-        const releaseVer = this.runCommandWithSuFallback(
+        const releaseVer = await this.runCommandWithSuFallback(
           'getprop ro.build.version.release',
         );
-        const sdkVer = this.runCommandWithSuFallback(
+        const sdkVer = await this.runCommandWithSuFallback(
           'getprop ro.build.version.sdk',
         );
         return `Android ${releaseVer} (API ${sdkVer})`;
       }
 
       // Check for /etc/os-release first (Linux/RPi)
-      if (fs.existsSync('/etc/os-release')) {
-        const osRelease = fs.readFileSync('/etc/os-release', 'utf8');
+      if (await this.fileExists('/etc/os-release')) {
+        const osRelease = await this.readFile('/etc/os-release');
         const prettyName = osRelease
           .split('\n')
           .find((line) => line.startsWith('PRETTY_NAME='))
@@ -649,12 +699,10 @@ export class HardwareInfoUtil {
   }
 
   /** ✅ Get CPU core count */
-  static getCpuCount(): number {
+  static async getCpuCount(): Promise<number> {
     try {
       return parseInt(
-        execSync("lscpu | grep '^CPU(s):' | awk '{print $2}'", {
-          encoding: 'utf8',
-        }).trim(),
+        (await this.execCommand("lscpu | grep '^CPU(s):' | awk '{print $2}'")).trim(),
       );
     } catch {
       return os.cpus().length;
@@ -662,10 +710,10 @@ export class HardwareInfoUtil {
   }
 
   /** ✅ Get CPU thread details (using `lscpu`) */
-  static getCpuThreads(): Array<any> {
+  static async getCpuThreads(): Promise<Array<any>> {
     try {
       // Get raw lscpu output
-      const output = execSync('lscpu', { encoding: 'utf8' }).split('\n');
+      const output = (await this.execCommand('lscpu')).split('\n');
       const threadList: any[] = [];
 
       // Try to get CPU details with better parsing
@@ -762,7 +810,7 @@ export class HardwareInfoUtil {
   }
 
   /** ✅ Get CPU Temperature Based on OS */
-  static getCpuTemperature(systemType: string, logger?: (message: string, level: string, category: string) => void): number {
+  static async getCpuTemperature(systemType: string, logger?: (message: string, level: string, category: string) => void): Promise<number> {
     const log = logger || (() => {}); // No-op if no logger provided
     
     log(`Getting CPU temperature for system type: ${systemType}`, 'DEBUG', 'hardware');
@@ -770,13 +818,13 @@ export class HardwareInfoUtil {
       switch (systemType) {
         case 'raspberry-pi':
           log('Using Raspberry Pi temperature method', 'DEBUG', 'hardware');
-          return this.getVcgencmdTemperature(log);
+          return await this.getVcgencmdTemperature(log);
         case 'termux':
           log('Using Termux temperature method', 'DEBUG', 'hardware');
-          return this.getTermuxCpuTemperature(log);
+          return await this.getTermuxCpuTemperature(log);
         case 'linux':
           log('Using Linux temperature method', 'DEBUG', 'hardware');
-          return this.getLinuxCpuTemperature(log);
+          return await this.getLinuxCpuTemperature(log);
         default:
           log(`Unknown system type: ${systemType}, returning 0`, 'DEBUG', 'hardware');
           return 0;
@@ -825,45 +873,53 @@ export class HardwareInfoUtil {
   }
 
   /** ✅ Raspberry Pi: Get CPU Temp via vcgencmd */
-  private static getVcgencmdTemperature(log: (message: string, level: string, category: string) => void): number {
+  private static async getVcgencmdTemperature(log: (message: string, level: string, category: string) => void): Promise<number> {
     try {
-      if (fs.existsSync(this.VCGENCMD_PATH)) {
-        execSync(`chmod +x ${this.VCGENCMD_PATH}`);
-        const tempOutput = execSync(`${this.VCGENCMD_PATH} measure_temp`, {
-          encoding: 'utf8',
-        });
+      if (await this.fileExists(this.VCGENCMD_PATH)) {
+        await this.execCommand(`chmod +x ${this.VCGENCMD_PATH}`);
+        const tempOutput = await this.execCommand(`${this.VCGENCMD_PATH} measure_temp`);
         const match = tempOutput.match(/temp=([\d.]+)/);
         if (match) return parseFloat(match[1]);
       }
-      return this.getLinuxCpuTemperature(log);
+      return await this.getLinuxCpuTemperature(log);
     } catch (error) {
       log(
         `Failed to get Raspberry Pi temperature: ${error instanceof Error ? error.message : String(error)}`,
         'ERROR',
         'hardware',
       );
-      return this.getLinuxCpuTemperature(log);
+      return await this.getLinuxCpuTemperature(log);
     }
   }
 
   /** ✅ Termux: Robust CPU temperature detection (with proper permission handling) */
-  private static getTermuxCpuTemperature(log: (message: string, level: string, category: string) => void): number {
-    log('Starting Termux temperature detection...', 'DEBUG', 'hardware');
+  private static async getTermuxCpuTemperature(log: (message: string, level: string, category: string) => void): Promise<number> {
+    const now = Date.now();
+    if (!this.lastTemperatureLogAt || now - this.lastTemperatureLogAt > this.TEMPERATURE_LOG_TTL) {
+      log('Starting Termux temperature detection...', 'DEBUG', 'hardware');
+      this.lastTemperatureLogAt = now;
+    }
     
     try {
       // Method 1: Try vcgencmd with root first (for some rooted devices)
-      if (this.isSuAvailable('termux') && fs.existsSync(this.VCGENCMD_PATH)) {
+      if (await this.isSuAvailable('termux') && await this.fileExists(this.VCGENCMD_PATH)) {
         try {
-          log('Trying vcgencmd with root...', 'DEBUG', 'hardware');
-          execSync(`chmod +x ${this.VCGENCMD_PATH}`);
-          const tempOutput = execSync(
+          if (!this.lastTemperatureLogAt || now - this.lastTemperatureLogAt > this.TEMPERATURE_LOG_TTL) {
+            log('Trying vcgencmd with root...', 'DEBUG', 'hardware');
+            this.lastTemperatureLogAt = now;
+          }
+          await this.execCommand(`chmod +x ${this.VCGENCMD_PATH}`);
+          const tempOutput = await this.execCommand(
             `su -c "${this.VCGENCMD_PATH} measure_temp"`,
-            { encoding: 'utf8' },
           );
           const match = tempOutput.match(/temp=([\d.]+)/);
           if (match) {
             const temp = parseFloat(match[1]);
-            log(`vcgencmd temperature: ${temp}°C`, 'DEBUG', 'hardware');
+            const now = Date.now();
+            if (!this.lastTemperatureLogAt || now - this.lastTemperatureLogAt > this.TEMPERATURE_LOG_TTL) {
+              log(`vcgencmd temperature: ${temp}°C`, 'DEBUG', 'hardware');
+              this.lastTemperatureLogAt = now;
+            }
             return temp;
           }
         } catch (vcgencmdError) {
@@ -872,15 +928,17 @@ export class HardwareInfoUtil {
       }
 
       // Method 2: Try reading thermal zones with root access first
-      if (this.isSuAvailable('termux')) {
+      if (await this.isSuAvailable('termux')) {
         try {
-          log('Trying thermal zones with root access...', 'DEBUG', 'hardware');
+          if (!this.lastTemperatureLogAt || now - this.lastTemperatureLogAt > this.TEMPERATURE_LOG_TTL) {
+            log('Trying thermal zones with root access...', 'DEBUG', 'hardware');
+            this.lastTemperatureLogAt = now;
+          }
           
           // Try to list thermal zones with root
-          const zonesOutput = execSync(
+          const zonesOutput = (await this.execCommand(
             'su -c "ls /sys/class/thermal/ 2>/dev/null | grep thermal_zone"',
-            { encoding: 'utf8' },
-          ).trim();
+          )).trim();
           if (zonesOutput) {
             const zones = zonesOutput
               .split('\n')
@@ -896,13 +954,15 @@ export class HardwareInfoUtil {
             for (const zone of zones) {
               try {
                 // Try to read type and temperature with root
-                const typeOutput = execSync(
+                const typeOutput = (await this.execCommand(
                   `su -c "cat /sys/class/thermal/${zone}/type 2>/dev/null"`,
-                  { encoding: 'utf8' },
-                )
+                ))
                   .trim()
                   .toLowerCase();
-                log(`Zone ${zone} type: ${typeOutput}`, 'DEBUG', 'hardware');
+                if (!this.lastTemperatureLogAt || now - this.lastTemperatureLogAt > this.TEMPERATURE_LOG_TTL) {
+                  log(`Zone ${zone} type: ${typeOutput}`, 'DEBUG', 'hardware');
+                  this.lastTemperatureLogAt = now;
+                }
                 
                 // Skip non-CPU sensors
                 if (
@@ -922,10 +982,9 @@ export class HardwareInfoUtil {
                   continue;
                 }
 
-                const tempRaw = execSync(
+                const tempRaw = (await this.execCommand(
                   `su -c "cat /sys/class/thermal/${zone}/temp 2>/dev/null"`,
-                  { encoding: 'utf8' },
-                ).trim();
+                )).trim();
                 let temp = parseInt(tempRaw);
 
                 if (typeOutput.includes('tsens')) {
@@ -978,9 +1037,9 @@ export class HardwareInfoUtil {
         const basePath = '/sys/class/thermal';
         
         // Check if we can access the directory at all
-        if (fs.existsSync(basePath)) {
+        if (await this.fileExists(basePath)) {
           try {
-            const zones = fs.readdirSync(basePath).filter((z) => z.startsWith('thermal_zone'));
+            const zones = (await this.readDir(basePath)).filter((z) => z.startsWith('thermal_zone'));
             log(`Found ${zones.length} thermal zones without root: ${zones.join(', ')}`, 'DEBUG', 'hardware');
             
             let cpuTemps: number[] = [];
@@ -990,9 +1049,12 @@ export class HardwareInfoUtil {
                 const typePath = path.join(basePath, zone, 'type');
                 const tempPath = path.join(basePath, zone, 'temp');
                 
-                if (fs.existsSync(typePath) && fs.existsSync(tempPath)) {
-                  const type = fs.readFileSync(typePath, 'utf8').trim().toLowerCase();
-                  log(`Zone ${zone} type (no-root): ${type}`, 'DEBUG', 'hardware');
+                if (await this.fileExists(typePath) && await this.fileExists(tempPath)) {
+                  const type = (await this.readFileTrim(typePath)).toLowerCase();
+                  if (!this.lastTemperatureLogAt || now - this.lastTemperatureLogAt > this.TEMPERATURE_LOG_TTL) {
+                    log(`Zone ${zone} type (no-root): ${type}`, 'DEBUG', 'hardware');
+                    this.lastTemperatureLogAt = now;
+                  }
                   
                   // Skip non-CPU sensors
                   if (
@@ -1008,7 +1070,7 @@ export class HardwareInfoUtil {
                     continue;
                   }
 
-                  const tempRaw = fs.readFileSync(tempPath, 'utf8').trim();
+                  const tempRaw = await this.readFileTrim(tempPath);
                   let temp = parseInt(tempRaw);
 
                   if (type.includes('tsens')) {
@@ -1048,14 +1110,13 @@ export class HardwareInfoUtil {
       }
 
       // Method 4: Try individual thermal zone files with root (fallback)
-      if (this.isSuAvailable('termux')) {
+      if (await this.isSuAvailable('termux')) {
         log('Trying individual thermal zone files with root...', 'DEBUG', 'hardware');
         for (let i = 0; i < 10; i++) {
           try {
-            const tempRaw = execSync(
+            const tempRaw = (await this.execCommand(
               `su -c "cat /sys/class/thermal/thermal_zone${i}/temp 2>/dev/null"`,
-              { encoding: 'utf8' },
-            ).trim();
+            )).trim();
             
             if (tempRaw) {
               let temp = parseInt(tempRaw);
@@ -1077,7 +1138,7 @@ export class HardwareInfoUtil {
 
       // Method 5: Fallback to Linux method (might work on some Termux setups)
       log('Falling back to Linux temperature detection...', 'DEBUG', 'hardware');
-      return this.getLinuxCpuTemperature(log);
+      return await this.getLinuxCpuTemperature(log);
       
     } catch (error) {
       log(
@@ -1090,17 +1151,16 @@ export class HardwareInfoUtil {
   }
 
   /** ✅ Linux: Default Method for CPU Temperature with better fallbacks and debugging */
-  private static getLinuxCpuTemperature(log: (message: string, level: string, category: string) => void): number {
+  private static async getLinuxCpuTemperature(log: (message: string, level: string, category: string) => void): Promise<number> {
     try {
       log('Starting Linux CPU temperature detection...', 'DEBUG', 'hardware');
 
       // Method 1: Try thermal zone (most reliable for most systems)
-      if (fs.existsSync('/sys/class/thermal/thermal_zone0/temp')) {
+      if (await this.fileExists('/sys/class/thermal/thermal_zone0/temp')) {
         try {
-          const tempRaw = execSync(
+          const tempRaw = (await this.execCommand(
             'cat /sys/class/thermal/thermal_zone0/temp',
-            { encoding: 'utf8' },
-          ).trim();
+          )).trim();
           const temp = parseInt(tempRaw) / 1000;
           log(`Thermal zone 0: ${temp}°C`, 'DEBUG', 'hardware');
           if (!isNaN(temp) && temp > 0 && temp < 150) {
@@ -1123,11 +1183,9 @@ export class HardwareInfoUtil {
       // Method 2: Try other thermal zones (1-9)
       for (let i = 1; i < 10; i++) {
         const zonePath = `/sys/class/thermal/thermal_zone${i}/temp`;
-        if (fs.existsSync(zonePath)) {
+        if (await this.fileExists(zonePath)) {
           try {
-            const tempRaw = execSync(`cat ${zonePath}`, {
-              encoding: 'utf8',
-            }).trim();
+            const tempRaw = (await this.execCommand(`cat ${zonePath}`)).trim();
             const temp = parseInt(tempRaw) / 1000;
             log(`Thermal zone ${i}: ${temp}°C`, 'DEBUG', 'hardware');
             if (!isNaN(temp) && temp > 0 && temp < 150) {
@@ -1147,7 +1205,7 @@ export class HardwareInfoUtil {
       // Method 3: Try sensors command (lm-sensors package) - Enhanced parsing with debugging
       try {
         log('Trying sensors command...', 'DEBUG', 'hardware');
-        const sensorsOutput = execSync('sensors', { encoding: 'utf8' }).trim();
+        const sensorsOutput = (await this.execCommand('sensors')).trim();
         log(
           `Sensors output length: ${sensorsOutput.length} characters`,
           'DEBUG',
@@ -1281,7 +1339,7 @@ export class HardwareInfoUtil {
       // Method 4: Try /sys/class/hwmon approach (alternative to sensors)
       try {
         log('Trying hwmon approach...', 'DEBUG', 'hardware');
-        const hwmonDirs = execSync('ls /sys/class/hwmon/', { encoding: 'utf8' })
+        const hwmonDirs = (await this.execCommand('ls /sys/class/hwmon/'))
           .trim()
           .split('\n');
         log(
@@ -1296,11 +1354,8 @@ export class HardwareInfoUtil {
           // Check if this is a CPU temperature sensor
           try {
             const nameFile = `${hwmonPath}/name`;
-            if (fs.existsSync(nameFile)) {
-              const sensorName = fs
-                .readFileSync(nameFile, 'utf8')
-                .trim()
-                .toLowerCase();
+            if (await this.fileExists(nameFile)) {
+              const sensorName = (await this.readFileTrim(nameFile)).toLowerCase();
               log(`Checking hwmon sensor: ${sensorName}`, 'DEBUG', 'hardware');
 
               // Look for CPU-related sensor names
@@ -1314,8 +1369,8 @@ export class HardwareInfoUtil {
 
                 // Try to read temp1_input (main temperature)
                 const tempFile = `${hwmonPath}/temp1_input`;
-                if (fs.existsSync(tempFile)) {
-                  const tempRaw = fs.readFileSync(tempFile, 'utf8').trim();
+                if (await this.fileExists(tempFile)) {
+                  const tempRaw = await this.readFileTrim(tempFile);
                   const temp = parseInt(tempRaw) / 1000;
                   log(
                     `${sensorName} temp1_input: ${temp}°C`,
@@ -1355,9 +1410,9 @@ export class HardwareInfoUtil {
       try {
         log('Trying ACPI approach...', 'DEBUG', 'hardware');
         // Check if acpi exists before trying to use it
-        execSync('command -v acpi > /dev/null 2>&1');
+        await this.execCommand('command -v acpi > /dev/null 2>&1');
 
-        const tempOutput = execSync('acpi -t', { encoding: 'utf8' });
+        const tempOutput = await this.execCommand('acpi -t');
         log(`ACPI output: ${tempOutput.trim()}`, 'DEBUG', 'hardware');
         const match = tempOutput.match(/(\d+\.\d+)/);
         if (match) {
@@ -1382,17 +1437,14 @@ export class HardwareInfoUtil {
       // Method 6: Try /proc/acpi/thermal_zone
       try {
         log('Trying /proc/acpi/thermal_zone...', 'DEBUG', 'hardware');
-        if (fs.existsSync('/proc/acpi/thermal_zone')) {
-          const zones = execSync('ls /proc/acpi/thermal_zone', {
-            encoding: 'utf8',
-          })
+        if (await this.fileExists('/proc/acpi/thermal_zone')) {
+          const zones = (await this.execCommand('ls /proc/acpi/thermal_zone'))
             .trim()
             .split('\n');
           log(`Found thermal zones: ${zones.join(', ')}`, 'DEBUG', 'hardware');
           if (zones.length > 0) {
-            const tempOutput = execSync(
+            const tempOutput = await this.execCommand(
               `cat /proc/acpi/thermal_zone/${zones[0]}/temperature`,
-              { encoding: 'utf8' },
             );
             log(`Thermal zone output: ${tempOutput.trim()}`, 'DEBUG', 'hardware');
             const match = tempOutput.match(/(\d+)/);
@@ -1425,16 +1477,16 @@ export class HardwareInfoUtil {
       try {
         log('Trying direct AMD k10temp reading...', 'DEBUG', 'hardware');
         // Look for AMD k10temp in hwmon
-        const hwmonDirs = fs.readdirSync('/sys/class/hwmon/');
+        const hwmonDirs = await this.readDir('/sys/class/hwmon/');
         for (const dir of hwmonDirs) {
           const namePath = `/sys/class/hwmon/${dir}/name`;
-          if (fs.existsSync(namePath)) {
-            const name = fs.readFileSync(namePath, 'utf8').trim();
+          if (await this.fileExists(namePath)) {
+            const name = await this.readFileTrim(namePath);
             log(`Checking direct sensor: ${name}`, 'DEBUG', 'hardware');
             if (name === 'k10temp') {
               const tempPath = `/sys/class/hwmon/${dir}/temp1_input`;
-              if (fs.existsSync(tempPath)) {
-                const tempRaw = fs.readFileSync(tempPath, 'utf8').trim();
+              if (await this.fileExists(tempPath)) {
+                const tempRaw = await this.readFileTrim(tempPath);
                 const temp = parseInt(tempRaw) / 1000;
                 log(`Direct k10temp: ${temp}°C`, 'DEBUG', 'hardware');
                 if (!isNaN(temp) && temp > 0 && temp < 150) {
@@ -1477,10 +1529,10 @@ export class HardwareInfoUtil {
   }
 
   /** ✅ Check if ADB is enabled (Termux-specific) */
-  static isAdbEnabled(systemType: string): boolean {
+  static async isAdbEnabled(systemType: string): Promise<boolean> {
     if (systemType !== 'termux') return false;
     try {
-      const adbOutput = execSync('adb devices', { encoding: 'utf8' });
+      const adbOutput = await this.execCommand('adb devices');
       const devices = adbOutput
         .split('\n')
         .slice(1) // Skip the "List of devices attached" header
@@ -1496,24 +1548,22 @@ export class HardwareInfoUtil {
   }
 
   /** ✅ Check if SU (root) is available */
-  static isSuAvailable(systemType: string): boolean {
+  static async isSuAvailable(systemType: string): Promise<boolean> {
     if (systemType !== 'termux') return false;
     try {
-      return !!execSync('su -c "echo rooted" 2>/dev/null', {
-        encoding: 'utf8',
-      }).includes('rooted');
+      return (await this.execCommand('su -c "echo rooted" 2>/dev/null')).includes('rooted');
     } catch {
       return false;
     }
   }
 
   /** ✅ Run a command with fallback to `su` in Termux */
-  private static runCommandWithSuFallback(command: string): string {
+  private static async runCommandWithSuFallback(command: string): Promise<string> {
     try {
-      return execSync(command, { encoding: 'utf8' }).trim();
+      return (await this.execCommand(command)).trim();
     } catch {
       try {
-        return execSync(`su -c "${command}"`, { encoding: 'utf8' }).trim();
+        return (await this.execCommand(`su -c "${command}"`)).trim();
       } catch {
         return 'Unknown';
       }

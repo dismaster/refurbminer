@@ -1,24 +1,59 @@
-import { execSync } from 'child_process';
+import { exec, ExecOptionsWithStringEncoding } from 'child_process';
+import { promisify } from 'util';
 import { MinerApiConfigUtil } from './miner-api-config.util';
 
+type ExecOptionsString = Omit<ExecOptionsWithStringEncoding, 'encoding'> & {
+  encoding?: BufferEncoding;
+};
+
+const execAsync = promisify(exec) as (
+  command: string,
+  options?: ExecOptionsWithStringEncoding,
+) => Promise<{ stdout: string; stderr: string }>;
+
+const execCommand = async (
+  command: string,
+  options: ExecOptionsString = {},
+): Promise<string> => {
+  const { stdout } = await execAsync(command, {
+    encoding: 'utf8',
+    ...options,
+  } as ExecOptionsWithStringEncoding);
+  return stdout ?? '';
+};
+
 export class MinerPoolUtil {
+  private static poolCache: { miner: string | null; data: any; timestamp: number } | null = null;
+  private static readonly POOL_CACHE_TTL = 15000; // 15 seconds
+
   /** ✅ Get miner pool details based on detected miner */
   static async getPoolStatistics(): Promise<any> {
-    const miner = this.detectMiner();
+    const now = Date.now();
+    if (
+      this.poolCache &&
+      now - this.poolCache.timestamp < this.POOL_CACHE_TTL
+    ) {
+      return this.poolCache.data;
+    }
+
+    const miner = await this.detectMiner();
 
     if (!miner) {
       return this.getDefaultPoolInfo();
     }
 
-    return miner === 'ccminer'
-      ? this.getCcminerPoolInfo()
+    const data = miner === 'ccminer'
+      ? await this.getCcminerPoolInfo()
       : await this.getXmrigPoolInfo();
+
+    this.poolCache = { miner, data, timestamp: Date.now() };
+    return data;
   }
 
   /** ✅ Detect which miner is running */
-  private static detectMiner(): string | null {
+  private static async detectMiner(): Promise<string | null> {
     try {
-      const runningProcesses = execSync('ps aux', { encoding: 'utf8' });
+      const runningProcesses = await execCommand('ps aux');
 
       if (runningProcesses.includes('ccminer')) return 'ccminer';
       if (runningProcesses.includes('xmrig')) return 'xmrig';
@@ -29,12 +64,12 @@ export class MinerPoolUtil {
     }
   }
 
-  private static getCcminerPoolInfo(): any {
+  private static async getCcminerPoolInfo(): Promise<any> {
     try {
       // Use dynamic endpoint discovery
-      const endpoint = MinerApiConfigUtil.getCcminerApiEndpoint();
-      const poolRaw = execSync(`echo 'pool' | nc -w 1 ${endpoint}`, {
-        encoding: 'utf8',
+      const endpoint = await MinerApiConfigUtil.getCcminerApiEndpoint();
+      const poolRaw = await execCommand(`echo 'pool' | nc -w 1 ${endpoint}`, {
+        timeout: 3000,
       });
 
       if (!poolRaw || !poolRaw.trim()) {
@@ -58,7 +93,8 @@ export class MinerPoolUtil {
       // Instead of logging the error, handle it silently
       // Only log detailed errors in debug mode
       if (process.env.DEBUG === 'true') {
-        console.debug('CCMiner API not responsive:', error.message);
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        console.debug('CCMiner API not responsive:', errorMessage);
       }
         // Return default pool info with zeros for statistics
       return {

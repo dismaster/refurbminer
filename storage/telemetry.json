@@ -1,27 +1,28 @@
 {
   "status": "active",
-  "appVersion": "1.1.0",
+  "appVersion": "1.3.0",
+  "updatedAt": "2026-01-28T13:34:17.990Z",
   "minerSoftware": {
     "name": "ccminer",
     "version": "3.8.3",
     "algorithm": "verus",
-    "hashrate": 3644780,
-    "acceptedShares": 11,
+    "hashrate": 0,
+    "acceptedShares": 0,
     "rejectedShares": 0,
-    "uptime": 360,
+    "uptime": 0,
     "solvedBlocks": 0,
-    "difficulty": 524280,
-    "miningStatus": "active"
+    "difficulty": 0,
+    "miningStatus": "stopped"
   },
   "pool": {
     "name": "RefurbMiner Verus Pool",
     "url": "stratum+tcp://pool.refurbminer.de:3956",
     "user": "REEwkwQfTvNZb3f8r7Hj9rTFXt3qu6svA9.Donation",
-    "acceptedShares": 11,
+    "acceptedShares": 0,
     "rejectedShares": 0,
     "staleShares": 0,
-    "ping": 11,
-    "uptime": 266
+    "ping": 0,
+    "uptime": 0
   },
   "deviceInfo": {
     "hwBrand": "samsung",
@@ -42,28 +43,28 @@
         "coreId": 1,
         "maxMHz": 1794,
         "minMHz": 455,
-        "hashrate": 575260
+        "hashrate": 565850
       },
       {
         "model": "Cortex-A55",
         "coreId": 2,
         "maxMHz": 1794,
         "minMHz": 455,
-        "hashrate": 572150
+        "hashrate": 0
       },
       {
         "model": "Cortex-A55",
         "coreId": 3,
         "maxMHz": 1794,
         "minMHz": 455,
-        "hashrate": 331850
+        "hashrate": 314090
       },
       {
         "model": "exynos-m3",
         "coreId": 4,
         "maxMHz": 2704,
         "minMHz": 650,
-        "hashrate": 490690
+        "hashrate": 0
       },
       {
         "model": "exynos-m3",
@@ -77,298 +78,348 @@
         "coreId": 6,
         "maxMHz": 2704,
         "minMHz": 650,
-        "hashrate": 656420
+        "hashrate": 662900
       },
       {
         "model": "exynos-m3",
         "coreId": 7,
         "maxMHz": 2704,
         "minMHz": 650,
-        "hashrate": 667440
+        "hashrate": 0
       }
     ],
-    "cpuTemperature": 81,
-    "systemUptime": 948008,
-    "totalMemory": 3789295616,
-    "freeMemory": 1509539840,
+    "cpuTemperature": 80,
+    "systemUptime": 14260,
+    "totalMemory": 3789299712,
+    "freeMemory": 1884647424,
     "totalStorage": 4489658368,
     "freeStorage": 2899976192,
     "adbEnabled": true,
-    "suAvailable": true
+    "suAvailable": true,
+    "hardwareDetectionMethod": "basic"
   },
   "network": {
-    "primaryIp": "10.0.10.150",
-    "externalIp": "94.31.113.171",
+    "primaryIp": "10.0.10.169",
+    "macAddress": "70:19:88:87:FC:0A",
     "gateway": "10.0.10.1",
     "interfaces": [
       "eth0"
     ],
+    "interfaceDetails": [
+      {
+        "name": "p2p0",
+        "macAddress": "0A:C5:E1:55:C9:3B",
+        "state": "down",
+        "type": "unknown"
+      },
+      {
+        "name": "wlan0",
+        "macAddress": "4E:DA:99:9D:0B:BF",
+        "state": "up",
+        "type": "wifi"
+      },
+      {
+        "name": "swlan0",
+        "macAddress": "02:90:4C:5E:CC:EA",
+        "state": "down",
+        "type": "wifi"
+      },
+      {
+        "name": "eth0",
+        "macAddress": "70:19:88:87:FC:0A",
+        "state": "up",
+        "type": "ethernet"
+      }
+    ],
+    "dns": [
+      "1.1.1.1"
+    ],
+    "externalIp": "94.31.113.139",
+    "timestamp": 1769607231091,
     "ping": {
-      "refurbminer": 9.194
+      "refurbminer": 15.838
     },
     "traffic": {
-      "rxBytes": 887197304,
-      "txBytes": 481874086,
-      "rxSpeed": 721,
-      "txSpeed": 596,
-      "timestamp": 1752246490777
+      "rxBytes": 147072097,
+      "txBytes": 13084501,
+      "rxSpeed": 872,
+      "txSpeed": 676,
+      "timestamp": 1769607230970
     }
   },
   "battery": {
     "health": "GOOD",
-    "percentage": 100,
+    "percentage": 48,
     "plugged": "UNPLUGGED",
     "status": "DISCHARGING",
     "temperature": -20,
-    "current": -1086
+    "current": -1337,
+    "voltage": 3974000,
+    "powerUsageWatts": 0.0053132380000000005,
+    "powerUsageMilliWatts": 5.313238,
+    "estimatedMiningPowerWatts": 2.9033333333333333
   },
   "schedules": {
     "mining": {
       "enabled": false,
-      "periods": []
+      "periods": [
+        {
+          "start": "08:00",
+          "end": "00:00",
+          "days": [
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "sunday",
+            "saturday"
+          ]
+        }
+      ]
     },
     "restarts": []
   },
   "historicalHashrate": [
     {
-      "timestamp": 1752244566,
-      "hashrate": 4321240
+      "timestamp": 1769606272,
+      "hashrate": 3687370
     },
     {
-      "timestamp": 1752244603,
-      "hashrate": 4321100
+      "timestamp": 1769606293,
+      "hashrate": 3687370
     },
     {
-      "timestamp": 1752244626,
-      "hashrate": 4321100
+      "timestamp": 1769606320,
+      "hashrate": 3687370
     },
     {
-      "timestamp": 1752244663,
-      "hashrate": 4322050
+      "timestamp": 1769606322,
+      "hashrate": 3687370
     },
     {
-      "timestamp": 1752244686,
-      "hashrate": 4330400
+      "timestamp": 1769606331,
+      "hashrate": 3687370
     },
     {
-      "timestamp": 1752244716,
-      "hashrate": 4334300
+      "timestamp": 1769606354,
+      "hashrate": 3688940
     },
     {
-      "timestamp": 1752244748,
-      "hashrate": 4334380
+      "timestamp": 1769606377,
+      "hashrate": 3688940
     },
     {
-      "timestamp": 1752244776,
-      "hashrate": 4334380
+      "timestamp": 1769606394,
+      "hashrate": 3688940
     },
     {
-      "timestamp": 1752244806,
-      "hashrate": 4334380
+      "timestamp": 1769606395,
+      "hashrate": 3690990
     },
     {
-      "timestamp": 1752244843,
-      "hashrate": 4333960
+      "timestamp": 1769606439,
+      "hashrate": 3687500
     },
     {
-      "timestamp": 1752244866,
-      "hashrate": 4333960
+      "timestamp": 1769606451,
+      "hashrate": 3687500
     },
     {
-      "timestamp": 1752244896,
-      "hashrate": 4336650
+      "timestamp": 1769606455,
+      "hashrate": 3681040
     },
     {
-      "timestamp": 1752244934,
-      "hashrate": 4336650
+      "timestamp": 1769606501,
+      "hashrate": 3594860
     },
     {
-      "timestamp": 1752244956,
-      "hashrate": 4336650
+      "timestamp": 1769606511,
+      "hashrate": 3594860
     },
     {
-      "timestamp": 1752244986,
-      "hashrate": 4323390
+      "timestamp": 1769606515,
+      "hashrate": 3619250
     },
     {
-      "timestamp": 1752245023,
-      "hashrate": 4315530
+      "timestamp": 1769606558,
+      "hashrate": 4210130
     },
     {
-      "timestamp": 1752245046,
-      "hashrate": 4313860
+      "timestamp": 1769606571,
+      "hashrate": 4210130
     },
     {
-      "timestamp": 1752245083,
-      "hashrate": 4313860
+      "timestamp": 1769606575,
+      "hashrate": 4210130
     },
     {
-      "timestamp": 1752245106,
-      "hashrate": 4313860
+      "timestamp": 1769606620,
+      "hashrate": 4152090
     },
     {
-      "timestamp": 1752245143,
-      "hashrate": 4317910
+      "timestamp": 1769606631,
+      "hashrate": 4152090
     },
     {
-      "timestamp": 1752245166,
-      "hashrate": 4317910
+      "timestamp": 1769606635,
+      "hashrate": 4154810.0000000005
     },
     {
-      "timestamp": 1752245196,
-      "hashrate": 4298880
+      "timestamp": 1769606678,
+      "hashrate": 4169939.9999999995
     },
     {
-      "timestamp": 1752245234,
-      "hashrate": 4298880
+      "timestamp": 1769606691,
+      "hashrate": 4169939.9999999995
     },
     {
-      "timestamp": 1752245256,
-      "hashrate": 4319510
+      "timestamp": 1769606695,
+      "hashrate": 4171460
     },
     {
-      "timestamp": 1752245287,
-      "hashrate": 4319790
+      "timestamp": 1769606740,
+      "hashrate": 4165069.9999999995
     },
     {
-      "timestamp": 1752245318,
-      "hashrate": 4322340
+      "timestamp": 1769606751,
+      "hashrate": 4165069.9999999995
     },
     {
-      "timestamp": 1752245346,
-      "hashrate": 4322800
+      "timestamp": 1769606755,
+      "hashrate": 4474450
     },
     {
-      "timestamp": 1752245384,
-      "hashrate": 4322730
+      "timestamp": 1769606801,
+      "hashrate": 4478550
     },
     {
-      "timestamp": 1752245406,
-      "hashrate": 4338170
+      "timestamp": 1769606811,
+      "hashrate": 4478550
     },
     {
-      "timestamp": 1752245439,
-      "hashrate": 4337310
+      "timestamp": 1769606815,
+      "hashrate": 4488600
     },
     {
-      "timestamp": 1752245466,
-      "hashrate": 4337310
+      "timestamp": 1769606861,
+      "hashrate": 4495160
     },
     {
-      "timestamp": 1752245497,
-      "hashrate": 4342790
+      "timestamp": 1769606871,
+      "hashrate": 4495160
     },
     {
-      "timestamp": 1752245534,
-      "hashrate": 4342790
+      "timestamp": 1769606875,
+      "hashrate": 4490230
     },
     {
-      "timestamp": 1752245556,
-      "hashrate": 4343560
+      "timestamp": 1769606941,
+      "hashrate": 0
     },
     {
-      "timestamp": 1752245586,
-      "hashrate": 4343560
+      "timestamp": 1769606953,
+      "hashrate": 0
     },
     {
-      "timestamp": 1752245619,
-      "hashrate": 4343340
+      "timestamp": 1769606995,
+      "hashrate": 1228750
     },
     {
-      "timestamp": 1752245737,
-      "hashrate": 710670
+      "timestamp": 1769606998,
+      "hashrate": 1228750
     },
     {
-      "timestamp": 1752245753,
-      "hashrate": 710670
+      "timestamp": 1769606998,
+      "hashrate": 1228750
     },
     {
-      "timestamp": 1752245789,
-      "hashrate": 710670
+      "timestamp": 1769607006,
+      "hashrate": 1228750
     },
     {
-      "timestamp": 1752245820,
-      "hashrate": 710670
+      "timestamp": 1769607010,
+      "hashrate": 1542840
     },
     {
-      "timestamp": 1752245849,
-      "hashrate": 710670
+      "timestamp": 1769607013,
+      "hashrate": 1542840
     },
     {
-      "timestamp": 1752245880,
-      "hashrate": 710670
+      "timestamp": 1769607016,
+      "hashrate": 1542840
     },
     {
-      "timestamp": 1752245909,
-      "hashrate": 1257900
+      "timestamp": 1769607018,
+      "hashrate": 1542840
     },
     {
-      "timestamp": 1752245933,
-      "hashrate": 1922190
+      "timestamp": 1769607020,
+      "hashrate": 1542840
     },
     {
-      "timestamp": 1752245976,
-      "hashrate": 1922190
+      "timestamp": 1769607054,
+      "hashrate": 1542840
     },
     {
-      "timestamp": 1752245993,
-      "hashrate": 1812100
+      "timestamp": 1769607058,
+      "hashrate": 1542840
     },
     {
-      "timestamp": 1752246036,
-      "hashrate": 1812100
+      "timestamp": 1769607073,
+      "hashrate": 1542840
     },
     {
-      "timestamp": 1752246053,
-      "hashrate": 1789200
+      "timestamp": 1769607077,
+      "hashrate": 1542840
     },
     {
-      "timestamp": 1752246089,
-      "hashrate": 1791900
+      "timestamp": 1769607108,
+      "hashrate": 1542840
     },
     {
-      "timestamp": 1752246199,
-      "hashrate": 350970
+      "timestamp": 1769607118,
+      "hashrate": 1542840
     },
     {
-      "timestamp": 1752246210,
-      "hashrate": 350970
+      "timestamp": 1769607133,
+      "hashrate": 1542840
     },
     {
-      "timestamp": 1752246251,
-      "hashrate": 350970
+      "timestamp": 1769607138,
+      "hashrate": 1542840
     },
     {
-      "timestamp": 1752246277,
-      "hashrate": 350970
+      "timestamp": 1769607170,
+      "hashrate": 1542840
     },
     {
-      "timestamp": 1752246311,
-      "hashrate": 1580960
+      "timestamp": 1769607178,
+      "hashrate": 1542840
     },
     {
-      "timestamp": 1752246329,
-      "hashrate": 2232490
+      "timestamp": 1769607193,
+      "hashrate": 1542840
     },
     {
-      "timestamp": 1752246378,
-      "hashrate": 3139060
+      "timestamp": 1769607198,
+      "hashrate": 1542840
     },
     {
-      "timestamp": 1752246389,
-      "hashrate": 3139060
+      "timestamp": 1769607231,
+      "hashrate": 1542840
     },
     {
-      "timestamp": 1752246431,
-      "hashrate": 3808430
+      "timestamp": 1769607238,
+      "hashrate": 1542840
     },
     {
-      "timestamp": 1752246457,
-      "hashrate": 3805620
+      "timestamp": 1769607253,
+      "hashrate": 1542840
     },
     {
-      "timestamp": 1752246491,
-      "hashrate": 3644780
+      "timestamp": 1769607257,
+      "hashrate": 1542840
     }
   ]
 }

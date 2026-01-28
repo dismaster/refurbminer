@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, OnModuleInit, OnApplicationShutdown, Inject, forwardRef } from '@nestjs/common';
 import { LoggingService } from '../logging/logging.service';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
@@ -67,9 +67,9 @@ interface Config {
 }
 
 @Injectable()
-export class ConfigService implements OnModuleInit {
+export class ConfigService implements OnModuleInit, OnApplicationShutdown {
   private configPath = path.join(process.cwd(), 'config', 'config.json');
-  private syncInterval: NodeJS.Timeout;
+  private syncInterval?: NodeJS.Timeout;
   private apiUrl: string;
   private readonly MAX_BACKUPS = 5; // Maximum number of backup files to keep
 
@@ -77,6 +77,7 @@ export class ConfigService implements OnModuleInit {
   private configCache: { data: Config | null; timestamp: number } | null = null;
   private readonly CACHE_TTL = 60000; // 1 minute - longer cache for better performance
   private isLoading: boolean = false; // Prevent multiple simultaneous reads
+  private writeQueue: Promise<void> = Promise.resolve();
 
   // API response cache to prevent excessive API calls
   private apiCache: {
@@ -85,6 +86,8 @@ export class ConfigService implements OnModuleInit {
   } | null = null;
   private readonly API_CACHE_TTL = 30000; // 30 seconds for API responses
 
+  private lastSyncSuccessAt?: string;
+
   constructor(
     @Inject(forwardRef(() => LoggingService))
     private readonly loggingService: LoggingService,
@@ -92,12 +95,38 @@ export class ConfigService implements OnModuleInit {
   ) {
     this.apiUrl = process.env.API_URL || 'https://api.refurbminer.de';
   }
+
+  private async writeJsonAtomic(filePath: string, data: unknown): Promise<void> {
+    this.writeQueue = this.writeQueue
+      .then(async () => {
+        const tempPath = `${filePath}.tmp`;
+        await fs.promises.writeFile(tempPath, JSON.stringify(data, null, 2), 'utf8');
+        await fs.promises.rename(tempPath, filePath);
+      })
+      .catch((error) => {
+        this.loggingService.log(
+          `❌ Config write failed: ${error instanceof Error ? error.message : String(error)}`,
+          'ERROR',
+          'config',
+        );
+        throw error;
+      });
+
+    return this.writeQueue;
+  }
+
+  private async fileExists(filePath: string): Promise<boolean> {
+    try {
+      await fs.promises.access(filePath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
   async onModuleInit() {
     // Create config directory if it doesn't exist
     const configDir = path.join(process.cwd(), 'config');
-    if (!fs.existsSync(configDir)) {
-      fs.mkdirSync(configDir, { recursive: true });
-    }
+    await fs.promises.mkdir(configDir, { recursive: true });
 
     // Check if config exists and is valid, restore from backup if needed
     const configValid = await this.ensureValidConfig();
@@ -113,7 +142,7 @@ export class ConfigService implements OnModuleInit {
     // IMPORTANT: Do NOT sync with API during module initialization
     // This prevents gathering wrong data before miner registration is complete
     // The sync will be triggered by BootstrapService after successful registration
-    const config = this.getConfig();
+    const config = await this.getConfig();
     if (config && config.minerId && config.minerId.length > 0) {
       this.loggingService.log(
         'ConfigService: Valid minerId found, but skipping initial sync to prevent race conditions. Sync will be triggered after bootstrap.',
@@ -123,6 +152,18 @@ export class ConfigService implements OnModuleInit {
     } else {
       this.loggingService.log(
         'ConfigService: No minerId found yet. Will sync after registration.',
+        'INFO',
+        'config',
+      );
+    }
+  }
+
+  onApplicationShutdown(): void {
+    if (this.syncInterval) {
+      clearInterval(this.syncInterval);
+      this.syncInterval = undefined;
+      this.loggingService.log(
+        '🛑 Config sync stopped',
         'INFO',
         'config',
       );
@@ -145,7 +186,7 @@ export class ConfigService implements OnModuleInit {
     }
   }
 
-  getConfig(): Config | null {
+  async getConfig(): Promise<Config | null> {
     try {
       // Check if cache is still valid
       const now = Date.now();
@@ -181,13 +222,23 @@ export class ConfigService implements OnModuleInit {
         'config',
       );
 
-      if (!fs.existsSync(this.configPath)) {
+      if (!(await this.fileExists(this.configPath))) {
         this.isLoading = false;
         throw new Error('Config file not found');
       }
 
-      const configData = fs.readFileSync(this.configPath, 'utf8');
+      const configData = await fs.promises.readFile(this.configPath, 'utf8');
       const config: Config = JSON.parse(configData);
+
+      if (!this.validateConfigStructure(config)) {
+        this.isLoading = false;
+        this.loggingService.log(
+          '❌ Config schema validation failed',
+          'ERROR',
+          'config',
+        );
+        return null;
+      }
 
       // Update cache
       this.configCache = { data: config, timestamp: now };
@@ -211,17 +262,17 @@ export class ConfigService implements OnModuleInit {
     }
   }
 
-  saveConfig(config: Config): boolean {
+  async saveConfig(config: Config): Promise<boolean> {
     try {
-      // Write new config first
-      fs.writeFileSync(this.configPath, JSON.stringify(config, null, 2));
+      // Write new config atomically
+      await this.writeJsonAtomic(this.configPath, config);
 
       // Update cache with the new config instead of invalidating it
       // This prevents unnecessary file reads right after saving
       this.configCache = { data: config, timestamp: Date.now() };
 
       // Only create backup if not too recent
-      this.createBackupIfNeeded();
+      await this.createBackupIfNeeded();
 
       this.loggingService.log(
         '✅ Config saved successfully',
@@ -252,8 +303,8 @@ export class ConfigService implements OnModuleInit {
     return token || null;
   }
 
-  getMinerId(): string {
-    const config = this.getConfig();
+  async getMinerId(): Promise<string> {
+    const config = await this.getConfig();
     // Do NOT generate a fallback minerId!
     return config?.minerId || '';
   }
@@ -276,7 +327,7 @@ export class ConfigService implements OnModuleInit {
       // First clean up the config to ensure consistent structure
       await this.cleanupConfig();
 
-      const currentConfig = this.getConfig();
+      const currentConfig = await this.getConfig();
       if (!currentConfig) {
         this.loggingService.log(
           '⚠️ Cannot sync config: Local config not found',
@@ -314,6 +365,13 @@ export class ConfigService implements OnModuleInit {
         throw new Error(`API returned ${response.status}`);
       }
 
+      this.lastSyncSuccessAt = new Date().toISOString();
+      this.loggingService.log(
+        `✅ Config sync successful at ${this.lastSyncSuccessAt}`,
+        'DEBUG',
+        'config',
+      );
+
       // Type-safe API response handling
       const apiConfig = response.data as ApiConfigResponse;
       this.loggingService.log(
@@ -321,6 +379,15 @@ export class ConfigService implements OnModuleInit {
         'DEBUG',
         'config',
       );
+
+      if (!this.validateApiConfig(apiConfig)) {
+        this.loggingService.log(
+          '⚠️ API config validation failed, skipping apply',
+          'WARN',
+          'config',
+        );
+        return false;
+      }
 
       // Only log minerSoftware changes, not every sync
       if (
@@ -396,7 +463,7 @@ export class ConfigService implements OnModuleInit {
         },
       };
 
-      this.saveConfig(updatedConfig);
+      await this.saveConfig(updatedConfig);
 
       // Update cache immediately with the new config to prevent unnecessary file reads
       this.configCache = { data: updatedConfig, timestamp: Date.now() };
@@ -431,6 +498,121 @@ export class ConfigService implements OnModuleInit {
     }
   }
 
+  private validateApiConfig(apiConfig: ApiConfigResponse): boolean {
+    if (!apiConfig || typeof apiConfig !== 'object') {
+      return false;
+    }
+
+    if (apiConfig.benchmark !== undefined && typeof apiConfig.benchmark !== 'boolean') {
+      return false;
+    }
+
+    if (apiConfig.minerSoftware !== undefined && typeof apiConfig.minerSoftware !== 'string') {
+      return false;
+    }
+
+    if (apiConfig.thresholds) {
+      const { maxCpuTemp, maxBatteryTemp, maxStorageUsage, minHashrate, shareRatio } = apiConfig.thresholds;
+      const numericFields = [maxCpuTemp, maxBatteryTemp, maxStorageUsage, minHashrate, shareRatio];
+      if (numericFields.some((value) => value !== undefined && typeof value !== 'number')) {
+        return false;
+      }
+    }
+
+    if (apiConfig.schedules) {
+      const { scheduledMining, scheduledRestarts } = apiConfig.schedules;
+      if (scheduledMining?.enabled !== undefined && typeof scheduledMining.enabled !== 'boolean') {
+        return false;
+      }
+      if (scheduledMining?.periods && !Array.isArray(scheduledMining.periods)) {
+        return false;
+      }
+      if (scheduledRestarts && !Array.isArray(scheduledRestarts)) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  private validateConfigStructure(config: any): config is Config {
+    if (!config || typeof config !== 'object') {
+      return false;
+    }
+
+    if (typeof config.minerId !== 'string') {
+      return false;
+    }
+
+    if (typeof config.rigId !== 'string') {
+      return false;
+    }
+
+    if (typeof config.name !== 'string') {
+      return false;
+    }
+
+    if (config.minerSoftware !== undefined && typeof config.minerSoftware !== 'string') {
+      return false;
+    }
+
+    if (config.benchmark !== undefined && typeof config.benchmark !== 'boolean') {
+      return false;
+    }
+
+    const thresholds = config.thresholds;
+    if (!thresholds || typeof thresholds !== 'object') {
+      return false;
+    }
+
+    const numericFields = [
+      thresholds.maxCpuTemp,
+      thresholds.maxBatteryTemp,
+      thresholds.maxStorageUsage,
+      thresholds.minHashrate,
+      thresholds.shareRatio,
+    ];
+    if (numericFields.some((value) => typeof value !== 'number')) {
+      return false;
+    }
+
+    const schedules = config.schedules;
+    if (!schedules || typeof schedules !== 'object') {
+      return false;
+    }
+
+    if (
+      !schedules.scheduledMining ||
+      typeof schedules.scheduledMining !== 'object' ||
+      typeof schedules.scheduledMining.enabled !== 'boolean' ||
+      !Array.isArray(schedules.scheduledMining.periods)
+    ) {
+      return false;
+    }
+
+    if (!Array.isArray(schedules.scheduledRestarts)) {
+      return false;
+    }
+
+    for (const period of schedules.scheduledMining.periods) {
+      if (!period || typeof period !== 'object') {
+        return false;
+      }
+      if (typeof period.startTime !== 'string' || typeof period.endTime !== 'string') {
+        return false;
+      }
+      if (!Array.isArray(period.days) || period.days.some((day: any) => typeof day !== 'string')) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  getLastSyncSuccessAt(): string | undefined {
+    return this.lastSyncSuccessAt;
+  }
+
   /**
    * Force an immediate config sync with the API
    * This can be called by services that need the latest config (like the MinerManagerService)
@@ -449,7 +631,7 @@ export class ConfigService implements OnModuleInit {
    */
   async cleanupConfig(): Promise<boolean> {
     try {
-      const currentConfig = this.getConfig();
+      const currentConfig = await this.getConfig();
       if (!currentConfig) {
         this.loggingService.log(
           '⚠️ Cannot clean config: File not found',
@@ -482,7 +664,7 @@ export class ConfigService implements OnModuleInit {
       };
 
       // Save the cleaned config
-      const saved = this.saveConfig(cleanConfig);
+      const saved = await this.saveConfig(cleanConfig);
       if (saved) {
         this.loggingService.log(
           '✅ Config cleaned up successfully',
@@ -516,7 +698,7 @@ export class ConfigService implements OnModuleInit {
       const fileName = path.basename(this.configPath);
 
       // Check if directory exists first
-      if (!fs.existsSync(dirPath)) {
+      if (!(await this.fileExists(dirPath))) {
         this.loggingService.log(
           `Directory does not exist: ${dirPath}`,
           'DEBUG',
@@ -577,7 +759,7 @@ export class ConfigService implements OnModuleInit {
         const deletePromises = filesToDelete.map(async (file) => {
           try {
             // Check if file still exists before attempting to delete
-            if (fs.existsSync(file.path)) {
+            if (await this.fileExists(file.path)) {
               await Promise.race([
                 fs.promises.unlink(file.path),
                 new Promise((_, reject) =>
@@ -648,25 +830,25 @@ export class ConfigService implements OnModuleInit {
   /**
    * Get the currently configured miner software
    */
-  getMinerSoftware(): string | undefined {
-    const config = this.getConfig();
+  async getMinerSoftware(): Promise<string | undefined> {
+    const config = await this.getConfig();
     return config?.minerSoftware;
   }
 
   /**
    * Get the benchmark flag
    */
-  getBenchmarkFlag(): boolean {
-    const config = this.getConfig();
+  async getBenchmarkFlag(): Promise<boolean> {
+    const config = await this.getConfig();
     return config?.benchmark ?? false;
   }
 
   /**
    * Set the current miner software in config
    */
-  setMinerSoftware(minerSoftware: string): boolean {
+  async setMinerSoftware(minerSoftware: string): Promise<boolean> {
     try {
-      const config = this.getConfig();
+      const config = await this.getConfig();
       if (!config) {
         this.loggingService.log(
           '❌ Cannot set miner software: Config not found',
@@ -677,7 +859,7 @@ export class ConfigService implements OnModuleInit {
       }
 
       config.minerSoftware = minerSoftware;
-      fs.writeFileSync(this.configPath, JSON.stringify(config, null, 2));
+      await fs.promises.writeFile(this.configPath, JSON.stringify(config, null, 2));
 
       this.loggingService.log(
         `✅ Miner software updated to: ${minerSoftware}`,
@@ -725,7 +907,7 @@ export class ConfigService implements OnModuleInit {
   private async ensureValidConfig(): Promise<boolean> {
     try {
       // First, check if config file exists
-      if (!fs.existsSync(this.configPath)) {
+      if (!(await this.fileExists(this.configPath))) {
         this.loggingService.log(
           'Config file not found, attempting to restore from backup...',
           'WARN',
@@ -751,7 +933,7 @@ export class ConfigService implements OnModuleInit {
 
       // Config file exists, check if it's valid
       try {
-        const configContent = fs.readFileSync(this.configPath, 'utf8').trim();
+        const configContent = (await fs.promises.readFile(this.configPath, 'utf8')).trim();
 
         // Check if file is empty
         if (!configContent) {
@@ -781,18 +963,8 @@ export class ConfigService implements OnModuleInit {
         // Try to parse the config
         const config = JSON.parse(configContent);
 
-        // Basic validation - ensure it has the required structure
-        if (!config || typeof config !== 'object') {
-          throw new Error('Config is not a valid object');
-        }
-
-        // Check for critical properties (at minimum we need the structure)
-        if (
-          !config.hasOwnProperty('minerId') ||
-          !config.hasOwnProperty('thresholds') ||
-          !config.hasOwnProperty('schedules')
-        ) {
-          throw new Error('Config missing critical properties');
+        if (!this.validateConfigStructure(config)) {
+          throw new Error('Config failed schema validation');
         }
 
         this.loggingService.log(
@@ -815,7 +987,7 @@ export class ConfigService implements OnModuleInit {
         const timestamp = Date.now();
         const corruptedBackupPath = `${this.configPath}.corrupted.${timestamp}.bak`;
         try {
-          fs.copyFileSync(this.configPath, corruptedBackupPath);
+          await fs.promises.copyFile(this.configPath, corruptedBackupPath);
           this.loggingService.log(
             `Corrupted config backed up to: ${corruptedBackupPath}`,
             'INFO',
@@ -865,7 +1037,7 @@ export class ConfigService implements OnModuleInit {
       const fileName = path.basename(this.configPath);
 
       // Get all backup files
-      const files = fs.readdirSync(dirPath);
+      const files = await fs.promises.readdir(dirPath);
       const backupFiles = files
         .filter(
           (file) => file.startsWith(`${fileName}.`) && file.endsWith('.bak'),
@@ -897,7 +1069,7 @@ export class ConfigService implements OnModuleInit {
             'config',
           );
 
-          const backupContent = fs.readFileSync(backupFile.path, 'utf8').trim();
+          const backupContent = (await fs.promises.readFile(backupFile.path, 'utf8')).trim();
 
           // Skip empty backups
           if (!backupContent) {
@@ -922,14 +1094,9 @@ export class ConfigService implements OnModuleInit {
             continue;
           }
 
-          // Check for critical properties
-          if (
-            !backupConfig.hasOwnProperty('minerId') ||
-            !backupConfig.hasOwnProperty('thresholds') ||
-            !backupConfig.hasOwnProperty('schedules')
-          ) {
+          if (!this.validateConfigStructure(backupConfig)) {
             this.loggingService.log(
-              `Backup ${backupFile.name} missing critical properties, trying next...`,
+              `Backup ${backupFile.name} failed schema validation, trying next...`,
               'DEBUG',
               'config',
             );
@@ -937,7 +1104,7 @@ export class ConfigService implements OnModuleInit {
           }
 
           // This backup looks valid, restore it
-          fs.copyFileSync(backupFile.path, this.configPath);
+          await fs.promises.copyFile(backupFile.path, this.configPath);
 
           // Clear cache to force reload
           this.configCache = null;
@@ -949,7 +1116,7 @@ export class ConfigService implements OnModuleInit {
           );
 
           // Verify the restored config
-          const restoredConfig = this.getConfig();
+          const restoredConfig = await this.getConfig();
           if (restoredConfig && restoredConfig.minerId) {
             this.loggingService.log(
               `Restored config contains minerId: ${restoredConfig.minerId}`,
@@ -988,7 +1155,7 @@ export class ConfigService implements OnModuleInit {
   /**
    * Create a default config file
    */
-  private createDefaultConfig(): boolean {
+  private async createDefaultConfig(): Promise<boolean> {
     try {
       const defaultConfig: Config = {
         minerId: '',
@@ -1009,7 +1176,7 @@ export class ConfigService implements OnModuleInit {
         },
       };
 
-      this.saveConfig(defaultConfig);
+      await this.saveConfig(defaultConfig);
 
       this.loggingService.log('Created default config file', 'INFO', 'config');
 
@@ -1027,9 +1194,9 @@ export class ConfigService implements OnModuleInit {
   /**
    * Create a backup if it hasn't been created recently
    */
-  private createBackupIfNeeded(): void {
+  private async createBackupIfNeeded(): Promise<void> {
     try {
-      if (!fs.existsSync(this.configPath)) {
+      if (!(await this.fileExists(this.configPath))) {
         return;
       }
 
@@ -1038,7 +1205,7 @@ export class ConfigService implements OnModuleInit {
       const dirPath = path.dirname(this.configPath);
       const fileName = path.basename(this.configPath);
 
-      const files = fs.readdirSync(dirPath);
+      const files = await fs.promises.readdir(dirPath);
       const recentBackups = files.filter((file) => {
         if (!file.startsWith(`${fileName}.`) || !file.endsWith('.bak'))
           return false;
@@ -1053,7 +1220,7 @@ export class ConfigService implements OnModuleInit {
       if (recentBackups.length === 0) {
         const timestamp = Date.now();
         const backupPath = `${this.configPath}.${timestamp}.bak`;
-        fs.copyFileSync(this.configPath, backupPath);
+        await fs.promises.copyFile(this.configPath, backupPath);
         this.loggingService.log(
           `📦 Config backup created: ${backupPath}`,
           'DEBUG',

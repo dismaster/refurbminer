@@ -56,3 +56,6 @@ xmrig
 package-lock.json
 *.bak
 *.log
+/docs
+/apps
+/apps

@@ -15,21 +15,21 @@ export class FlightsheetController {
 
   /** ✅ Get flightsheet for specific miner */
   @Get(':miner')
-  getFlightsheet(@Param('miner') miner: string) {
-    const flightsheet = this.flightsheetService.getFlightsheet(miner);
+  async getFlightsheet(@Param('miner') miner: string) {
+    const flightsheet = await this.flightsheetService.getFlightsheet(miner);
     return flightsheet ? flightsheet : { error: 'Flightsheet not found.' };
   }
 
   /** ✅ Get current environment information */
   @Get('environment/info')
-  getEnvironmentInfo() {
-    return this.flightsheetService.getEnvironmentInfo();
+  async getEnvironmentInfo() {
+    return await this.flightsheetService.getEnvironmentInfo();
   }
 
   /** ✅ Refresh environment detection */
   @Post('environment/refresh')
-  refreshEnvironmentInfo() {
-    const environmentInfo = this.flightsheetService.refreshEnvironmentInfo();
+  async refreshEnvironmentInfo() {
+    const environmentInfo = await this.flightsheetService.refreshEnvironmentInfo();
     return {
       message: 'Environment information refreshed successfully.',
       environmentInfo,
@@ -37,8 +37,9 @@ export class FlightsheetController {
   }
 
   /** ✅ Get environment summary for debugging */
-  @Get('environment/summary')  getEnvironmentSummary() {
-    const environmentInfo = this.flightsheetService.getEnvironmentInfo();
+  @Get('environment/summary')
+  async getEnvironmentSummary() {
+    const environmentInfo = await this.flightsheetService.getEnvironmentInfo();
     return {
       summary: EnvironmentConfigUtil.getEnvironmentSummary(environmentInfo),
       details: environmentInfo,

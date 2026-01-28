@@ -45,7 +45,7 @@ export class MinerSoftwareController {
    * Get specific miner information
    */
   @Get(':miner/info')
-  getMinerInfo(@Param('miner') minerName: string) {
+  async getMinerInfo(@Param('miner') minerName: string) {
     return this.minerSoftwareService.getMinerInfo(minerName);
   }
 

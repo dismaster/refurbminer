@@ -23,11 +23,15 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
   private readonly telemetryFilePath: string;
   private readonly historyFilePath: string;
   private updateInterval?: NodeJS.Timeout;
+  private telemetryUpdateInFlight = false;
+  private lastTelemetryGeneratedAt?: string;
+  private writeQueue: Promise<void> = Promise.resolve();
   // Increasing data points to 60 for 1 hour of data (every minute)
   private readonly MAX_HISTORY_POINTS = 60;
   // Added backup limits for telemetry
   private readonly MAX_BACKUPS = 5;
-  private readonly appVersion: string;
+  private appVersion: string;
+  private telemetryCycle = 0;
 
   constructor(
     private readonly loggingService: LoggingService,
@@ -45,13 +49,14 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
       'storage',
       'hashrate-history.json',
     );
-    this.ensureStorageExists();
+    void this.ensureStorageExists();
 
     // Load app version from package.json
-    this.appVersion = this.getAppVersion();
+    this.appVersion = '0.0.0';
   }
 
   async onModuleInit() {
+    this.appVersion = await this.getAppVersion();
     this.startDataCollection();
   }
 
@@ -76,12 +81,10 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
-  private ensureStorageExists(): void {
+  private async ensureStorageExists(): Promise<void> {
     try {
       const storageDir = path.dirname(this.telemetryFilePath);
-      if (!fs.existsSync(storageDir)) {
-        fs.mkdirSync(storageDir, { recursive: true });
-      }
+      await fs.promises.mkdir(storageDir, { recursive: true });
     } catch (error) {
       this.loggingService.log(
         `❌ Failed to ensure storage directory exists: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -91,6 +94,25 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  private async writeJsonAtomic(filePath: string, data: unknown): Promise<void> {
+    this.writeQueue = this.writeQueue
+      .then(async () => {
+        const tempPath = `${filePath}.tmp`;
+        await fs.promises.writeFile(tempPath, JSON.stringify(data, null, 2), 'utf8');
+        await fs.promises.rename(tempPath, filePath);
+      })
+      .catch((error) => {
+        this.loggingService.log(
+          `❌ Telemetry write failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          'ERROR',
+          'telemetry',
+        );
+        throw error;
+      });
+
+    return this.writeQueue;
+  }
+
   private startDataCollection() {
     // Clear existing interval if any
     if (this.updateInterval) {
@@ -98,25 +120,68 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
     }
 
     // Clear any stale telemetry data on startup
-    this.clearStaleData();
+    void this.clearStaleData();
 
     // Collect telemetry data immediately on startup with retry
-    this.getTelemetryDataWithRetry().catch((error) => {
+    void this.runTelemetryUpdateWithRetry();
+
+    // Update telemetry and historical data every 60 seconds
+    this.updateInterval = setInterval(() => {
+      void this.runTelemetryUpdate();
+    }, 60000);
+  }
+
+  private async runTelemetryUpdateWithRetry(): Promise<void> {
+    if (this.telemetryUpdateInFlight) {
+      this.loggingService.log(
+        '⏳ Telemetry update already running, skipping retry start',
+        'DEBUG',
+        'telemetry',
+      );
+      return;
+    }
+
+    this.telemetryUpdateInFlight = true;
+    try {
+      await this.getTelemetryDataWithRetry();
+    } catch (error) {
       this.loggingService.log(
         `❌ Failed to collect initial telemetry data: ${error instanceof Error ? error.message : 'Unknown error'}`,
         'ERROR',
         'telemetry',
       );
-    });
+    } finally {
+      this.telemetryUpdateInFlight = false;
+    }
+  }
 
-    // Update telemetry and historical data every 60 seconds
-    this.updateInterval = setInterval(async () => {
+  private async runTelemetryUpdate(): Promise<void> {
+    if (this.telemetryUpdateInFlight) {
+      this.loggingService.log(
+        '⏳ Telemetry update already running, skipping interval tick',
+        'DEBUG',
+        'telemetry',
+      );
+      return;
+    }
+
+    this.telemetryUpdateInFlight = true;
+    try {
       await this.getTelemetryData();
-    }, 60000);
+        this.lastTelemetryGeneratedAt = new Date().toISOString();
+    } catch (error) {
+      this.loggingService.log(
+        `❌ Telemetry update failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'ERROR',
+        'telemetry',
+      );
+    } finally {
+      this.telemetryUpdateInFlight = false;
+    }
   }
 
   /** Clear stale telemetry data on startup */
-  private clearStaleData(): void {
+  private async clearStaleData(): Promise<void> {
     try {
       const emptyTelemetry = {
         status: 'initializing',
@@ -142,14 +207,10 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
       };
 
       // Ensure directory exists
-      this.ensureStorageExists();
+      await this.ensureStorageExists();
 
       // Write fresh empty telemetry
-      fs.writeFileSync(
-        this.telemetryFilePath,
-        JSON.stringify(emptyTelemetry, null, 2),
-        'utf8',
-      );
+      await this.writeJsonAtomic(this.telemetryFilePath, emptyTelemetry);
 
       this.loggingService.log(
         '🗑️ Cleared stale telemetry data on startup',
@@ -216,6 +277,15 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
   /** Get telemetry data with comprehensive error handling */
   async getTelemetryData(): Promise<TelemetryData | null> {
     try {
+      this.telemetryCycle++;
+      const cycleId = this.telemetryCycle;
+      this.loggingService.log(
+        `📡 Telemetry cycle ${cycleId} started`,
+        'DEBUG',
+        'telemetry',
+        { cycleId },
+      );
+
       // Core system data - use safe sync operations
       const minerRunning = safeExecute(
         () => this.minerManagerService.isMinerRunning(),
@@ -231,10 +301,12 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
         this.loggingService.log.bind(this.loggingService),
       );
       // Get previous telemetry data with error handling
-      const previousData = safeExecute(
+      const previousData = await safeExecuteAsync(
         () => this.getPreviousTelemetry(),
         null,
         'previous telemetry retrieval',
+        2,
+        500,
         this.loggingService.log.bind(this.loggingService),
       );
 
@@ -275,7 +347,7 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
       );
 
       // Get device info with system uptime using safe execution
-      const deviceInfo = safeExecute(
+      const deviceInfoPromise = safeExecuteAsync(
         () =>
           HardwareInfoUtil.getDeviceInfo(
             systemType,
@@ -292,6 +364,39 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
           systemUptime: 0,
         },
         'hardware info retrieval',
+        3,
+        1000,
+        this.loggingService.log.bind(this.loggingService),
+      );
+
+      const networkPromise = safeExecuteAsync(
+        () => NetworkInfoUtil.getNetworkInfo(systemType),
+        {
+          primaryIp: 'Unknown',
+          externalIp: 'Unknown',
+          gateway: 'Unknown',
+          interfaces: ['Unknown'],
+          ping: { refurbminer: -1 },
+          traffic: {
+            rxBytes: 0,
+            txBytes: 0,
+            rxSpeed: 0,
+            txSpeed: 0,
+            timestamp: Date.now(),
+          },
+        },
+        'network info retrieval',
+        3,
+        1000,
+        this.loggingService.log.bind(this.loggingService),
+      );
+
+      const batteryPromise = safeExecuteAsync(
+        () => BatteryInfoUtil.getBatteryInfo(systemType),
+        { level: 0, isCharging: false, temperature: 0 },
+        'battery info retrieval',
+        3,
+        1000,
         this.loggingService.log.bind(this.loggingService),
       );
 
@@ -305,10 +410,13 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
       );
 
       // Wait for all async operations to complete with proper error handling
-      const [minerSummary, poolStats, threadPerformance] = await Promise.all([
+      const [minerSummary, poolStats, threadPerformance, deviceInfo, battery, network] = await Promise.all([
         minerSummaryPromise,
         poolStatsPromise,
         threadPerformancePromise,
+        deviceInfoPromise,
+        batteryPromise,
+        networkPromise,
       ]);
 
       // Update the CPU model info with hashrates from threads with error handling
@@ -335,38 +443,14 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
-      // Get network info with error handling
-      const network = safeExecute(
-        () => NetworkInfoUtil.getNetworkInfo(systemType),
-        {
-          primaryIp: 'Unknown',
-          externalIp: 'Unknown',
-          gateway: 'Unknown',
-          interfaces: ['Unknown'],
-          ping: { refurbminer: -1 },
-          traffic: {
-            rxBytes: 0,
-            txBytes: 0,
-            rxSpeed: 0,
-            txSpeed: 0,
-            timestamp: Date.now(),
-          },
-        },
-        'network info retrieval',
-        this.loggingService.log.bind(this.loggingService),
-      );
+      // Network info retrieved above via async safe execution
 
-      // Get battery info with error handling
-      const battery = safeExecute(
-        () => BatteryInfoUtil.getBatteryInfo(systemType),
-        { level: 0, isCharging: false, temperature: 0 },
-        'battery info retrieval',
-        this.loggingService.log.bind(this.loggingService),
-      );
+      // Battery info retrieved above via async safe execution
       // Create API telemetry object with explicit structure to prevent extra variables
       const apiTelemetry = {
         status: 'active',
         appVersion: this.appVersion,
+        updatedAt: new Date().toISOString(),
         minerSoftware: {
           name: minerSummary.name,
           version: minerSummary.version,
@@ -402,10 +486,12 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
       const cleanedTelemetry = this.cleanTelemetryStructure(apiTelemetry);
 
       // Get mining schedules with error handling
-      const scheduleInfo = safeExecute(
+      const scheduleInfo = await safeExecuteAsync(
         () => this.getMiningSchedule(),
         { mining: { enabled: false, periods: [] }, restarts: [] },
         'mining schedule retrieval',
+        1,
+        0,
         this.loggingService.log.bind(this.loggingService),
       );
 
@@ -450,6 +536,29 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Return the most recent telemetry snapshot without forcing a new cycle.
+   * Falls back to a fresh collection only if no valid snapshot exists.
+   */
+  async getTelemetrySnapshot(): Promise<TelemetryData | null> {
+    try {
+      await fs.promises.access(this.telemetryFilePath);
+      const rawData = await fs.promises.readFile(this.telemetryFilePath, 'utf8');
+      const parsed = JSON.parse(rawData) as TelemetryData;
+      if (this.validateTelemetryStructure(parsed)) {
+        return parsed ?? null;
+      }
+      throw new Error('Telemetry snapshot failed schema validation');
+    } catch (error) {
+      this.loggingService.log(
+        `⚠️ Telemetry snapshot unavailable, collecting fresh data: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'DEBUG',
+        'telemetry',
+      );
+      return this.getTelemetryDataWithRetry();
+    }
+  }
+
+  /**
    * Clean telemetry structure to remove unwanted root-level variables
    * @param telemetry Raw telemetry object
    * @returns Cleaned telemetry object with only allowed root-level fields
@@ -459,6 +568,7 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
     const allowedRootFields = [
       'status',
       'appVersion',
+      'updatedAt',
       'minerSoftware',
       'pool',
       'deviceInfo',
@@ -492,53 +602,72 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
     return cleanedTelemetry;
   }
 
-  private getPreviousTelemetry(): any {
-    try {
-      if (fs.existsSync(this.telemetryFilePath)) {
-        const rawData = fs.readFileSync(this.telemetryFilePath, 'utf8');
+  private validateTelemetryStructure(data: any): boolean {
+    if (!data || typeof data !== 'object') {
+      return false;
+    }
 
-        try {
-          // Try to parse and validate the JSON
-          const parsedData = JSON.parse(rawData);
+    if (typeof data.status !== 'string') {
+      return false;
+    }
 
-          // Basic validation of required fields
-          if (typeof parsedData === 'object' && parsedData !== null) {
-            return parsedData;
-          } else {
-            throw new Error('Invalid telemetry data structure');
-          }
-        } catch (parseError) {
-          // If JSON is invalid, backup the corrupted file and create new one
-          const backupPath = `${this.telemetryFilePath}.${Date.now()}.bak`;
-          fs.renameSync(this.telemetryFilePath, backupPath);
-
-          this.loggingService.log(
-            `📦 Corrupted telemetry file backed up to: ${backupPath}`,
-            'WARN',
-            'telemetry',
-          );
-
-          // Create new empty telemetry file
-          const emptyTelemetry = {
-            status: 'stopped',
-            minerSoftware: {},
-            pool: {},
-            deviceInfo: {},
-            network: {},
-            battery: {},
-            schedules: { mining: { start: null, stop: null }, restarts: [] },
-            historicalHashrate: [],
-          };
-
-          fs.writeFileSync(
-            this.telemetryFilePath,
-            JSON.stringify(emptyTelemetry, null, 2),
-            'utf8',
-          );
-
-          return emptyTelemetry;
-        }
+    const objectFields = ['minerSoftware', 'pool', 'deviceInfo', 'network', 'battery'];
+    for (const field of objectFields) {
+      if (data[field] !== undefined && (typeof data[field] !== 'object' || data[field] === null)) {
+        return false;
       }
+    }
+
+    return true;
+  }
+
+  private async getPreviousTelemetry(): Promise<any> {
+    try {
+      try {
+        await fs.promises.access(this.telemetryFilePath);
+      } catch {
+        return null;
+      }
+
+      const rawData = await fs.promises.readFile(this.telemetryFilePath, 'utf8');
+
+      try {
+        // Try to parse and validate the JSON
+        const parsedData = JSON.parse(rawData);
+
+        // Basic validation of required fields
+        if (this.validateTelemetryStructure(parsedData)) {
+          return parsedData;
+        }
+        throw new Error('Invalid telemetry data structure');
+      } catch (parseError) {
+        // If JSON is invalid, backup the corrupted file and create new one
+        const backupPath = `${this.telemetryFilePath}.${Date.now()}.bak`;
+        await fs.promises.rename(this.telemetryFilePath, backupPath);
+
+        this.loggingService.log(
+          `📦 Corrupted telemetry file backed up to: ${backupPath}`,
+          'WARN',
+          'telemetry',
+        );
+
+        // Create new empty telemetry file
+        const emptyTelemetry = {
+          status: 'stopped',
+          minerSoftware: {},
+          pool: {},
+          deviceInfo: {},
+          network: {},
+          battery: {},
+          schedules: { mining: { start: null, stop: null }, restarts: [] },
+          historicalHashrate: [],
+        };
+
+        await this.writeJsonAtomic(this.telemetryFilePath, emptyTelemetry);
+
+        return emptyTelemetry;
+      }
+      
     } catch (error) {
       this.loggingService.log(
         `⚠️ Failed to read previous telemetry: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -588,11 +717,7 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
   private async saveTelemetry(data: any) {
     try {
       await Promise.race([
-        fs.promises.writeFile(
-          this.telemetryFilePath,
-          JSON.stringify(data, null, 2),
-          'utf8',
-        ),
+        this.writeJsonAtomic(this.telemetryFilePath, data),
         new Promise((_, reject) =>
           setTimeout(
             () => reject(new Error('File write timeout after 10 seconds')),
@@ -686,12 +811,9 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
         ),
       ]);
 
-      // Format data for storage
-      const formattedData = JSON.stringify(data, null, 2);
-
       // Write to file with timeout protection
       await Promise.race([
-        fs.promises.writeFile(this.historyFilePath, formattedData, 'utf8'),
+        this.writeJsonAtomic(this.historyFilePath, data),
         new Promise((_, reject) =>
           setTimeout(
             () => reject(new Error('File write timeout after 10 seconds')),
@@ -954,9 +1076,9 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private getMiningSchedule() {
+  private async getMiningSchedule() {
     try {
-      const config = this.configService.getConfig();
+      const config = await this.configService.getConfig();
       if (!config) {
         return { mining: { enabled: false, periods: [] }, restarts: [] };
       }
@@ -984,15 +1106,19 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private getAppVersion(): string {
+  private async getAppVersion(): Promise<string> {
     try {
       const packageJsonPath = path.join(process.cwd(), 'package.json');
-      if (fs.existsSync(packageJsonPath)) {
-        const packageJson = JSON.parse(
-          fs.readFileSync(packageJsonPath, 'utf8'),
-        );
-        return packageJson.version || '0.0.0';
+      try {
+        await fs.promises.access(packageJsonPath);
+      } catch {
+        return '0.0.0';
       }
+
+      const packageJson = JSON.parse(
+        await fs.promises.readFile(packageJsonPath, 'utf8'),
+      );
+      return packageJson.version || '0.0.0';
     } catch (error) {
       this.loggingService.log(
         `⚠️ Failed to read app version: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -1007,5 +1133,9 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
     return {
       version: this.appVersion,
     };
+  }
+
+  getLastTelemetryGeneratedAt(): string | undefined {
+    return this.lastTelemetryGeneratedAt;
   }
 }

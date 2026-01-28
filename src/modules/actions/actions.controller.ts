@@ -23,7 +23,7 @@ export class ActionsController {
    */
   @Post('restart-miner')
   async restartMiner() {
-    if (this.configService.getBenchmarkFlag()) {
+    if (await this.configService.getBenchmarkFlag()) {
       throw new BadRequestException('Cannot restart miner during benchmark mode');
     }
     await this.actionsService.restartMiner();
@@ -44,7 +44,7 @@ export class ActionsController {
    */
   @Post('stop')
   async stopMining() {
-    if (this.configService.getBenchmarkFlag()) {
+    if (await this.configService.getBenchmarkFlag()) {
       throw new BadRequestException('Cannot stop mining during benchmark mode');
     }
     await this.actionsService.stopMining();
@@ -56,7 +56,7 @@ export class ActionsController {
    */
   @Post('start')
   async startMining() {
-    if (this.configService.getBenchmarkFlag()) {
+    if (await this.configService.getBenchmarkFlag()) {
       throw new BadRequestException('Cannot start mining during benchmark mode');
     }
     await this.actionsService.startMining();

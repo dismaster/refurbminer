@@ -1,24 +1,59 @@
-import { execSync } from 'child_process';
+import { exec, ExecOptionsWithStringEncoding } from 'child_process';
+import { promisify } from 'util';
 import { MinerApiConfigUtil } from './miner-api-config.util';
 
+type ExecOptionsString = Omit<ExecOptionsWithStringEncoding, 'encoding'> & {
+  encoding?: BufferEncoding;
+};
+
+const execAsync = promisify(exec) as (
+  command: string,
+  options?: ExecOptionsWithStringEncoding,
+) => Promise<{ stdout: string; stderr: string }>;
+
+const execCommand = async (
+  command: string,
+  options: ExecOptionsString = {},
+): Promise<string> => {
+  const { stdout } = await execAsync(command, {
+    encoding: 'utf8',
+    ...options,
+  } as ExecOptionsWithStringEncoding);
+  return stdout ?? '';
+};
+
 export class MinerSummaryUtil {
+  private static summaryCache: { miner: string | null; data: any; timestamp: number } | null = null;
+  private static readonly SUMMARY_CACHE_TTL = 15000; // 15 seconds
+
   /** ✅ Get miner summary based on detected miner */
   static async getMinerSummary(): Promise<any> {
-    const miner = this.detectMiner();
+    const now = Date.now();
+    if (
+      this.summaryCache &&
+      now - this.summaryCache.timestamp < this.SUMMARY_CACHE_TTL
+    ) {
+      return this.summaryCache.data;
+    }
+
+    const miner = await this.detectMiner();
 
     if (!miner) {
       return this.getDefaultSummary();
     }
 
-    return miner === 'ccminer'
-      ? this.getCcminerSummary()
+    const data = miner === 'ccminer'
+      ? await this.getCcminerSummary()
       : await this.getXmrigSummary();
+
+    this.summaryCache = { miner, data, timestamp: Date.now() };
+    return data;
   }
 
   /** ✅ Detect which miner is running */
-  private static detectMiner(): string | null {
+  private static async detectMiner(): Promise<string | null> {
     try {
-      const runningProcesses = execSync('ps aux', { encoding: 'utf8' });
+      const runningProcesses = await execCommand('ps aux');
 
       if (runningProcesses.includes('ccminer')) return 'ccminer';
       if (runningProcesses.includes('xmrig')) return 'xmrig';
@@ -30,22 +65,20 @@ export class MinerSummaryUtil {
   }
 
   /** ✅ Get CCMiner summary */
-  private static getCcminerSummary(): any {
+  private static async getCcminerSummary(): Promise<any> {
     try {
       // Clear cache to force rediscovery of correct local endpoint
       MinerApiConfigUtil.clearCache();
       
-      const endpoint = MinerApiConfigUtil.getCcminerApiEndpoint();
+      const endpoint = await MinerApiConfigUtil.getCcminerApiEndpoint();
       
       // Use direct summary command since it provides accurate real-time data
       // Added better timeout protection to prevent hanging
       let summaryRaw: string;
       try {
         // Force kill netcat after timeout using signal
-        summaryRaw = execSync(`echo 'summary' | nc -w 2 ${endpoint}`, {
-          encoding: 'utf8',
+        summaryRaw = await execCommand(`echo 'summary' | nc -w 2 ${endpoint}`, {
           timeout: 5000, // Increased timeout
-          stdio: ['pipe', 'pipe', 'ignore'], // Suppress stderr to avoid noise
           killSignal: 'SIGKILL', // Force kill if timeout
         });
       } catch (timeoutError) {
@@ -105,7 +138,7 @@ export class MinerSummaryUtil {
     
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        const baseUrl = MinerApiConfigUtil.getXmrigApiUrl();
+        const baseUrl = await MinerApiConfigUtil.getXmrigApiUrl();
         
         if (attempt > 1) {
           // XMRig summary retry
@@ -181,15 +214,14 @@ export class MinerSummaryUtil {
   }
 
   /** ✅ Extract real-time hashrate from CCMiner process or logs */
-  private static extractRealtimeHashrate(): number {
+  private static async extractRealtimeHashrate(): Promise<number> {
     try {
       // Try to get most current hashrate from CCMiner API with shorter timeout
-      const endpoint = MinerApiConfigUtil.getCcminerApiEndpoint();
+      const endpoint = await MinerApiConfigUtil.getCcminerApiEndpoint();
       
       // Try 'threads' command which may have more current per-thread data
       try {
-        const threadsRaw = execSync(`echo 'threads' | nc -w 1 ${endpoint}`, {
-          encoding: 'utf8',
+        const threadsRaw = await execCommand(`echo 'threads' | nc -w 1 ${endpoint}`, {
           timeout: 1500,
         });
         
@@ -215,8 +247,7 @@ export class MinerSummaryUtil {
 
       // Try a fresh 'summary' call with minimal timeout for most current data
       try {
-        const summaryRaw = execSync(`echo 'summary' | nc -w 1 ${endpoint}`, {
-          encoding: 'utf8',
+        const summaryRaw = await execCommand(`echo 'summary' | nc -w 1 ${endpoint}`, {
           timeout: 1500,
         });
         const summaryData = this.parseCcminerOutput(summaryRaw);

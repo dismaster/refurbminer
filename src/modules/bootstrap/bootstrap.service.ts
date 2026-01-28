@@ -5,8 +5,30 @@ import { DeviceMonitoringService } from '../device-monitoring/device-monitoring.
 import { MinerManagerService } from '../miner-manager/miner-manager.service';
 import { ConfigService } from '../config/config.service';
 import * as fs from 'fs';
-import { execSync } from 'child_process';
+import { exec, ExecOptionsWithStringEncoding } from 'child_process';
 import * as dotenv from 'dotenv';
+import { promisify } from 'util';
+
+type ExecOptionsString = Omit<ExecOptionsWithStringEncoding, 'encoding'> & {
+  encoding?: BufferEncoding;
+  stdio?: any;
+};
+
+const execAsync = promisify(exec) as (
+  command: string,
+  options?: ExecOptionsWithStringEncoding,
+) => Promise<{ stdout: string; stderr: string }>;
+
+const execCommand = async (
+  command: string,
+  options: ExecOptionsString = {},
+): Promise<string> => {
+  const { stdout } = await execAsync(command, {
+    encoding: 'utf8',
+    ...options,
+  } as ExecOptionsWithStringEncoding);
+  return stdout ?? '';
+};
 
 // Define config interface to fix TypeScript errors
 interface MinerConfig {
@@ -18,6 +40,15 @@ interface MinerConfig {
 @Injectable()
 export class BootstrapService implements OnModuleInit {
   private readonly configPath = 'config/config.json'; // ✅ Define configPath
+
+  private async fileExists(filePath: string): Promise<boolean> {
+    try {
+      await fs.promises.access(filePath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
 
   constructor(
     private readonly loggingService: LoggingService,
@@ -33,8 +64,8 @@ export class BootstrapService implements OnModuleInit {
       'INFO',
       'bootstrap',
     );
-    this.ensureConfigExists();
-    this.ensureEnvironmentVariables();
+    await this.ensureConfigExists();
+    await this.ensureEnvironmentVariables();
 
     // STEP 1: Install dependencies first (before registration needs network tools)
     this.loggingService.log(
@@ -43,14 +74,14 @@ export class BootstrapService implements OnModuleInit {
       'bootstrap',
     );
     await this.verifyDependencies();
-    this.ensureExecutables();
+    await this.ensureExecutables();
 
     // STEP 2: Registration process (now that network tools are available)
     // --- ENFORCE: Do not proceed until minerId is assigned by backend ---
     let validMinerID = false;
 
     // First check if we already have a valid miner ID
-    const existingConfig = this.configService.getConfig();
+    const existingConfig = await this.configService.getConfig();
     if (
       existingConfig &&
       existingConfig.minerId &&
@@ -115,12 +146,12 @@ export class BootstrapService implements OnModuleInit {
       await this.minerManagerService.triggerInitialFlightsheetFetchAndStart();
 
       // Step 3: Perform system checks and optimizations
-      this.checkCPUCompatibility();
+      await this.checkCPUCompatibility();
 
       // Step 4: Check if we're on Termux to run ADB optimizations and cleanup
       const osType = this.deviceMonitoringService.getOS();
       if (osType === 'termux') {
-        this.cleanupScreenSessions();
+        await this.cleanupScreenSessions();
         await this.setupAdbOptimizations();
       }
 
@@ -139,21 +170,19 @@ export class BootstrapService implements OnModuleInit {
   }
 
   /** ✅ Ensure local configuration file exists */
-  private ensureConfigExists() {
+  private async ensureConfigExists() {
     const configDir = 'config';
 
-    if (!fs.existsSync(configDir)) {
-      fs.mkdirSync(configDir, { recursive: true }); // Ensure config directory exists
-    }
+    await fs.promises.mkdir(configDir, { recursive: true }); // Ensure config directory exists
 
-    if (!fs.existsSync(this.configPath)) {
+    if (!(await this.fileExists(this.configPath))) {
       this.loggingService.log(
         'Config file missing, creating new one...',
         'WARN',
         'bootstrap',
       );
       // Create empty config with NO minerId, so nothing can proceed until registration
-      fs.writeFileSync(
+      await fs.promises.writeFile(
         this.configPath,
         JSON.stringify({ minerId: '', rigId: '' }, null, 2),
       );
@@ -161,7 +190,7 @@ export class BootstrapService implements OnModuleInit {
   }
 
   /** ✅ Ensure required environment variables exist in .env file */
-  private ensureEnvironmentVariables() {
+  private async ensureEnvironmentVariables() {
     const envPath = '.env';
     
     // Default environment variables that should always exist
@@ -178,8 +207,8 @@ export class BootstrapService implements OnModuleInit {
     let needsUpdate = false;
 
     // Read existing .env file if it exists
-    if (fs.existsSync(envPath)) {
-      envContent = fs.readFileSync(envPath, 'utf8');
+    if (await this.fileExists(envPath)) {
+      envContent = await fs.promises.readFile(envPath, 'utf8');
     } else {
       this.loggingService.log(
         '.env file missing, creating new one...',
@@ -235,7 +264,7 @@ export class BootstrapService implements OnModuleInit {
 
     // Write updated .env file if needed
     if (needsUpdate) {
-      fs.writeFileSync(envPath, envContent);
+      await fs.promises.writeFile(envPath, envContent);
       this.loggingService.log(
         'Environment variables updated successfully',
         'INFO',
@@ -248,9 +277,9 @@ export class BootstrapService implements OnModuleInit {
   }
 
   /** ✅ Check CPU Compatibility */
-  private checkCPUCompatibility() {
+  private async checkCPUCompatibility() {
     try {
-      const systemInfo = this.deviceMonitoringService.getSystemInfo() as {
+      const systemInfo = (await this.deviceMonitoringService.getSystemInfo()) as {
         cpuInfo?: {
           architecture?: string;
           aesSupport?: boolean;
@@ -365,7 +394,7 @@ export class BootstrapService implements OnModuleInit {
       // Check if sudo is available
       let hasSudo = false;
       try {
-        execSync('command -v sudo', { stdio: 'ignore' });
+        await execCommand('command -v sudo', { stdio: 'ignore' });
         hasSudo = true;
       } catch {
         // No sudo available
@@ -377,7 +406,7 @@ export class BootstrapService implements OnModuleInit {
         const managers = ['apt-get', 'dnf', 'yum', 'pacman'];
         for (const manager of managers) {
           try {
-            execSync(`command -v ${manager}`, { stdio: 'ignore' });
+            await execCommand(`command -v ${manager}`, { stdio: 'ignore' });
             packageManager = manager;
             break;
           } catch {
@@ -520,80 +549,81 @@ export class BootstrapService implements OnModuleInit {
   }
 
   /** Install a group of packages with timeout handling */
-  private installPackageGroup(
+  private async installPackageGroup(
     packageManager: string,
     sudoPrefix: string,
     packages: string[],
     logLevel: string,
     timeoutMs: number,
   ): Promise<boolean> {
-    return new Promise((resolve) => {
-      const packageList = packages.join(' ');
-      let installCommand = '';
+    const packageList = packages.join(' ');
+    let installCommand = '';
 
-      switch (packageManager) {
-        case 'apt-get':
-          installCommand = `${sudoPrefix}apt-get install -yq ${packageList}`;
-          break;
-        case 'dnf':
-        case 'yum':
-          installCommand = `${sudoPrefix}${packageManager} install -y ${packageList}`;
-          break;
-        case 'pacman':
-          installCommand = `${sudoPrefix}pacman -S --noconfirm ${packageList}`;
-          break;
-        case 'pkg':
-          installCommand = `pkg install -y ${packageList}`;
-          break;
-        default:
-          resolve(false);
-          return;
-      }
+    switch (packageManager) {
+      case 'apt-get':
+        installCommand = `${sudoPrefix}apt-get install -yq ${packageList}`;
+        break;
+      case 'dnf':
+      case 'yum':
+        installCommand = `${sudoPrefix}${packageManager} install -y ${packageList}`;
+        break;
+      case 'pacman':
+        installCommand = `${sudoPrefix}pacman -S --noconfirm ${packageList}`;
+        break;
+      case 'pkg':
+        installCommand = `pkg install -y ${packageList}`;
+        break;
+      default:
+        return false;
+    }
 
-      try {
-        const stdio = logLevel === 'DEBUG' ? 'inherit' : 'ignore';
-        execSync(installCommand, {
-          stdio,
-          timeout: timeoutMs,
-          encoding: 'utf8',
-        });
-        resolve(true);
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        
-        // Check if it's a timeout error - packages might have installed successfully
-        if (errorMessage.includes('ETIMEDOUT') || errorMessage.includes('timeout')) {
+    try {
+      const stdio = logLevel === 'DEBUG' ? 'inherit' : 'ignore';
+      await execCommand(installCommand, {
+        stdio,
+        timeout: timeoutMs,
+      });
+      return true;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+
+      // Check if it's a timeout error - packages might have installed successfully
+      if (errorMessage.includes('ETIMEDOUT') || errorMessage.includes('timeout')) {
+        this.loggingService.log(
+          `Package installation timed out, verifying if packages were actually installed...`,
+          'INFO',
+          'bootstrap',
+        );
+
+        // Verify if packages were actually installed despite timeout
+        const installedCount = await this.verifyPackagesInstalled(
+          packages,
+          packageManager,
+        );
+        if (installedCount > 0) {
           this.loggingService.log(
-            `Package installation timed out, verifying if packages were actually installed...`,
+            `✅ Package installation succeeded despite timeout: ${installedCount}/${packages.length} packages installed`,
             'INFO',
             'bootstrap',
           );
-          
-          // Verify if packages were actually installed despite timeout
-          const installedCount = this.verifyPackagesInstalled(packages, packageManager);
-          if (installedCount > 0) {
-            this.loggingService.log(
-              `✅ Package installation succeeded despite timeout: ${installedCount}/${packages.length} packages installed`,
-              'INFO',
-              'bootstrap',
-            );
-            resolve(true);
-            return;
-          }
+          return true;
         }
-        
-        this.loggingService.log(
-          `Package group installation failed: ${errorMessage}`,
-          'WARN',
-          'bootstrap',
-        );
-        resolve(false);
       }
-    });
+
+      this.loggingService.log(
+        `Package group installation failed: ${errorMessage}`,
+        'WARN',
+        'bootstrap',
+      );
+      return false;
+    }
   }
 
   /** Verify if packages were actually installed despite timeout */
-  private verifyPackagesInstalled(packages: string[], packageManager: string): number {
+  private async verifyPackagesInstalled(
+    packages: string[],
+    packageManager: string,
+  ): Promise<number> {
     let installedCount = 0;
 
     for (const pkg of packages) {
@@ -601,29 +631,34 @@ export class BootstrapService implements OnModuleInit {
         switch (packageManager) {
           case 'apt-get':
             // Check if package is installed using dpkg
-            execSync(`dpkg -l ${pkg} 2>/dev/null | grep -q "^ii"`, { stdio: 'ignore' });
+            await execCommand(`dpkg -l ${pkg} 2>/dev/null | grep -q "^ii"`, {
+              stdio: 'ignore',
+            });
             installedCount++;
             break;
           case 'dnf':
           case 'yum':
             // Check if package is installed using rpm
-            execSync(`rpm -q ${pkg}`, { stdio: 'ignore' });
+            await execCommand(`rpm -q ${pkg}`, { stdio: 'ignore' });
             installedCount++;
             break;
           case 'pacman':
             // Check if package is installed using pacman
-            execSync(`pacman -Qi ${pkg}`, { stdio: 'ignore' });
+            await execCommand(`pacman -Qi ${pkg}`, { stdio: 'ignore' });
             installedCount++;
             break;
           case 'pkg':
             // Check if package is installed using pkg (Termux)
-            execSync(`pkg list-installed ${pkg} 2>/dev/null | grep -q "${pkg}"`, { stdio: 'ignore' });
+            await execCommand(
+              `pkg list-installed ${pkg} 2>/dev/null | grep -q "${pkg}"`,
+              { stdio: 'ignore' },
+            );
             installedCount++;
             break;
           default:
             // Try generic command check for essential packages
             if (['curl', 'screen', 'git', 'make', 'clang', 'cmake'].includes(pkg)) {
-              execSync(`command -v ${pkg}`, { stdio: 'ignore' });
+              await execCommand(`command -v ${pkg}`, { stdio: 'ignore' });
               installedCount++;
             }
             break;
@@ -656,7 +691,7 @@ export class BootstrapService implements OnModuleInit {
     try {
       // Update package lists first
       this.loggingService.log('Updating package lists...', 'INFO', 'bootstrap');
-      execSync(`${sudoPrefix}apt-get update -qq`, {
+      await execCommand(`${sudoPrefix}apt-get update -qq`, {
         stdio: 'ignore',
         timeout: 30000,
       });
@@ -669,28 +704,27 @@ export class BootstrapService implements OnModuleInit {
 
       // Setup minimal repository if needed
       if (
-        !fs.existsSync('/etc/apt/sources.list') ||
-        fs.readFileSync('/etc/apt/sources.list', 'utf8').trim() === ''
+        !(await this.fileExists('/etc/apt/sources.list')) ||
+        (await fs.promises.readFile('/etc/apt/sources.list', 'utf8')).trim() === ''
       ) {
         try {
-          const distro = execSync(
+          const distro = (await execCommand(
             'lsb_release -sc 2>/dev/null || echo bookworm',
-            { encoding: 'utf8' },
-          ).trim();
+          )).trim();
 
           const sourcesList =
             osType === 'raspberry-pi'
               ? `deb http://deb.debian.org/debian ${distro} main\ndeb http://archive.raspberrypi.org/debian/ ${distro} main`
               : `deb http://deb.debian.org/debian ${distro} main`;
 
-          fs.writeFileSync('/etc/apt/sources.list', sourcesList);
+          await fs.promises.writeFile('/etc/apt/sources.list', sourcesList);
 
           this.loggingService.log(
             'Repository sources configured',
             'INFO',
             'bootstrap',
           );
-          execSync(`${sudoPrefix}apt-get update -qq`, {
+          await execCommand(`${sudoPrefix}apt-get update -qq`, {
             stdio: 'ignore',
             timeout: 30000,
           });
@@ -787,7 +821,7 @@ export class BootstrapService implements OnModuleInit {
         'INFO',
         'bootstrap',
       );
-      execSync('pkg update', { stdio: 'ignore', timeout: 15000 }); // Shorter timeout for speed test
+      await execCommand('pkg update', { stdio: 'ignore', timeout: 15000 }); // Shorter timeout for speed test
       
       // Test actual package download speed with a small package
       this.loggingService.log(
@@ -795,7 +829,7 @@ export class BootstrapService implements OnModuleInit {
         'INFO',
         'bootstrap',
       );
-      execSync('pkg install -y --download-only curl', { stdio: 'ignore', timeout: 10000 });
+      await execCommand('pkg install -y --download-only curl', { stdio: 'ignore', timeout: 10000 });
       
       repoWorking = true;
       this.loggingService.log(
@@ -834,8 +868,8 @@ export class BootstrapService implements OnModuleInit {
             if (command === 'termux-change-repo') {
               // Use termux-change-repo if available
               try {
-                execSync('command -v termux-change-repo', { stdio: 'ignore' });
-                execSync('echo -e "1\\n1" | termux-change-repo', {
+                await execCommand('command -v termux-change-repo', { stdio: 'ignore' });
+                await execCommand('echo -e "1\n1" | termux-change-repo', {
                   stdio: 'ignore',
                   timeout: 30000,
                 });
@@ -844,7 +878,7 @@ export class BootstrapService implements OnModuleInit {
                 continue;
               }
             } else {
-              execSync(command, { stdio: 'ignore', timeout: 45000 });
+              await execCommand(command, { stdio: 'ignore', timeout: 45000 });
             }
           }
 
@@ -882,102 +916,96 @@ export class BootstrapService implements OnModuleInit {
   }
 
   /** Install individual network tools as fallback */
-  private installIndividualNetworkTools(
+  private async installIndividualNetworkTools(
     packageManager: string,
     sudoPrefix: string,
     logLevel: string,
   ): Promise<void> {
-    return new Promise((resolve) => {
-      const networkTools = [
-        { pkg: 'netcat-openbsd', alt: 'netcat' },
-        { pkg: 'dnsutils', alt: 'bind9-host' },
-        { pkg: 'iputils-ping', alt: 'ping' },
-      ];
+    const networkTools = [
+      { pkg: 'netcat-openbsd', alt: 'netcat' },
+      { pkg: 'dnsutils', alt: 'bind9-host' },
+      { pkg: 'iputils-ping', alt: 'ping' },
+    ];
 
-      for (const tool of networkTools) {
-        for (const pkgName of [tool.pkg, tool.alt]) {
-          try {
-            const command = `${sudoPrefix}${packageManager} install -yq ${pkgName}`;
-            execSync(command, {
-              stdio: 'ignore',
-              timeout: 15000,
-            });
-            this.loggingService.log(
-              `Successfully installed ${pkgName}`,
-              'INFO',
-              'bootstrap',
-            );
-            break;
-          } catch {
-            continue; // Try alternative package
-          }
+    for (const tool of networkTools) {
+      for (const pkgName of [tool.pkg, tool.alt]) {
+        try {
+          const command = `${sudoPrefix}${packageManager} install -yq ${pkgName}`;
+          await execCommand(command, {
+            stdio: 'ignore',
+            timeout: 15000,
+          });
+          this.loggingService.log(
+            `Successfully installed ${pkgName}`,
+            'INFO',
+            'bootstrap',
+          );
+          break;
+        } catch {
+          continue; // Try alternative package
         }
       }
-      resolve();
-    });
+    }
   }
 
   /** Verify that critical network tools are available */
-  private verifyNetworkTools(): Promise<void> {
-    return new Promise((resolve) => {
-      const tools = [
-        { cmd: 'curl', required: true },
-        { cmd: 'nc', required: false },
-        { cmd: 'nslookup', required: false },
-        { cmd: 'ping', required: false },
-      ];
+  private async verifyNetworkTools(): Promise<void> {
+    const tools = [
+      { cmd: 'curl', required: true },
+      { cmd: 'nc', required: false },
+      { cmd: 'nslookup', required: false },
+      { cmd: 'ping', required: false },
+    ];
 
-      const available = [];
-      const missing = [];
+    const available = [];
+    const missing = [];
 
-      for (const tool of tools) {
-        try {
-          execSync(`command -v ${tool.cmd}`, { stdio: 'ignore' });
-          available.push(tool.cmd);
-        } catch {
-          if (tool.required) {
-            missing.push(tool.cmd);
-          }
+    for (const tool of tools) {
+      try {
+        await execCommand(`command -v ${tool.cmd}`, { stdio: 'ignore' });
+        available.push(tool.cmd);
+      } catch {
+        if (tool.required) {
+          missing.push(tool.cmd);
         }
       }
+    }
 
-      if (available.length > 0) {
-        this.loggingService.log(
-          `Network tools available: ${available.join(', ')}`,
-          'INFO',
-          'bootstrap',
-        );
-      }
+    if (available.length > 0) {
+      this.loggingService.log(
+        `Network tools available: ${available.join(', ')}`,
+        'INFO',
+        'bootstrap',
+      );
+    }
 
-      if (missing.length > 0) {
-        this.loggingService.log(
-          `Critical network tools missing: ${missing.join(', ')}`,
-          'ERROR',
-          'bootstrap',
-        );
-      } else {
-        this.loggingService.log(
-          'All required network tools are available',
-          'INFO',
-          'bootstrap',
-        );
-      }
-      resolve();
-    });
+    if (missing.length > 0) {
+      this.loggingService.log(
+        `Critical network tools missing: ${missing.join(', ')}`,
+        'ERROR',
+        'bootstrap',
+      );
+    } else {
+      this.loggingService.log(
+        'All required network tools are available',
+        'INFO',
+        'bootstrap',
+      );
+    }
   }
 
   /** ✅ Ensure miner executables are runnable */
-  private ensureExecutables() {
+  private async ensureExecutables() {
     const executables = [
       { path: 'apps/ccminer/ccminer', name: 'ccminer' },
       { path: 'apps/xmrig/xmrig', name: 'xmrig' },
       { path: 'apps/vcgencmd/vcgencmd', name: 'vcgencmd' },
     ];
 
-    executables.forEach(({ path, name }) => {
-      if (fs.existsSync(path)) {
+    for (const { path, name } of executables) {
+      if (await this.fileExists(path)) {
         try {
-          execSync(`chmod +x ${path}`);
+          await execCommand(`chmod +x ${path}`);
           this.loggingService.log(
             `Executable permissions fixed for ${name}!`,
             'INFO',
@@ -998,7 +1026,7 @@ export class BootstrapService implements OnModuleInit {
           'bootstrap',
         );
       }
-    });
+    }
   }
 
   /** ✅ Register Miner with API */
@@ -1015,8 +1043,8 @@ export class BootstrapService implements OnModuleInit {
       };
       // Safely read existing config if available
       try {
-        if (fs.existsSync(this.configPath)) {
-          const rawConfig = fs.readFileSync(this.configPath, 'utf8');
+        if (await this.fileExists(this.configPath)) {
+          const rawConfig = await fs.promises.readFile(this.configPath, 'utf8');
           config = JSON.parse(rawConfig);
         }
       } catch (readError) {
@@ -1042,7 +1070,7 @@ export class BootstrapService implements OnModuleInit {
       }
 
       // Only register if we don't have a valid miner ID
-      const metadata = this.deviceMonitoringService.getSystemInfo() as {
+      const metadata = (await this.deviceMonitoringService.getSystemInfo()) as {
         osType: string;
         hwBrand: string;
         hwModel: string;
@@ -1055,7 +1083,7 @@ export class BootstrapService implements OnModuleInit {
           pmullSupport: boolean;
         };
       };
-      const ipAddress = this.deviceMonitoringService.getIPAddress();
+      const ipAddress = await this.deviceMonitoringService.getIPAddress();
       
       // Add miningCpus to metadata for backend registration
       const cpuInfo = metadata.cpuInfo || {
@@ -1088,12 +1116,12 @@ export class BootstrapService implements OnModuleInit {
         response.minerId.length > 0
       ) {
         // Get the full config from ConfigService and update it
-        const fullConfig = this.configService.getConfig();
+        const fullConfig = await this.configService.getConfig();
         if (fullConfig) {
           fullConfig.minerId = response.minerId;
           fullConfig.rigId = response.rigId || '';
           // Save the updated config using ConfigService to ensure cache is updated
-          this.configService.saveConfig(fullConfig);
+          await this.configService.saveConfig(fullConfig);
           this.loggingService.log(
             `Registered minerId ${response.minerId} saved to config`,
             'INFO',
@@ -1143,7 +1171,7 @@ export class BootstrapService implements OnModuleInit {
 
       // Check if ADB is installed
       try {
-        execSync('command -v adb', { stdio: 'ignore' });
+        await execCommand('command -v adb', { stdio: 'ignore' });
       } catch {
         this.loggingService.log(
           'ADB not found, skipping power optimizations',
@@ -1155,9 +1183,9 @@ export class BootstrapService implements OnModuleInit {
 
       // Enhanced ADB cleanup - kill any stuck processes and clean up sockets
       try {
-        execSync('pkill -f adb 2>/dev/null || true', { stdio: 'ignore' });
-        execSync('adb kill-server 2>/dev/null || true', { stdio: 'ignore' });
-        execSync('rm -f /tmp/adb.*.log 2>/dev/null || true', { stdio: 'ignore' });
+        await execCommand('pkill -f adb 2>/dev/null || true', { stdio: 'ignore' });
+        await execCommand('adb kill-server 2>/dev/null || true', { stdio: 'ignore' });
+        await execCommand('rm -f /tmp/adb.*.log 2>/dev/null || true', { stdio: 'ignore' });
         this.loggingService.log('ADB cleanup completed', 'DEBUG', 'bootstrap');
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
@@ -1169,7 +1197,7 @@ export class BootstrapService implements OnModuleInit {
       }
 
       // Check for common ADB failure indicators
-      const adbDiagnostics = this.performAdbDiagnostics();
+      const adbDiagnostics = await this.performAdbDiagnostics();
       if (!adbDiagnostics.canProceed) {
         this.loggingService.log(
           `ADB compatibility issues detected: ${adbDiagnostics.reason}. Skipping optimizations.`,
@@ -1185,11 +1213,10 @@ export class BootstrapService implements OnModuleInit {
 
       // First attempt: Try ADB directly with enhanced error detection
       try {
-        const deviceOutput = execSync('adb get-state', {
-          encoding: 'utf8',
+        const deviceOutput = (await execCommand('adb get-state', {
           timeout: 6000,
           stdio: ['ignore', 'pipe', 'pipe'],
-        }).trim();
+        })).trim();
 
         if (deviceOutput === 'device') {
           adbWorks = true;
@@ -1228,7 +1255,7 @@ export class BootstrapService implements OnModuleInit {
         if (!errorMessage.includes('libusb') && !errorMessage.includes('LIBUSB_ERROR_IO')) {
           try {
             // More thorough cleanup
-            execSync('pkill -9 -f adb 2>/dev/null || true', { stdio: 'ignore' });
+            await execCommand('pkill -9 -f adb 2>/dev/null || true', { stdio: 'ignore' });
             await new Promise(resolve => setTimeout(resolve, 1500));
             
             this.loggingService.log(
@@ -1238,10 +1265,9 @@ export class BootstrapService implements OnModuleInit {
             );
 
             // Try a simpler test command
-            const result = execSync('adb shell echo "test"', {
-              encoding: 'utf8',
+            const result = (await execCommand('adb shell echo "test"', {
               timeout: 10000,
-            }).trim();
+            })).trim();
 
             if (result.includes('test')) {
               adbWorks = true;
@@ -1261,8 +1287,7 @@ export class BootstrapService implements OnModuleInit {
 
             // Final attempt: Check if we can at least see the device in list
             try {
-              const devices = execSync('adb devices', {
-                encoding: 'utf8',
+              const devices = await execCommand('adb devices', {
                 timeout: 5000,
               });
 
@@ -1337,7 +1362,7 @@ export class BootstrapService implements OnModuleInit {
 
       for (const { cmd, desc } of adbCommands) {
         try {
-          execSync(cmd, { timeout: 4000, stdio: ['ignore', 'ignore', 'pipe'] });
+          await execCommand(cmd, { timeout: 4000, stdio: ['ignore', 'ignore', 'pipe'] });
           successCount++;
           this.loggingService.log(`✓ ${desc}`, 'DEBUG', 'bootstrap');
         } catch (cmdError) {
@@ -1389,12 +1414,11 @@ export class BootstrapService implements OnModuleInit {
   /**
    * Perform ADB diagnostics to detect common failure scenarios
    */
-  private performAdbDiagnostics(): { canProceed: boolean; reason: string } {
+  private async performAdbDiagnostics(): Promise<{ canProceed: boolean; reason: string }> {
     try {
       // Test 1: Check if we can run adb version (basic functionality)
       try {
-        const versionOutput = execSync('adb version', { 
-          encoding: 'utf8', 
+        const versionOutput = await execCommand('adb version', { 
           timeout: 3000,
           stdio: ['ignore', 'pipe', 'pipe']
         });
@@ -1408,8 +1432,7 @@ export class BootstrapService implements OnModuleInit {
 
       // Test 2: Quick daemon start test to detect immediate failures
       try {
-        execSync('timeout 3 adb start-server 2>&1', { 
-          encoding: 'utf8',
+        await execCommand('timeout 3 adb start-server 2>&1', { 
           stdio: ['ignore', 'pipe', 'pipe']
         });
       } catch (startError) {
@@ -1446,7 +1469,7 @@ export class BootstrapService implements OnModuleInit {
 
     for (const tool of essentialTools) {
       try {
-        execSync(`command -v ${tool.command}`, { stdio: 'ignore' });
+        await execCommand(`command -v ${tool.command}`, { stdio: 'ignore' });
         available.push(tool.command);
         this.loggingService.log(
           `✅ ${tool.command} is available`,
@@ -1512,7 +1535,7 @@ export class BootstrapService implements OnModuleInit {
   }
 
   /** Clean up dead screen sessions only (not detached ones that might be running) */
-  private cleanupScreenSessions(): void {
+  private async cleanupScreenSessions(): Promise<void> {
     this.loggingService.log(
       'Cleaning up dead screen sessions...',
       'INFO',
@@ -1521,10 +1544,9 @@ export class BootstrapService implements OnModuleInit {
 
     try {
       // Get list of screen sessions
-      const screenList = execSync('screen -list', {
-        encoding: 'utf8',
+      const screenList = (await execCommand('screen -list', {
         stdio: 'pipe',
-      }).trim();
+      })).trim();
 
       this.loggingService.log(
         `Current screen sessions: ${screenList}`,
@@ -1544,18 +1566,18 @@ export class BootstrapService implements OnModuleInit {
 
       if (deadSessions.length > 0) {
         // Kill only dead sessions, leave detached ones alone
-        deadSessions.forEach((sessionId) => {
+        for (const sessionId of deadSessions) {
           this.loggingService.log(
             `Killing dead screen session: ${sessionId}`,
             'INFO',
             'bootstrap',
           );
           try {
-            execSync(`screen -S ${sessionId} -X quit`, { stdio: 'ignore' });
+            await execCommand(`screen -S ${sessionId} -X quit`, { stdio: 'ignore' });
           } catch (error) {
             // Session might already be gone, ignore errors
           }
-        });
+        }
 
         this.loggingService.log(
           `Cleaned up ${deadSessions.length} dead screen sessions`,
@@ -1572,7 +1594,7 @@ export class BootstrapService implements OnModuleInit {
 
       // ✅ ADD THIS: Clean up all dead socket files with screen -wipe
       try {
-        execSync('screen -wipe', { stdio: 'ignore' });
+        await execCommand('screen -wipe', { stdio: 'ignore' });
         this.loggingService.log(
           'Cleaned up dead screen socket files with screen -wipe',
           'DEBUG',
@@ -1590,12 +1612,11 @@ export class BootstrapService implements OnModuleInit {
       // ✅ ADD THIS: Force remove stubborn socket files directly
       try {
         const screenDir = `${process.env.HOME}/.screen`;
-        if (fs.existsSync(screenDir)) {
+        if (await this.fileExists(screenDir)) {
           // Get current screen list after wipe to see what's still there
-          const remainingList = execSync('screen -list 2>/dev/null || true', {
-            encoding: 'utf8',
+          const remainingList = (await execCommand('screen -list 2>/dev/null || true', {
             stdio: 'pipe',
-          }).trim();
+          })).trim();
 
           // Find socket files that correspond to "Remote or dead" sessions
           const deadSocketsToRemove = remainingList
@@ -1609,11 +1630,11 @@ export class BootstrapService implements OnModuleInit {
 
           if (deadSocketsToRemove.length > 0) {
             let removedCount = 0;
-            deadSocketsToRemove.forEach((sessionId) => {
+            for (const sessionId of deadSocketsToRemove) {
               const socketPath = `${screenDir}/${sessionId}`;
               try {
-                if (fs.existsSync(socketPath)) {
-                  fs.unlinkSync(socketPath);
+                if (await this.fileExists(socketPath)) {
+                  await fs.promises.unlink(socketPath);
                   removedCount++;
                   this.loggingService.log(
                     `Force removed dead socket: ${sessionId}`,
@@ -1628,7 +1649,7 @@ export class BootstrapService implements OnModuleInit {
                   'bootstrap',
                 );
               }
-            });
+            }
 
             if (removedCount > 0) {
               this.loggingService.log(

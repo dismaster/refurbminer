@@ -1,28 +1,55 @@
-import { execSync } from 'child_process';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+
+const execAsync = promisify(exec);
 
 export class BatteryInfoUtil {
+  private static batteryInfoCache: { data: any; timestamp: number } | null = null;
+  private static readonly BATTERY_INFO_TTL = 30000; // 30 seconds
+
+  private static async execCommand(command: string, timeout?: number): Promise<string> {
+    const { stdout } = await execAsync(command, { encoding: 'utf8', timeout });
+    return stdout ?? '';
+  }
   /** ✅ Get battery details based on system type */
-  static getBatteryInfo(systemType: string): any {
-    switch (systemType) {
-      case 'termux':
-        return this.getTermuxBatteryInfo();
-      case 'raspberry-pi':
-        return this.getRaspberryBatteryInfo();
-      case 'linux':
-        return this.getLinuxBatteryInfo();
-      default:
-        return this.getDefaultBatteryInfo();
+  static async getBatteryInfo(systemType: string): Promise<any> {
+    if (process.platform === 'win32') {
+      return this.getDefaultBatteryInfo();
     }
+
+    const now = Date.now();
+    if (
+      this.batteryInfoCache &&
+      now - this.batteryInfoCache.timestamp < this.BATTERY_INFO_TTL
+    ) {
+      return this.batteryInfoCache.data;
+    }
+
+    const data = await (async () => {
+      switch (systemType) {
+        case 'termux':
+          return this.getTermuxBatteryInfo();
+        case 'raspberry-pi':
+          return this.getRaspberryBatteryInfo();
+        case 'linux':
+          return this.getLinuxBatteryInfo();
+        default:
+          return this.getDefaultBatteryInfo();
+      }
+    })();
+
+    this.batteryInfoCache = { data, timestamp: Date.now() };
+    return data;
   }
 
   /** ✅ Get battery info on Termux (Android) */
-  private static getTermuxBatteryInfo() {
+  private static async getTermuxBatteryInfo() {
     try {
-      const result = execSync('termux-battery-status', { encoding: 'utf8' });
+      const result = await this.execCommand('termux-battery-status');
       const batteryData = JSON.parse(result);
 
       // Get enhanced power consumption data
-      const powerData = this.getEnhancedPowerData();
+      const powerData = await this.getEnhancedPowerData();
 
       return {
         health: batteryData.health || 'UNKNOWN',
@@ -43,7 +70,7 @@ export class BatteryInfoUtil {
   }
 
   /** ✅ Get enhanced power consumption data */
-  private static getEnhancedPowerData() {
+  private static async getEnhancedPowerData() {
     const result = {
       currentMicroAmps: 0,
       voltageMicroVolts: 0,
@@ -54,21 +81,15 @@ export class BatteryInfoUtil {
 
     // Get battery current/voltage with su -c
     try {
-      const currentResult = execSync(
+      const currentResult = (await this.execCommand(
         `su -c "cat /sys/class/power_supply/battery/current_now" 2>/dev/null`,
-        {
-          encoding: 'utf8',
-          timeout: 2000,
-        },
-      ).trim();
+        2000,
+      )).trim();
 
-      const voltageResult = execSync(
+      const voltageResult = (await this.execCommand(
         `su -c "cat /sys/class/power_supply/battery/voltage_now" 2>/dev/null`,
-        {
-          encoding: 'utf8',
-          timeout: 2000,
-        },
-      ).trim();
+        2000,
+      )).trim();
 
       result.currentMicroAmps = Math.abs(parseInt(currentResult) || 0);
       result.voltageMicroVolts = parseInt(voltageResult) || 0;
@@ -85,13 +106,10 @@ export class BatteryInfoUtil {
 
     // Estimate mining power based on CPU frequency
     try {
-      const freqResult = execSync(
+      const freqResult = (await this.execCommand(
         `su -c "cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq 2>/dev/null | head -8"`,
-        {
-          encoding: 'utf8',
-          timeout: 2000,
-        },
-      ).trim();
+        2000,
+      )).trim();
 
       if (freqResult) {
         const frequencies = freqResult
@@ -118,10 +136,7 @@ export class BatteryInfoUtil {
     if (result.estimatedMiningPowerWatts === 0) {
       // Try to detect device type and set appropriate estimate
       try {
-        const cpuInfo = execSync('cat /proc/cpuinfo 2>/dev/null | head -20', {
-          encoding: 'utf8',
-          timeout: 1000,
-        }).toLowerCase();
+        const cpuInfo = (await this.execCommand('cat /proc/cpuinfo 2>/dev/null | head -20', 1000)).toLowerCase();
         
         if (cpuInfo.includes('raspberry') || cpuInfo.includes('bcm')) {
           result.estimatedMiningPowerWatts = 15.0; // Raspberry Pi (your data: 6mhs at 15W)
@@ -142,13 +157,13 @@ export class BatteryInfoUtil {
   }
 
   /** ✅ Get battery info on Linux (ACPI or sysfs) */
-  private static getLinuxBatteryInfo() {
+  private static async getLinuxBatteryInfo() {
     try {
-      const acpiOutput = execSync('acpi -b', { encoding: 'utf8' });
+      const acpiOutput = await this.execCommand('acpi -b');
       const match = acpiOutput.match(/Battery \d+: (\w+), (\d+)%.*?([-\d.]+)? ?°?C?/);
       
       if (match) {
-        const powerData = this.getEnhancedPowerData();
+        const powerData = await this.getEnhancedPowerData();
         
         return {
           health: 'GOOD',
@@ -171,9 +186,9 @@ export class BatteryInfoUtil {
   }
 
   /** ✅ Get battery info on Raspberry Pi */
-  private static getRaspberryBatteryInfo() {
+  private static async getRaspberryBatteryInfo() {
     try {
-      const powerStatus = execSync('vcgencmd get_throttled', { encoding: 'utf8' }).trim();
+      const powerStatus = (await this.execCommand('vcgencmd get_throttled')).trim();
       const underVoltage = (parseInt(powerStatus, 16) & 0x1) !== 0;
 
       return {
@@ -194,16 +209,13 @@ export class BatteryInfoUtil {
   }
 
   /** ✅ Default fallback */
-  private static getDefaultBatteryInfo() {
+  private static async getDefaultBatteryInfo() {
     // Get a reasonable power estimate based on system context
     let defaultPowerEstimate = 2.0; // Updated conservative fallback
     
     try {
       // Try to get some system info for better estimate
-      const cpuInfo = execSync('cat /proc/cpuinfo 2>/dev/null | head -10', {
-        encoding: 'utf8',
-        timeout: 1000,
-      }).toLowerCase();
+      const cpuInfo = (await this.execCommand('cat /proc/cpuinfo 2>/dev/null | head -10', 1000)).toLowerCase();
       
       if (cpuInfo.includes('raspberry') || cpuInfo.includes('bcm')) {
         defaultPowerEstimate = 15.0; // Raspberry Pi (6mhs at 15W)

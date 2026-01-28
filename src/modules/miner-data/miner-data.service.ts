@@ -13,6 +13,8 @@ export class MinerDataService implements OnModuleInit, OnApplicationShutdown {
   private telemetryInterval: NodeJS.Timeout | null = null;
   private minerId: string | null = null;
   private rigToken: string | null = null;
+  private telemetryInFlight = false;
+  private lastTelemetrySentAt?: string;
 
   constructor(
     private readonly telemetryService: EnhancedTelemetryService,
@@ -35,7 +37,7 @@ export class MinerDataService implements OnModuleInit, OnApplicationShutdown {
     );
 
     // ✅ Load minerId from config and rigToken from environment
-    const config = this.configService.getConfig();
+    const config = await this.configService.getConfig();
     this.minerId = config?.minerId || null;
     this.rigToken = this.configService.getRigToken();
 
@@ -58,12 +60,36 @@ export class MinerDataService implements OnModuleInit, OnApplicationShutdown {
     }
 
     // ✅ Send telemetry immediately on startup
-    await this.sendTelemetry();
+    await this.runTelemetrySend();
 
     // ✅ Send telemetry every 60s
-    this.telemetryInterval = setInterval(async () => {
-      await this.sendTelemetry();
+    this.telemetryInterval = setInterval(() => {
+      void this.runTelemetrySend();
     }, 60000);
+  }
+
+  private async runTelemetrySend(): Promise<void> {
+    if (this.telemetryInFlight) {
+      this.loggingService.log(
+        '⏳ Telemetry send already running, skipping interval tick',
+        'DEBUG',
+        'miner-data',
+      );
+      return;
+    }
+
+    this.telemetryInFlight = true;
+    try {
+      await this.sendTelemetry();
+    } catch (error) {
+      this.loggingService.log(
+        `❌ Telemetry send failed: ${error instanceof Error ? error.message : String(error)}`,
+        'ERROR',
+        'miner-data',
+      );
+    } finally {
+      this.telemetryInFlight = false;
+    }
   }
 
   async sendTelemetry() {
@@ -86,10 +112,12 @@ export class MinerDataService implements OnModuleInit, OnApplicationShutdown {
       // );
 
       await this.apiService.updateTelemetry(this.minerId, telemetryData);
+      this.lastTelemetrySentAt = new Date().toISOString();
       this.loggingService.log(
         '✅ Telemetry successfully sent to API.',
         'INFO',
         'miner-data',
+        { minerId: this.minerId, lastTelemetrySentAt: this.lastTelemetrySentAt },
       );
     } catch (error) {
       // Enhanced error logging
@@ -149,5 +177,9 @@ export class MinerDataService implements OnModuleInit, OnApplicationShutdown {
         'miner-data',
       );
     }
+  }
+
+  getLastTelemetrySentAt(): string | undefined {
+    return this.lastTelemetrySentAt;
   }
 }

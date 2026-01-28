@@ -7,8 +7,8 @@ export class TelemetryController {
   constructor(private readonly telemetryService: EnhancedTelemetryService) {}
 
   @Get()
-  getTelemetry(): Promise<TelemetryData | null> {
-    return this.telemetryService.getTelemetryData();
+  async getTelemetry(): Promise<TelemetryData | null> {
+    return this.telemetryService.getTelemetrySnapshot();
   }
 
   @Get('history')

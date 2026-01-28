@@ -2,9 +2,10 @@ import { Injectable } from '@nestjs/common';
 import { LoggingService } from '../logging/logging.service';
 import { OsDetectionService } from '../device-monitoring/os-detection/os-detection.service';
 import { ConfigService } from '../config/config.service';
-import { execSync } from 'child_process';
+import { exec } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
+import { promisify } from 'util';
 import {
   MinerInfo,
   SystemCompatibility,
@@ -17,15 +18,40 @@ export class MinerSoftwareService {
   private readonly supportedMiners = ['ccminer', 'xmrig'];
   private readonly appsDir = path.join(process.cwd(), 'apps');
 
+  private readonly execAsync = promisify(exec);
+
   constructor(
     private readonly loggingService: LoggingService,
     private readonly osDetectionService: OsDetectionService,
     private readonly configService: ConfigService,
   ) {}
+
+  private async execCommand(command: string, timeout?: number, maxBuffer: number = 10 * 1024 * 1024): Promise<string> {
+    const { stdout } = await this.execAsync(command, { encoding: 'utf8', timeout, maxBuffer });
+    return stdout ?? '';
+  }
+
+  private async fileExists(filePath: string): Promise<boolean> {
+    try {
+      await fs.promises.access(filePath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async isExecutable(filePath: string): Promise<boolean> {
+    try {
+      await fs.promises.access(filePath, fs.constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  }
   /**
    * Check CPU compatibility based on your installer logic
    */
-  checkCPUCompatibility(): SystemCompatibility {
+  async checkCPUCompatibility(): Promise<SystemCompatibility> {
     const osType = this.osDetectionService.detectOS();
     
     let cpuFlags: string[] = [];
@@ -42,7 +68,7 @@ export class MinerSoftwareService {
       // Check for root access
       if (isTermux) {
         try {
-          execSync('command -v su', { stdio: 'pipe' });
+          await this.execCommand('command -v su');
           hasRoot = true;
         } catch {
           hasRoot = false;
@@ -50,9 +76,7 @@ export class MinerSoftwareService {
       } else {
         hasRoot = process.getuid ? process.getuid() === 0 : false;
       }      // Get CPU information
-      const cpuInfo = execSync('lscpu 2>/dev/null || cat /proc/cpuinfo', {
-        encoding: 'utf8',
-      });
+      const cpuInfo = await this.execCommand('lscpu 2>/dev/null || cat /proc/cpuinfo');
 
       // Check for 64-bit support
       is64Bit = cpuInfo.includes('64-bit') || cpuInfo.includes('x86_64') || cpuInfo.includes('aarch64');
@@ -106,7 +130,7 @@ export class MinerSoftwareService {
   /**
    * Get miner information
    */
-  getMinerInfo(minerName: string): MinerInfo {
+  async getMinerInfo(minerName: string): Promise<MinerInfo> {
     const minerPath = path.join(this.appsDir, minerName, minerName);
     const configPath = path.join(this.appsDir, minerName, 'config.json');
     
@@ -116,23 +140,18 @@ export class MinerSoftwareService {
     let compatible = false;
 
     try {
-      exists = fs.existsSync(minerPath);
+      exists = await this.fileExists(minerPath);
       
       if (exists) {
         // Check if executable
-        try {
-          fs.accessSync(minerPath, fs.constants.X_OK);
-          executable = true;
-        } catch {
-          executable = false;
-        }
+        executable = await this.isExecutable(minerPath);
 
         // Try to get version
         try {
-          const versionOutput = execSync(`${minerPath} --version 2>/dev/null || ${minerPath} --help 2>/dev/null`, {
-            encoding: 'utf8',
-            timeout: 5000,
-          });
+          const versionOutput = await this.execCommand(
+            `${minerPath} --version 2>/dev/null || ${minerPath} --help 2>/dev/null`,
+            5000,
+          );
           
           if (minerName === 'ccminer') {
             const versionMatch = versionOutput.match(/ccminer\s+(\d+\.\d+\.\d+)/i);
@@ -190,7 +209,7 @@ export class MinerSoftwareService {
         ),
       ),
     ]);
-    const minerInfo = this.getMinerInfo(minerName);
+    const minerInfo = await this.getMinerInfo(minerName);
 
     // Check CPU compatibility
     if (!compatibility.is64Bit) {
@@ -316,7 +335,7 @@ export class MinerSoftwareService {
     const result: Record<string, MinerInfo & { validation: MinerValidationResult }> = {};
 
     for (const minerName of this.supportedMiners) {
-      const info = this.getMinerInfo(minerName);
+      const info = await this.getMinerInfo(minerName);
       const validation = await Promise.race([
         this.validateMiner(minerName),
         new Promise<any>((_, reject) =>
@@ -339,10 +358,8 @@ export class MinerSoftwareService {
   /**
    * Ensure apps directory exists
    */
-  private ensureAppsDirectory(): void {
-    if (!fs.existsSync(this.appsDir)) {
-      fs.mkdirSync(this.appsDir, { recursive: true });
-    }
+  private async ensureAppsDirectory(): Promise<void> {
+    await fs.promises.mkdir(this.appsDir, { recursive: true });
   }
 
   /**
@@ -352,8 +369,8 @@ export class MinerSoftwareService {
     try {
       const minerPath = path.join(this.appsDir, minerName, minerName);
       
-      if (fs.existsSync(minerPath)) {
-        execSync(`chmod +x ${minerPath}`);
+      if (await this.fileExists(minerPath)) {
+        await this.execCommand(`chmod +x ${minerPath}`);
         this.loggingService.log(
           `Set executable permissions for ${minerName}`,
           'INFO',
@@ -379,9 +396,7 @@ export class MinerSoftwareService {
   async selectCcminerBranch(compatibility: SystemCompatibility): Promise<string> {
     try {
       // Get detailed CPU information
-      const cpuInfo = execSync('lscpu 2>/dev/null || cat /proc/cpuinfo', { 
-        encoding: 'utf8' 
-      });
+      const cpuInfo = await this.execCommand('lscpu 2>/dev/null || cat /proc/cpuinfo');
 
       // Extract CPU model and architecture
       let cpuModel = '';
@@ -482,7 +497,7 @@ export class MinerSoftwareService {
       // Check architecture as a fallback if model name doesn't have ARM core info
       else if (cpuArch === 'aarch64' || cpuArch === 'arm64') {
         // Determine a reasonable fallback for ARM64 architectures
-        if (cpuInfo.includes('bcm') || this.isRaspberryPi()) {
+        if (cpuInfo.includes('bcm') || await this.isRaspberryPi()) {
           ccBranch = 'a72-a53'; // Common for Raspberry Pi 4 and similar
         } else {
           ccBranch = 'a55'; // Most common newer ARM core
@@ -515,11 +530,11 @@ export class MinerSoftwareService {
   /**
    * Check if running on Raspberry Pi
    */
-  private isRaspberryPi(): boolean {
+  private async isRaspberryPi(): Promise<boolean> {
     try {
       const deviceTreePath = '/proc/device-tree/model';
-      if (fs.existsSync(deviceTreePath)) {
-        const model = fs.readFileSync(deviceTreePath, 'utf8');
+      if (await this.fileExists(deviceTreePath)) {
+        const model = await fs.promises.readFile(deviceTreePath, 'utf8');
         return model.toLowerCase().includes('raspberry');
       }
     } catch {
@@ -547,9 +562,7 @@ export class MinerSoftwareService {
 
     try {
       // Ensure directory exists
-      if (!fs.existsSync(ccminerDir)) {
-        fs.mkdirSync(ccminerDir, { recursive: true });
-      }
+      await fs.promises.mkdir(ccminerDir, { recursive: true });
 
       // Check if selected branch is available
       const branchUrl = `https://raw.githubusercontent.com/Darktron/pre-compiled/${ccBranch}/ccminer`;
@@ -560,7 +573,7 @@ export class MinerSoftwareService {
           ? `powershell -Command "try { Invoke-WebRequest -Uri '${branchUrl}' -Method Head | Out-Null; exit 0 } catch { exit 1 }"`
           : `wget -q --spider "${branchUrl}"`;
         
-        execSync(testCommand, { stdio: 'pipe' });
+        await this.execCommand(testCommand, 10000);
         
         this.loggingService.log(
           `Downloading ccminer from branch: ${ccBranch}`,
@@ -581,7 +594,7 @@ export class MinerSoftwareService {
           ? `powershell -Command "Invoke-WebRequest -Uri '${genericUrl}' -OutFile '${ccminerPath}'"`
           : `wget -q -O "${ccminerPath}" "${genericUrl}"`;
         
-        execSync(downloadCommand);
+        await this.execCommand(downloadCommand, 60000);
       }
 
       // Download the ccminer binary
@@ -589,21 +602,21 @@ export class MinerSoftwareService {
         ? `powershell -Command "Invoke-WebRequest -Uri '${branchUrl}' -OutFile '${ccminerPath}'"`
         : `wget -q -O "${ccminerPath}" "${branchUrl}"`;
       
-      execSync(downloadCommand);
+      await this.execCommand(downloadCommand, 60000);
 
       // Set executable permissions (Unix-like systems only)
       if (process.platform !== 'win32') {
-        execSync(`chmod +x "${ccminerPath}"`);
+        await this.execCommand(`chmod +x "${ccminerPath}"`);
       }
 
       // Download default config if it doesn't exist
-      if (!fs.existsSync(configPath)) {
+      if (!(await this.fileExists(configPath))) {
         const configUrl = 'https://raw.githubusercontent.com/dismaster/RG3DUI/main/config.json';
         const configDownloadCommand = process.platform === 'win32'
           ? `powershell -Command "Invoke-WebRequest -Uri '${configUrl}' -OutFile '${configPath}'"`
           : `wget -q -O "${configPath}" "${configUrl}"`;
         
-        execSync(configDownloadCommand);
+        await this.execCommand(configDownloadCommand, 60000);
       }
 
       this.loggingService.log(
@@ -639,9 +652,9 @@ export class MinerSoftwareService {
     const xmrigPath = path.join(xmrigDir, 'xmrig');
     
     // Early check: if binary already exists and is executable, skip compilation
-    if (fs.existsSync(xmrigPath)) {
+    if (await this.fileExists(xmrigPath)) {
       try {
-        const stats = fs.statSync(xmrigPath);
+        const stats = await fs.promises.stat(xmrigPath);
         if (stats.isFile() && (stats.mode & 0o111)) {
           this.loggingService.log(
             `✅ XMRig binary already exists at ${xmrigPath}, skipping compilation`,
@@ -660,9 +673,7 @@ export class MinerSoftwareService {
 
     try {
       // Ensure xmrig directory exists
-      if (!fs.existsSync(xmrigDir)) {
-        fs.mkdirSync(xmrigDir, { recursive: true });
-      }
+      await fs.promises.mkdir(xmrigDir, { recursive: true });
 
       const environmentType = compatibility.isTermux ? 'Termux' : 'Linux';
       this.loggingService.log(
@@ -675,10 +686,11 @@ export class MinerSoftwareService {
       if (compatibility.isTermux) {
         // Termux environment
         this.loggingService.log('Installing cmake and dependencies for Termux...', 'INFO', 'miner-software');
-        execSync('pkg install cmake -y', { stdio: 'pipe' });
-        execSync('pkg install make -y', { stdio: 'pipe' });
-        execSync('pkg install clang -y', { stdio: 'pipe' });
-        execSync('pkg install git -y', { stdio: 'pipe' });      } else {
+        await this.execCommand('pkg install cmake -y', 300000);
+        await this.execCommand('pkg install make -y', 300000);
+        await this.execCommand('pkg install clang -y', 300000);
+        await this.execCommand('pkg install git -y', 300000);
+      } else {
         // Regular Linux environment - use apt-based installation
         const isRoot = process.getuid ? process.getuid() === 0 : false;
         const cmdPrefix = isRoot ? '' : 'sudo ';
@@ -690,29 +702,26 @@ export class MinerSoftwareService {
         );
         
         // Update package index
-        execSync(`${cmdPrefix}apt update`, { stdio: 'pipe' });
+        await this.execCommand(`${cmdPrefix}apt update`, 300000);
         
         // Install build dependencies
-        execSync(`${cmdPrefix}apt install -y cmake build-essential git`, { stdio: 'pipe' });
-        execSync(`${cmdPrefix}apt install -y libuv1-dev libssl-dev libhwloc-dev`, { stdio: 'pipe' });
+        await this.execCommand(`${cmdPrefix}apt install -y cmake build-essential git`, 300000);
+        await this.execCommand(`${cmdPrefix}apt install -y libuv1-dev libssl-dev libhwloc-dev`, 300000);
       }// Step 2: Clone the repository
       const gitRepoUrl = 'https://github.com/dismaster/xmrig';
       this.loggingService.log(`Cloning XMRig repository from: ${gitRepoUrl}`, 'INFO', 'miner-software');
       
       // Remove existing directory if it exists
-      if (fs.existsSync(buildDir)) {
-        execSync(`rm -rf "${buildDir}"`, { stdio: 'pipe' });
+      if (await this.fileExists(buildDir)) {
+        await this.execCommand(`rm -rf "${buildDir}"`, 30000);
       }
       
-      execSync(
-        `cd "${homeDir}" && git clone ${gitRepoUrl}`,
-        { stdio: 'pipe' },
-      );
+      await this.execCommand(`cd "${homeDir}" && git clone ${gitRepoUrl}`, 300000);
 
       // Step 3: Create build directory
       this.loggingService.log('Creating build directory...', 'INFO', 'miner-software');
       const buildPath = path.join(buildDir, 'build');
-      execSync(`mkdir -p "${buildPath}"`, { stdio: 'pipe' });
+      await this.execCommand(`mkdir -p "${buildPath}"`);
 
       // Step 4: Configure with cmake (different options for different environments)
       this.loggingService.log('Configuring XMRig with cmake...', 'INFO', 'miner-software');
@@ -726,20 +735,21 @@ export class MinerSoftwareService {
         cmakeOptions = '';
       }
       
-      execSync(`cd "${buildPath}" && cmake ${cmakeOptions} ..`, { stdio: 'pipe' });      // Step 5: Compile with make
+      await this.execCommand(`cd "${buildPath}" && cmake ${cmakeOptions} ..`, 300000);
+      // Step 5: Compile with make
       this.loggingService.log('Compiling XMRig (this may take several minutes)...', 'INFO', 'miner-software');
       
       // Get CPU count with multiple detection methods for better accuracy
       let cpuCount = 1; // Default fallback
       try {
         // Method 1: Try nproc first
-        const nprocResult = execSync('nproc', { encoding: 'utf8' }).trim();
+        const nprocResult = (await this.execCommand('nproc')).trim();
         cpuCount = parseInt(nprocResult) || 1;
         this.loggingService.log(`nproc detected: ${cpuCount} CPUs`, 'DEBUG', 'miner-software');
         
         // Method 2: Cross-check with /proc/cpuinfo for validation
         try {
-          const cpuInfoContent = execSync('cat /proc/cpuinfo', { encoding: 'utf8' });
+          const cpuInfoContent = await this.execCommand('cat /proc/cpuinfo');
           const processorMatches = cpuInfoContent.match(/^processor\s*:/gm);
           const procInfoCpuCount = processorMatches ? processorMatches.length : 0;
           
@@ -760,7 +770,7 @@ export class MinerSoftwareService {
         
         // Method 3: Try lscpu as another validation method
         try {
-          const lscpuResult = execSync('lscpu | grep "^CPU(s):" | awk \'{print $2}\'', { encoding: 'utf8' }).trim();
+          const lscpuResult = (await this.execCommand('lscpu | grep "^CPU(s):" | awk \'{print $2}\'' )).trim();
           const lscpuCpuCount = parseInt(lscpuResult) || 0;
           
           if (lscpuCpuCount > 0) {
@@ -793,7 +803,8 @@ export class MinerSoftwareService {
       
       this.loggingService.log(`Final CPU count for compilation: ${cpuCount}`, 'INFO', 'miner-software');
       
-      execSync(`cd "${buildPath}" && make -j${cpuCount}`, { stdio: 'pipe', timeout: 900000 }); // 15 min timeout// Step 6: Find and copy the compiled binary with fallback paths
+      await this.execCommand(`cd "${buildPath}" && make -j${cpuCount}`, 900000);
+      // Step 6: Find and copy the compiled binary with fallback paths
       this.loggingService.log('Locating compiled XMRig binary...', 'INFO', 'miner-software');
       
       // Multiple possible locations for the compiled binary
@@ -807,7 +818,7 @@ export class MinerSoftwareService {
       
       let compiledXmrigPath: string | null = null;
       for (const possiblePath of possibleBinaryPaths) {
-        if (fs.existsSync(possiblePath)) {
+        if (await this.fileExists(possiblePath)) {
           compiledXmrigPath = possiblePath;
           this.loggingService.log(
             `Found compiled XMRig binary at: ${possiblePath}`,
@@ -820,23 +831,23 @@ export class MinerSoftwareService {
         if (!compiledXmrigPath) {
         // Enhanced debugging: Log all checked paths and their status
         this.loggingService.log('Detailed binary search debugging:', 'WARN', 'miner-software');
-        possibleBinaryPaths.forEach((path, index) => {
-          const exists = fs.existsSync(path);
+        for (const [index, path] of possibleBinaryPaths.entries()) {
+          const exists = await this.fileExists(path);
           let details = `Path ${index + 1}: ${path} - ${exists ? 'EXISTS' : 'NOT FOUND'}`;
           if (exists) {
             try {
-              const stats = fs.statSync(path);
+              const stats = await fs.promises.stat(path);
               details += ` (size: ${stats.size} bytes, executable: ${!!(stats.mode & 0o111)})`;
             } catch (e) {
               details += ` (stat error: ${e.message})`;
             }
           }
           this.loggingService.log(details, 'WARN', 'miner-software');
-        });
+        }
 
         // Log directory contents for debugging
         try {
-          const buildContents = execSync(`find "${buildDir}" -name "xmrig" -type f 2>/dev/null || true`, { encoding: 'utf8' }).trim();
+          const buildContents = (await this.execCommand(`find "${buildDir}" -name "xmrig" -type f 2>/dev/null || true`)).trim();
           this.loggingService.log(
             `Find command results: ${buildContents || 'No xmrig binary found'}`,
             'WARN',
@@ -856,7 +867,7 @@ export class MinerSoftwareService {
           }
           
           // Also list the entire build directory structure for debugging
-          const buildStructure = execSync(`find "${buildDir}" -type f | head -20`, { encoding: 'utf8' }).trim();
+          const buildStructure = (await this.execCommand(`find "${buildDir}" -type f | head -20`)).trim();
           this.loggingService.log(`Build directory structure (first 20 files): ${buildStructure}`, 'WARN', 'miner-software');
           
         } catch (error) {
@@ -868,37 +879,37 @@ export class MinerSoftwareService {
       this.loggingService.log(`  Destination: ${xmrigPath}`, 'INFO', 'miner-software');
       
       // Verify source exists before copying
-      if (!fs.existsSync(compiledXmrigPath)) {
+      if (!(await this.fileExists(compiledXmrigPath))) {
         throw new Error(`Source binary not found at ${compiledXmrigPath}`);
       }
       
       // Ensure destination directory exists
       const xmrigDirCheck = path.dirname(xmrigPath);
-      if (!fs.existsSync(xmrigDirCheck)) {
+      if (!(await this.fileExists(xmrigDirCheck))) {
         this.loggingService.log(`  Creating destination directory: ${xmrigDirCheck}`, 'INFO', 'miner-software');
-        fs.mkdirSync(xmrigDirCheck, { recursive: true });
+        await fs.promises.mkdir(xmrigDirCheck, { recursive: true });
       }
       
-      execSync(`cp "${compiledXmrigPath}" "${xmrigPath}"`, { stdio: 'pipe' });
+      await this.execCommand(`cp "${compiledXmrigPath}" "${xmrigPath}"`);
       
       // Verify copy was successful
-      if (!fs.existsSync(xmrigPath)) {
+      if (!(await this.fileExists(xmrigPath))) {
         throw new Error(`Failed to copy binary to ${xmrigPath}`);
       }
       
-      const copiedStats = fs.statSync(xmrigPath);
+      const copiedStats = await fs.promises.stat(xmrigPath);
       this.loggingService.log(`  Copy successful - Size: ${copiedStats.size} bytes`, 'INFO', 'miner-software');
       
       // Set executable permissions
-      execSync(`chmod +x "${xmrigPath}"`, { stdio: 'pipe' });
+      await this.execCommand(`chmod +x "${xmrigPath}"`);
 
       // Step 7: Clean up build directory
       this.loggingService.log('Cleaning up build directory...', 'INFO', 'miner-software');
-      execSync(`rm -rf "${buildDir}"`, { stdio: 'pipe' });
+      await this.execCommand(`rm -rf "${buildDir}"`, 30000);
 
       // Step 8: Download default config if it doesn't exist
       const configPath = path.join(xmrigDir, 'config.json');
-      if (!fs.existsSync(configPath)) {
+      if (!(await this.fileExists(configPath))) {
         this.loggingService.log('Downloading default XMRig config...', 'INFO', 'miner-software');
         const configUrl = 'https://raw.githubusercontent.com/dismaster/RG3DUI/main/xmrig-config.json';
         
@@ -906,10 +917,10 @@ export class MinerSoftwareService {
           ? `wget -q -O "${configPath}" "${configUrl}"`
           : `curl -s -L -o "${configPath}" "${configUrl}"`;
         
-        execSync(downloadCommand, { stdio: 'pipe' });
+        await this.execCommand(downloadCommand, 60000);
       }      // Verify the final installation
       this.loggingService.log('Verifying XMRig installation...', 'INFO', 'miner-software');
-      const finalMinerInfo = this.getMinerInfo('xmrig');
+      const finalMinerInfo = await this.getMinerInfo('xmrig');
       this.loggingService.log(
         `Final verification - Binary exists: ${finalMinerInfo.exists}, Executable: ${finalMinerInfo.executable}, Path: ${finalMinerInfo.path}`,
         'INFO',
@@ -933,8 +944,8 @@ export class MinerSoftwareService {
 
       // Clean up on failure
       try {
-        if (fs.existsSync(buildDir)) {
-          execSync(`rm -rf "${buildDir}"`, { stdio: 'pipe' });
+        if (await this.fileExists(buildDir)) {
+          await this.execCommand(`rm -rf "${buildDir}"`, 30000);
         }
       } catch {
         // Ignore cleanup errors
@@ -975,7 +986,7 @@ export class MinerSoftwareService {
 
     try {
       // Check for git
-      execSync('command -v git', { stdio: 'pipe' });
+      await this.execCommand('command -v git');
     } catch {
       issues.push('Git is not installed');
       if (compatibility.isTermux) {
@@ -987,7 +998,7 @@ export class MinerSoftwareService {
 
     try {
       // Check for make
-      execSync('command -v make', { stdio: 'pipe' });
+      await this.execCommand('command -v make');
     } catch {
       issues.push('Make is not installed');
       if (compatibility.isTermux) {
@@ -999,7 +1010,7 @@ export class MinerSoftwareService {
 
     try {
       // Check for gcc/clang
-      execSync('command -v gcc || command -v clang', { stdio: 'pipe' });
+      await this.execCommand('command -v gcc || command -v clang');
     } catch {
       issues.push('No C++ compiler found');
       if (compatibility.isTermux) {
@@ -1011,7 +1022,7 @@ export class MinerSoftwareService {
 
     try {
       // Check for cmake
-      execSync('command -v cmake', { stdio: 'pipe' });
+      await this.execCommand('command -v cmake');
     } catch {
       issues.push('Cmake is not installed');
       if (compatibility.isTermux) {
@@ -1023,7 +1034,7 @@ export class MinerSoftwareService {
 
     // Check available disk space (approximate requirement: 500MB)
     try {
-      const dfOutput = execSync('df $HOME', { encoding: 'utf8' });
+      const dfOutput = await this.execCommand('df $HOME');
       const lines = dfOutput.split('\n');
       if (lines.length > 1) {
         const stats = lines[1].split(/\s+/);
