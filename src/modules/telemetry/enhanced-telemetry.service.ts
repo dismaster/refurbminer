@@ -545,7 +545,12 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
       const rawData = await fs.promises.readFile(this.telemetryFilePath, 'utf8');
       const parsed = JSON.parse(rawData) as TelemetryData;
       if (this.validateTelemetryStructure(parsed)) {
-        return parsed ?? null;
+        const telemetry = parsed ?? null;
+        if (telemetry && telemetry.appVersion !== this.appVersion) {
+          telemetry.appVersion = this.appVersion;
+          void this.writeJsonAtomic(this.telemetryFilePath, telemetry);
+        }
+        return telemetry;
       }
       throw new Error('Telemetry snapshot failed schema validation');
     } catch (error) {
@@ -1108,10 +1113,23 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
 
   private async getAppVersion(): Promise<string> {
     try {
-      const packageJsonPath = path.join(process.cwd(), 'package.json');
-      try {
-        await fs.promises.access(packageJsonPath);
-      } catch {
+      const candidatePaths = [
+        path.join(process.cwd(), 'package.json'),
+        path.join(process.cwd(), '..', 'package.json'),
+      ];
+
+      let packageJsonPath: string | null = null;
+      for (const candidate of candidatePaths) {
+        try {
+          await fs.promises.access(candidate);
+          packageJsonPath = candidate;
+          break;
+        } catch {
+          // continue
+        }
+      }
+
+      if (!packageJsonPath) {
         return '0.0.0';
       }
 
