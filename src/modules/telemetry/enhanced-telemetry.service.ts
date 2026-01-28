@@ -286,11 +286,13 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
         { cycleId },
       );
 
-      // Core system data - use safe sync operations
-      const minerRunning = safeExecute(
-        () => this.minerManagerService.isMinerRunning(),
+      // Core system data - use safe async operations
+      const minerRunning = await safeExecuteAsync(
+        () => this.minerManagerService.isMinerRunningAsync(),
         false,
         'miner running check',
+        2,
+        500,
         this.loggingService.log.bind(this.loggingService),
       );
 
