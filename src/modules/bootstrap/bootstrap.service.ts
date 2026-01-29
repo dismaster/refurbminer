@@ -356,6 +356,22 @@ export class BootstrapService implements OnModuleInit {
     try {
       const osType = this.deviceMonitoringService.getOS();
 
+      // Check if XMRig is the configured miner (requires compilation tools)
+      let needsCompilationTools = false;
+      try {
+        const config = await this.configService.getConfig();
+        if (config && config.minerSoftware && config.minerSoftware.toLowerCase() === 'xmrig') {
+          needsCompilationTools = true;
+          this.loggingService.log(
+            '🔧 XMRig detected in config - compilation tools will be installed',
+            'DEBUG',
+            'bootstrap',
+          );
+        }
+      } catch {
+        // Config not available yet, continue without checking
+      }
+
       const PACKAGE_MAPPING: Record<string, Record<string, string[]>> = {
         'apt-get': {
           essential: ['curl', 'screen', 'git'],
@@ -363,7 +379,7 @@ export class BootstrapService implements OnModuleInit {
           networkFallback: ['netcat', 'bind9-host', 'iputils-ping'],
           system: ['gnupg', 'debianutils'],
           hardware: ['lm-sensors', 'acpi', 'lshw'],
-          compilation: ['make', 'clang', 'cmake'],
+          compilation: needsCompilationTools ? ['make', 'clang', 'cmake'] : [],
         },
         dnf: {
           essential: ['curl', 'screen', 'git'],
@@ -371,7 +387,7 @@ export class BootstrapService implements OnModuleInit {
           networkFallback: ['nmap-ncat', 'bind-utils', 'iputils'],
           system: ['gnupg', 'which'],
           hardware: ['lm_sensors', 'acpi', 'lshw'],
-          compilation: ['make', 'clang', 'cmake'],
+          compilation: needsCompilationTools ? ['make', 'clang', 'cmake'] : [],
         },
         yum: {
           essential: ['curl', 'screen', 'git'],
@@ -379,7 +395,7 @@ export class BootstrapService implements OnModuleInit {
           networkFallback: ['nmap-ncat', 'bind-utils', 'iputils'],
           system: ['gnupg', 'which'],
           hardware: ['lm_sensors', 'acpi', 'lshw'],
-          compilation: ['make', 'clang', 'cmake'],
+          compilation: needsCompilationTools ? ['make', 'clang', 'cmake'] : [],
         },
         pacman: {
           essential: ['curl', 'screen', 'git'],
@@ -387,15 +403,16 @@ export class BootstrapService implements OnModuleInit {
           networkFallback: ['gnu-netcat', 'bind', 'iputils'],
           system: ['gnupg', 'which'],
           hardware: ['lm_sensors', 'acpi', 'lshw'],
-          compilation: ['make', 'clang', 'cmake'],
+          compilation: needsCompilationTools ? ['make', 'clang', 'cmake'] : [],
         },
         pkg: {
           essential: ['curl', 'screen', 'git'],
           network: ['netcat-openbsd', 'dnsutils', 'traceroute'],
           networkFallback: ['netcat', 'bind9-host', 'iputils-ping'],
           system: ['gnupg', 'debianutils'],
-          hardware: ['lm-sensors', 'acpi', 'lshw'],
-          compilation: ['make', 'clang', 'cmake'],
+          // Hardware packages not available in Termux - skip them
+          // Compilation packages included only if XMRig is configured
+          compilation: needsCompilationTools ? ['make', 'clang', 'cmake'] : [],
         },
       };
 
@@ -498,7 +515,15 @@ export class BootstrapService implements OnModuleInit {
 
     for (const group of packageGroups) {
       const packages = packageMap[group] || [];
-      if (packages.length === 0) continue;
+      if (packages.length === 0) {
+        // Skip empty package groups (e.g., hardware/compilation not available on Termux)
+        this.loggingService.log(
+          `Skipping ${group} packages (not available for this platform)`,
+          'DEBUG',
+          'bootstrap',
+        );
+        continue;
+      }
 
       this.loggingService.log(
         `Installing ${group} packages: ${packages.join(', ')}`,
@@ -517,7 +542,7 @@ export class BootstrapService implements OnModuleInit {
       totalAttempts++;
       if (success) {
         successfulInstalls++;
-      } else if (group === 'network' && packageMap.networkFallback) {
+      } else if (group === 'network' && packageMap.networkFallback && packageMap.networkFallback.length > 0) {
         // Try fallback network packages
         this.loggingService.log(
           `Trying fallback network packages: ${packageMap.networkFallback.join(', ')}`,
@@ -564,22 +589,29 @@ export class BootstrapService implements OnModuleInit {
     logLevel: string,
     timeoutMs: number,
   ): Promise<boolean> {
+    // Skip installation if package list is empty
+    if (packages.length === 0) {
+      return true;
+    }
+
     const packageList = packages.join(' ');
     let installCommand = '';
 
     switch (packageManager) {
       case 'apt-get':
-        installCommand = `${sudoPrefix}apt-get install -yq ${packageList}`;
+        // Use double quiet (-qq) to suppress warnings and info messages
+        installCommand = `${sudoPrefix}apt-get install -qq --no-install-recommends ${packageList} 2>/dev/null`;
         break;
       case 'dnf':
       case 'yum':
-        installCommand = `${sudoPrefix}${packageManager} install -y ${packageList}`;
+        installCommand = `${sudoPrefix}${packageManager} install -y -q ${packageList}`;
         break;
       case 'pacman':
-        installCommand = `${sudoPrefix}pacman -S --noconfirm ${packageList}`;
+        installCommand = `${sudoPrefix}pacman -S --noconfirm --quiet ${packageList}`;
         break;
       case 'pkg':
-        installCommand = `pkg install -y ${packageList}`;
+        // Suppress APT warnings and use quiet mode
+        installCommand = `pkg install -y ${packageList} 2>/dev/null`;
         break;
       default:
         return false;
