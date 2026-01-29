@@ -786,68 +786,38 @@ export class BootstrapService implements OnModuleInit {
       {
         name: 'Main Termux Repository',
         url: 'https://packages.termux.org/apt/termux-main',
-        commands: ['pkg update'],
       },
       {
         name: 'Grimler Mirror (Europe)',
-        url: 'https://grimler.se/termux-packages-24',
-        commands: ['termux-change-repo', 'pkg update'],
+        url: 'https://grimler.se/termux-packages-24/termux-main',
       },
       {
         name: 'Albatross Mirror (Asia)',
-        url: 'https://albatross.termux-mirror.ml',
-        commands: [
-          'sed -i "s@packages.termux.org@albatross.termux-mirror.ml@g" $PREFIX/etc/apt/sources.list',
-          'pkg update',
-        ],
+        url: 'https://albatross.termux-mirror.ml/apt/termux-main',
       },
       {
         name: 'Kcubeterm Mirror (Global)',
-        url: 'https://dl.kcubeterm.me',
-        commands: [
-          'sed -i "s@packages.termux.org@dl.kcubeterm.me@g" $PREFIX/etc/apt/sources.list',
-          'pkg update',
-        ],
+        url: 'https://dl.kcubeterm.me/apt/termux-main',
       },
       {
         name: 'BFSU Mirror (China)',
         url: 'https://mirrors.bfsu.edu.cn/termux/apt/termux-main',
-        commands: [
-          'sed -i "s@packages.termux.org@mirrors.bfsu.edu.cn/termux@g" $PREFIX/etc/apt/sources.list',
-          'pkg update',
-        ],
       },
       {
         name: 'Tsinghua Mirror (China)',
         url: 'https://mirrors.tuna.tsinghua.edu.cn/termux/apt/termux-main',
-        commands: [
-          'sed -i "s@packages.termux.org@mirrors.tuna.tsinghua.edu.cn/termux@g" $PREFIX/etc/apt/sources.list',
-          'pkg update',
-        ],
       },
       {
         name: 'USTC Mirror (China)',
         url: 'https://mirrors.ustc.edu.cn/termux/apt/termux-main',
-        commands: [
-          'sed -i "s@packages.termux.org@mirrors.ustc.edu.cn/termux@g" $PREFIX/etc/apt/sources.list',
-          'pkg update',
-        ],
       },
       {
         name: 'NJU Mirror (China)',
         url: 'https://mirrors.nju.edu.cn/termux/apt/termux-main',
-        commands: [
-          'sed -i "s@packages.termux.org@mirrors.nju.edu.cn/termux@g" $PREFIX/etc/apt/sources.list',
-          'pkg update',
-        ],
       },
       {
         name: 'Haruna Mirror (Japan)',
         url: 'https://termux.haruna.dev/apt/termux-main',
-        commands: [
-          'sed -i "s@packages.termux.org@termux.haruna.dev@g" $PREFIX/etc/apt/sources.list',
-          'pkg update',
-        ],
       },
     ];
 
@@ -903,24 +873,23 @@ export class BootstrapService implements OnModuleInit {
             'bootstrap',
           );
 
-          // Execute repository switch commands
-          for (const command of repo.commands) {
-            if (command === 'termux-change-repo') {
-              // Use termux-change-repo if available
-              try {
-                await execCommand('command -v termux-change-repo', { stdio: 'ignore' });
-                await execCommand('echo -e "1\n1" | termux-change-repo', {
-                  stdio: 'ignore',
-                  timeout: 30000,
-                });
-              } catch {
-                // If termux-change-repo not available, skip this repo
-                continue;
-              }
-            } else {
-              await execCommand(command, { stdio: 'ignore', timeout: 45000 });
-            }
+          // Apply repository URL directly to ensure we are not stuck on a slow/syncing mirror
+          const applied = await this.applyTermuxMirror(repo.url);
+          if (!applied) {
+            this.loggingService.log(
+              `Unable to update Termux sources list for ${repo.name}, attempting update anyway...`,
+              'WARN',
+              'bootstrap',
+            );
           }
+
+          await execCommand('pkg update', { stdio: 'ignore', timeout: 45000 });
+
+          // Quick download test to ensure the repo is actually usable
+          await execCommand('pkg install -y --download-only curl', {
+            stdio: 'ignore',
+            timeout: 15000,
+          });
 
           repoWorking = true;
           this.loggingService.log(
@@ -931,12 +900,21 @@ export class BootstrapService implements OnModuleInit {
           break;
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : String(error);
+          const mirrorSyncing = this.isTermuxMirrorSyncError(errorMessage);
           this.loggingService.log(
             `${repo.name} failed: ${errorMessage}`,
             'WARN',
             'bootstrap',
           );
           lastError = errorMessage;
+
+          if (mirrorSyncing) {
+            this.loggingService.log(
+              'Mirror appears to be syncing. Trying next mirror...',
+              'WARN',
+              'bootstrap',
+            );
+          }
         }
       }
     }
@@ -953,6 +931,78 @@ export class BootstrapService implements OnModuleInit {
         'bootstrap',
       );
     }
+  }
+
+  /** Resolve Termux sources list path */
+  private getTermuxSourcesListPath(): string {
+    const prefix = process.env.PREFIX || '/data/data/com.termux/files/usr';
+    return `${prefix}/etc/apt/sources.list`;
+  }
+
+  /** Update Termux sources list to use a specific mirror URL */
+  private async applyTermuxMirror(mirrorUrl: string): Promise<boolean> {
+    try {
+      const sourcesPath = this.getTermuxSourcesListPath();
+      if (!(await this.fileExists(sourcesPath))) {
+        this.loggingService.log(
+          `Termux sources list not found at ${sourcesPath}`,
+          'WARN',
+          'bootstrap',
+        );
+        return false;
+      }
+
+      const content = await fs.promises.readFile(sourcesPath, 'utf8');
+      let updated = false;
+
+      const newContent = content
+        .split('\n')
+        .map((line) => {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith('deb ')) {
+            return line;
+          }
+
+          if (!trimmed.includes('termux-main')) {
+            return line;
+          }
+
+          const parts = trimmed.split(/\s+/);
+          if (parts.length < 3) {
+            return line;
+          }
+
+          const dist = parts[2] || 'stable';
+          const components = parts.slice(3).join(' ') || 'main';
+          updated = true;
+          return `deb ${mirrorUrl} ${dist} ${components}`;
+        })
+        .join('\n');
+
+      if (updated && newContent !== content) {
+        await fs.promises.writeFile(sourcesPath, newContent, 'utf8');
+        return true;
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.loggingService.log(
+        `Failed to update Termux sources list: ${errorMessage}`,
+        'WARN',
+        'bootstrap',
+      );
+    }
+
+    return false;
+  }
+
+  /** Detect common Termux mirror sync errors */
+  private isTermuxMirrorSyncError(errorMessage: string): boolean {
+    const normalized = errorMessage.toLowerCase();
+    return (
+      normalized.includes('mirror sync in progress') ||
+      normalized.includes('file has unexpected size') ||
+      normalized.includes('some index files failed to download')
+    );
   }
 
   /** Install individual network tools as fallback */
