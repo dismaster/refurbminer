@@ -76,6 +76,14 @@ export class BootstrapService implements OnModuleInit {
     await this.verifyDependencies();
     await this.ensureExecutables();
 
+    // STEP 1.5: Detect and fix any library issues early (before registration)
+    this.loggingService.log(
+      'Checking for system library issues...',
+      'DEBUG',
+      'bootstrap',
+    );
+    await this.detectAndFixLibraryIssues();
+
     // STEP 2: Registration process (now that network tools are available)
     // --- ENFORCE: Do not proceed until minerId is assigned by backend ---
     let validMinerID = false;
@@ -1026,6 +1034,126 @@ export class BootstrapService implements OnModuleInit {
           'bootstrap',
         );
       }
+    }
+  }
+
+  /**
+   * Detect and fix missing library issues on Termux/Linux
+   * Specifically handles libcrypto.so.3 and other common library problems
+   */
+  private async detectAndFixLibraryIssues(): Promise<void> {
+    try {
+      this.loggingService.log(
+        '🔍 Checking for missing library issues...',
+        'DEBUG',
+        'bootstrap',
+      );
+
+      const osType = this.deviceMonitoringService.getOS();
+      if (osType !== 'termux') {
+        return; // Skip on non-Termux systems for now
+      }
+
+      // Test critical commands that depend on system libraries
+      const criticalCommands = [
+        { cmd: 'screen -ls', name: 'screen', dependsOn: 'libtermux-auth.so' },
+        { cmd: 'chmod --version', name: 'chmod', dependsOn: 'libc.so' },
+        { cmd: 'ls -la /tmp', name: 'ls', dependsOn: 'libc.so' },
+      ];
+
+      let foundIssues = false;
+
+      for (const test of criticalCommands) {
+        try {
+          await execCommand(test.cmd, { stdio: 'ignore', timeout: 5000 });
+        } catch (error) {
+          const errorMsg = error instanceof Error ? error.message : String(error);
+
+          // Check if this is a library error
+          if (
+            errorMsg.includes('CANNOT LINK EXECUTABLE') ||
+            errorMsg.includes('library') ||
+            errorMsg.includes('not found')
+          ) {
+            foundIssues = true;
+            this.loggingService.log(
+              `⚠️ Library issue detected with '${test.name}': ${errorMsg}`,
+              'WARN',
+              'bootstrap',
+            );
+
+            // Attempt to fix OpenSSL-related issues
+            if (
+              errorMsg.includes('libcrypto') ||
+              errorMsg.includes('libtermux-auth')
+            ) {
+              await this.fixOpenSSLIssue();
+            }
+          }
+        }
+      }
+
+      if (!foundIssues) {
+        this.loggingService.log(
+          '✅ No library issues detected',
+          'DEBUG',
+          'bootstrap',
+        );
+      }
+    } catch (error) {
+      this.loggingService.log(
+        `⚠️ Library detection check failed: ${error instanceof Error ? error.message : String(error)}`,
+        'WARN',
+        'bootstrap',
+      );
+      // Don't fail bootstrap if check fails
+    }
+  }
+
+  /**
+   * Fix OpenSSL library issues by reinstalling package
+   */
+  private async fixOpenSSLIssue(): Promise<void> {
+    try {
+      this.loggingService.log(
+        '🔧 Attempting to fix OpenSSL library issue...',
+        'INFO',
+        'bootstrap',
+      );
+
+      // Force reinstall openssl to extract all files
+      await execCommand('pkg install --reinstall openssl -y', {
+        timeout: 300000, // 5 minutes
+      });
+
+      this.loggingService.log(
+        '✅ OpenSSL successfully reinstalled',
+        'INFO',
+        'bootstrap',
+      );
+
+      // Verify the fix by testing a command
+      try {
+        await execCommand('screen -ls', { stdio: 'ignore', timeout: 5000 });
+        this.loggingService.log(
+          '✅ Library fix verified - screen command working',
+          'INFO',
+          'bootstrap',
+        );
+      } catch {
+        this.loggingService.log(
+          '⚠️ Screen still not working after OpenSSL fix, may need manual intervention',
+          'WARN',
+          'bootstrap',
+        );
+      }
+    } catch (fixError) {
+      this.loggingService.log(
+        `⚠️ Failed to fix OpenSSL issue: ${fixError instanceof Error ? fixError.message : String(fixError)}`,
+        'WARN',
+        'bootstrap',
+      );
+      // Don't fail, continue with bootstrap
     }
   }
 
