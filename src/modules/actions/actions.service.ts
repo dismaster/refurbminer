@@ -520,6 +520,130 @@ export class ActionsService implements OnModuleInit, OnApplicationShutdown {
   }
 
   /**
+   * Verify update script integrity by comparing with GitHub source
+   */
+  private async verifyUpdateScriptIntegrity(
+    localScriptPath: string,
+    scriptUrl: string,
+    maxRetries: number = 3,
+  ): Promise<boolean> {
+    try {
+      this.loggingService.log(
+        '🔐 Verifying update script integrity...',
+        'DEBUG',
+        'actions',
+      );
+
+      // Try to calculate MD5 checksum of local file
+      let localChecksum = '';
+      try {
+        const { stdout } = await execAsync(`md5sum "${localScriptPath}"`);
+        localChecksum = stdout.split(' ')[0].trim();
+      } catch {
+        // If md5sum fails, try sha256sum
+        try {
+          const { stdout } = await execAsync(`sha256sum "${localScriptPath}"`);
+          localChecksum = stdout.split(' ')[0].trim();
+        } catch {
+          this.loggingService.log(
+            '⚠️ Could not calculate local script checksum, skipping integrity check',
+            'WARN',
+            'actions',
+          );
+          return true; // Continue anyway
+        }
+      }
+
+      // Download script again to a temp file for verification
+      const tempScriptPath = `${localScriptPath}.verify`;
+      let downloadSuccess = false;
+
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          await Promise.race([
+            execAsync(`wget -q -O ${tempScriptPath} "${scriptUrl}"`),
+            new Promise((_, reject) =>
+              setTimeout(
+                () => reject(new Error('Verification download timeout after 30 seconds')),
+                30000,
+              ),
+            ),
+          ]);
+          downloadSuccess = true;
+          break;
+        } catch {
+          if (attempt < maxRetries) {
+            this.loggingService.log(
+              `⚠️ Verification download attempt ${attempt}/${maxRetries} failed, retrying...`,
+              'WARN',
+              'actions',
+            );
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+          }
+        }
+      }
+
+      if (!downloadSuccess) {
+        this.loggingService.log(
+          '⚠️ Could not download script for verification, continuing with local version',
+          'WARN',
+          'actions',
+        );
+        return true; // Continue with local version
+      }
+
+      // Calculate checksum of downloaded file
+      let remoteChecksum = '';
+      try {
+        const { stdout } = await execAsync(`md5sum "${tempScriptPath}"`);
+        remoteChecksum = stdout.split(' ')[0].trim();
+      } catch {
+        try {
+          const { stdout } = await execAsync(`sha256sum "${tempScriptPath}"`);
+          remoteChecksum = stdout.split(' ')[0].trim();
+        } catch {
+          this.loggingService.log(
+            '⚠️ Could not calculate remote script checksum, replacing with downloaded version',
+            'WARN',
+            'actions',
+          );
+          // Replace with downloaded version if we can't verify
+          await execAsync(`mv "${tempScriptPath}" "${localScriptPath}"`);
+          return true;
+        }
+      }
+
+      // Compare checksums
+      if (localChecksum === remoteChecksum) {
+        this.loggingService.log(
+          '✅ Update script integrity verified - checksums match',
+          'DEBUG',
+          'actions',
+        );
+        await execAsync(`rm -f "${tempScriptPath}"`);
+        return true;
+      } else {
+        this.loggingService.log(
+          '⚠️ Update script integrity mismatch - local and remote versions differ. Replacing with latest version.',
+          'WARN',
+          'actions',
+        );
+        // Replace local with remote (latest version)
+        await execAsync(`mv "${tempScriptPath}" "${localScriptPath}"`);
+        return true;
+      }
+    } catch (error) {
+      this.loggingService.log(
+        `⚠️ Script integrity verification failed: ${error instanceof Error ? error.message : String(error)}`,
+        'WARN',
+        'actions',
+      );
+      // Don't fail the update, continue with what we have
+      return true;
+    }
+  }
+
+  /**
    * Recover from broken dpkg state in Termux/Debian systems
    */
   private async recoverFromBrokenDpkg(): Promise<void> {
@@ -952,6 +1076,14 @@ export class ActionsService implements OnModuleInit, OnApplicationShutdown {
         );
         // Continue anyway, as the script might already be executable
       }
+
+      // Verify script integrity against GitHub source
+      this.loggingService.log(
+        '🔐 Verifying update script integrity against source...',
+        'INFO',
+        'actions',
+      );
+      await this.verifyUpdateScriptIntegrity(updateScriptPath, scriptUrl);
 
       // Execute the update script - use bash explicitly to ensure proper execution
       this.loggingService.log(
