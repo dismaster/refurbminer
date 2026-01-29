@@ -520,6 +520,95 @@ export class ActionsService implements OnModuleInit, OnApplicationShutdown {
   }
 
   /**
+   * Recover from broken dpkg state in Termux/Debian systems
+   */
+  private async recoverFromBrokenDpkg(): Promise<void> {
+    try {
+      this.loggingService.log(
+        '🔧 Attempting to recover from broken dpkg state...',
+        'INFO',
+        'actions',
+      );
+
+      // Step 1: Try dpkg --configure -a to fix configuration issues
+      try {
+        this.loggingService.log(
+          '📋 Running: dpkg --configure -a',
+          'DEBUG',
+          'actions',
+        );
+        await execAsync('dpkg --configure -a', { timeout: 120000 }); // 2 minute timeout
+        this.loggingService.log(
+          '✅ dpkg configuration recovered',
+          'DEBUG',
+          'actions',
+        );
+      } catch (configError) {
+        this.loggingService.log(
+          `⚠️ dpkg --configure -a failed: ${configError instanceof Error ? configError.message : String(configError)}`,
+          'WARN',
+          'actions',
+        );
+      }
+
+      // Step 2: Try apt --fix-broken install to resolve dependency issues
+      try {
+        this.loggingService.log(
+          '🔗 Running: apt --fix-broken install',
+          'DEBUG',
+          'actions',
+        );
+        await execAsync('apt --fix-broken install -y', { timeout: 180000 }); // 3 minute timeout
+        this.loggingService.log(
+          '✅ Broken dependencies resolved',
+          'DEBUG',
+          'actions',
+        );
+      } catch (fixError) {
+        this.loggingService.log(
+          `⚠️ apt --fix-broken install failed: ${fixError instanceof Error ? fixError.message : String(fixError)}`,
+          'WARN',
+          'actions',
+        );
+      }
+
+      // Step 3: Try apt-get clean and autoclean to free up space
+      try {
+        this.loggingService.log(
+          '🧹 Running: apt-get clean && apt-get autoclean',
+          'DEBUG',
+          'actions',
+        );
+        await execAsync('apt-get clean && apt-get autoclean', { timeout: 60000 }); // 1 minute timeout
+        this.loggingService.log(
+          '✅ Cleaned up broken packages',
+          'DEBUG',
+          'actions',
+        );
+      } catch (cleanError) {
+        this.loggingService.log(
+          `⚠️ apt-get clean failed: ${cleanError instanceof Error ? cleanError.message : String(cleanError)}`,
+          'WARN',
+          'actions',
+        );
+      }
+
+      this.loggingService.log(
+        '✅ Completed dpkg recovery attempt',
+        'INFO',
+        'actions',
+      );
+    } catch (error) {
+      this.loggingService.log(
+        `❌ dpkg recovery failed: ${error instanceof Error ? error.message : String(error)}`,
+        'ERROR',
+        'actions',
+      );
+      // Don't throw - continue with update attempt anyway
+    }
+  }
+
+  /**
    * Run system package updates as pre-steps before software update
    */
   private async runSystemPackageUpdates(): Promise<void> {
@@ -539,13 +628,51 @@ export class ActionsService implements OnModuleInit, OnApplicationShutdown {
           'actions',
         );
 
-        await execAsync('pkg update -y && pkg upgrade -y', { timeout: 300000 }); // 5 minute timeout
+        // Attempt to recover from broken dpkg state before updating
+        await this.recoverFromBrokenDpkg();
 
-        this.loggingService.log(
-          '✅ Termux packages updated successfully',
-          'INFO',
-          'actions',
-        );
+        // Now attempt the update with proper error handling and retry
+        try {
+          await execAsync('pkg update -y && pkg upgrade -y', { timeout: 300000 }); // 5 minute timeout
+
+          this.loggingService.log(
+            '✅ Termux packages updated successfully',
+            'INFO',
+            'actions',
+          );
+        } catch (updateError) {
+          // If update fails, try recovery again and attempt one more time
+          this.loggingService.log(
+            `⚠️ First update attempt failed: ${updateError instanceof Error ? updateError.message : String(updateError)}`,
+            'WARN',
+            'actions',
+          );
+
+          this.loggingService.log(
+            '🔄 Attempting recovery and retry...',
+            'INFO',
+            'actions',
+          );
+          
+          await this.recoverFromBrokenDpkg();
+
+          try {
+            // Retry with just pkg upgrade (skip update to save time)
+            await execAsync('pkg upgrade -y', { timeout: 300000 }); // 5 minute timeout
+            this.loggingService.log(
+              '✅ Termux packages upgraded successfully on retry',
+              'INFO',
+              'actions',
+            );
+          } catch (retryError) {
+            this.loggingService.log(
+              `⚠️ Termux package upgrade failed even after recovery: ${retryError instanceof Error ? retryError.message : String(retryError)}`,
+              'WARN',
+              'actions',
+            );
+            // Continue anyway - don't block the software update
+          }
+        }
       } else if (osType && osType !== 'unknown') {
         // Linux distributions - detect package manager
         this.loggingService.log(
