@@ -148,7 +148,23 @@ export class NetworkInfoUtil {
   /** ✅ Get network details based on system type */
   static async getNetworkInfo(systemType: string): Promise<NetworkInfo> {
     if (process.platform === 'win32') {
-      return this.getDefaultNetworkInfo();
+      const baseInfo = await this.getWindowsNetworkInfo();
+
+      baseInfo.ping = {
+        refurbminer: await this.getPingLatency('refurbminer.de'),
+      };
+
+      if (!baseInfo.interfaceDetails) {
+        baseInfo.interfaceDetails = await this.getInterfaceDetails('windows');
+      }
+
+      if (!baseInfo.traffic && baseInfo.interfaces[0] && baseInfo.interfaces[0] !== 'Unknown') {
+        baseInfo.traffic = await this.getNetworkTraffic(baseInfo.interfaces[0]);
+      }
+
+      baseInfo.timestamp = Date.now();
+      this.networkInfoCache = { data: baseInfo, timestamp: Date.now() };
+      return baseInfo;
     }
 
     const now = Date.now();
@@ -254,6 +270,9 @@ export class NetworkInfoUtil {
 
   /** ✅ Get detailed interface information including MAC addresses */
   private static async getInterfaceDetails(systemType: string): Promise<InterfaceDetail[]> {
+    if (process.platform === 'win32') {
+      return this.getWindowsInterfaceDetails();
+    }
     switch (systemType) {
       case 'termux':
         return this.getTermuxInterfaceDetails();
@@ -515,6 +534,44 @@ export class NetworkInfoUtil {
     return details;
   }
 
+  /** ✅ Get Windows interface details with MAC addresses */
+  private static async getWindowsInterfaceDetails(): Promise<InterfaceDetail[]> {
+    const details: InterfaceDetail[] = [];
+
+    try {
+      const output = (await this.execCommand(
+        'powershell -Command "Get-NetIPConfiguration | ConvertTo-Json -Compress"',
+        5000,
+      )).trim();
+
+      if (!output) {
+        return details;
+      }
+
+      const data = JSON.parse(output);
+      const entries = Array.isArray(data) ? data : [data];
+
+      for (const entry of entries.slice(0, this.MAX_INTERFACES)) {
+        const name = entry?.InterfaceAlias || 'Unknown';
+        const macAddress = entry?.NetAdapter?.MacAddress || 'Unknown';
+        const ipAddress = entry?.IPv4Address?.[0]?.IPAddress;
+        const status = entry?.NetAdapter?.Status || 'Unknown';
+
+        details.push({
+          name,
+          macAddress: macAddress || 'Unknown',
+          ipAddress,
+          state: status.toLowerCase() === 'up' ? 'up' : status.toLowerCase() === 'down' ? 'down' : 'unknown',
+          type: this.determineInterfaceType(name),
+        });
+      }
+    } catch {
+      return details;
+    }
+
+    return details;
+  }
+
   /** ✅ Get default interface details (fallback) */
   private static getDefaultInterfaceDetails(): InterfaceDetail[] {
     return [
@@ -572,6 +629,9 @@ export class NetworkInfoUtil {
   /** ✅ Get DNS servers */
   private static async getDnsServers(): Promise<string[]> {
     try {
+      if (process.platform === 'win32') {
+        return this.getWindowsDnsServers();
+      }
       // Detect system type for appropriate DNS method
       let systemType = 'linux'; // default
       try {
@@ -685,6 +745,27 @@ export class NetworkInfoUtil {
     }
   }
 
+  /** ✅ Get DNS servers on Windows */
+  private static async getWindowsDnsServers(): Promise<string[]> {
+    try {
+      const output = (await this.execCommand(
+        'powershell -Command "Get-DnsClientServerAddress -AddressFamily IPv4 | Select-Object -ExpandProperty ServerAddresses | ConvertTo-Json -Compress"',
+        5000,
+      )).trim();
+
+      if (!output) {
+        return ['Unknown'];
+      }
+
+      const data = JSON.parse(output);
+      const servers = Array.isArray(data) ? data : [data];
+      const cleaned = servers.filter((s) => typeof s === 'string' && !s.startsWith('127.'));
+      return cleaned.length > 0 ? cleaned : ['Unknown'];
+    } catch {
+      return ['Unknown'];
+    }
+  }
+
   /** ✅ Determine interface type based on name */
   private static determineInterfaceType(
     interfaceName: string,
@@ -696,11 +777,13 @@ export class NetworkInfoUtil {
     } else if (
       name.includes('wlan') ||
       name.includes('wifi') ||
+      name.includes('wi-fi') ||
       name.includes('wlp')
     ) {
       return 'wifi';
     } else if (
       name.includes('eth') ||
+      name.includes('ethernet') ||
       name.includes('enp') ||
       name.includes('eno') ||
       name.includes('ens')
@@ -745,6 +828,49 @@ export class NetworkInfoUtil {
             : ['Unknown'],
         interfaceDetails: interfaceDetails.slice(0, this.MAX_INTERFACES),
         dns: await this.getDnsServers(),
+        externalIp: externalIp || 'Unknown',
+        timestamp: Date.now(),
+      };
+    } catch {
+      return this.getDefaultNetworkInfo();
+    }
+  }
+
+  /** ✅ Get network info on Windows */
+  private static async getWindowsNetworkInfo(): Promise<NetworkInfo> {
+    try {
+      const output = (await this.execCommand(
+        'powershell -Command "Get-NetIPConfiguration | ConvertTo-Json -Compress"',
+        NETWORK_CONSTANTS.HTTP_TIMEOUT,
+      )).trim();
+
+      if (!output) {
+        return this.getDefaultNetworkInfo();
+      }
+
+      const data = JSON.parse(output);
+      const entries = Array.isArray(data) ? data : [data];
+
+      const primary = entries.find((item: any) => item?.IPv4DefaultGateway) || entries[0];
+      const primaryIp = primary?.IPv4Address?.[0]?.IPAddress || 'Unknown';
+      const gateway = primary?.IPv4DefaultGateway?.NextHop || 'Unknown';
+      const interfaces = entries
+        .map((item: any) => item?.InterfaceAlias)
+        .filter(Boolean)
+        .slice(0, this.MAX_INTERFACES);
+
+      const dnsServers = primary?.DNSServer?.ServerAddresses || [];
+      const externalIp = await this.getCachedExternalIp();
+
+      const interfaceDetails = await this.getWindowsInterfaceDetails();
+
+      return {
+        primaryIp,
+        macAddress: this.getPrimaryMacAddress(interfaceDetails, primaryIp),
+        gateway,
+        interfaces: interfaces.length > 0 ? interfaces : ['Unknown'],
+        interfaceDetails: interfaceDetails.slice(0, this.MAX_INTERFACES),
+        dns: dnsServers.length > 0 ? dnsServers : ['Unknown'],
         externalIp: externalIp || 'Unknown',
         timestamp: Date.now(),
       };
@@ -985,6 +1111,27 @@ export class NetworkInfoUtil {
     }
     
     try {
+      if (process.platform === 'win32') {
+        try {
+          const pingOutput = (await this.execCommand(
+            `ping -n 3 ${host}`,
+            5000,
+          )).trim();
+
+          const match = pingOutput.match(/Average = (\d+)ms/i);
+          if (match && match[1]) {
+            const pingValue = parseFloat(match[1]);
+            this.pingCache.set(host, { value: pingValue, timestamp: now });
+            return pingValue;
+          }
+        } catch {
+          // Windows ping failed, return -1
+        }
+
+        this.pingCache.set(host, { value: -1, timestamp: now });
+        return -1;
+      }
+
       // First try the standard ping command
       try {
         const pingOutput = (await this.execCommand(
@@ -1063,6 +1210,40 @@ export class NetworkInfoUtil {
     };
     
     try {
+      if (process.platform === 'win32') {
+        const safeName = interfaceName.replace(/'/g, "''");
+        const output = (await this.execCommand(
+          `powershell -Command "Get-NetAdapterStatistics -Name '${safeName}' | Select-Object -First 1 | ConvertTo-Json -Compress"`,
+          5000,
+        )).trim();
+
+        if (output) {
+          const stats = JSON.parse(output);
+          const rxBytes = parseInt(stats.ReceivedBytes || '0', 10) || 0;
+          const txBytes = parseInt(stats.SentBytes || '0', 10) || 0;
+
+          const lastData = this.interfaceDataMap.get(interfaceName);
+          if (lastData && now > lastData.timestamp) {
+            const timeDiffSeconds = (now - lastData.timestamp) / 1000;
+            result.rxSpeed = Math.max(0, (rxBytes - lastData.rxBytes) / timeDiffSeconds);
+            result.txSpeed = Math.max(0, (txBytes - lastData.txBytes) / timeDiffSeconds);
+          }
+
+          result.rxBytes = rxBytes;
+          result.txBytes = txBytes;
+          result.timestamp = now;
+
+          this.interfaceDataMap.set(interfaceName, {
+            rxBytes,
+            txBytes,
+            timestamp: now,
+          });
+
+          this.trafficCache.set(interfaceName, result);
+          return result;
+        }
+      }
+
       let rxBytes = 0;
       let txBytes = 0;
       let success = false;

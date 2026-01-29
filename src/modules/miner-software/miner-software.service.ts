@@ -31,6 +31,10 @@ export class MinerSoftwareService {
     return stdout ?? '';
   }
 
+  private getMinerExecutableName(minerName: string): string {
+    return process.platform === 'win32' ? `${minerName}.exe` : minerName;
+  }
+
   private async fileExists(filePath: string): Promise<boolean> {
     try {
       await fs.promises.access(filePath);
@@ -42,6 +46,9 @@ export class MinerSoftwareService {
 
   private async isExecutable(filePath: string): Promise<boolean> {
     try {
+      if (process.platform === 'win32') {
+        return await this.fileExists(filePath);
+      }
       await fs.promises.access(filePath, fs.constants.X_OK);
       return true;
     } catch {
@@ -131,7 +138,7 @@ export class MinerSoftwareService {
    * Get miner information
    */
   async getMinerInfo(minerName: string): Promise<MinerInfo> {
-    const minerPath = path.join(this.appsDir, minerName, minerName);
+    const minerPath = path.join(this.appsDir, minerName, this.getMinerExecutableName(minerName));
     const configPath = path.join(this.appsDir, minerName, 'config.json');
     
     let version = 'unknown';
@@ -231,7 +238,9 @@ export class MinerSoftwareService {
     } else {
       if (!minerInfo.executable) {
         issues.push(`Miner binary is not executable`);
-        recommendations.push(`Set executable permissions: chmod +x ${minerInfo.path}`);
+        if (process.platform !== 'win32') {
+          recommendations.push(`Set executable permissions: chmod +x ${minerInfo.path}`);
+        }
       }
 
       if (!minerInfo.compatible) {
@@ -265,6 +274,17 @@ export class MinerSoftwareService {
    */
   private getCcminerDownloadInfo(compatibility: SystemCompatibility): DownloadInfo | null {
     const { os, architecture, isTermux } = compatibility;
+
+    if (process.platform === 'win32') {
+      if (architecture !== 'x64' && architecture !== 'x86_64') {
+        return null;
+      }
+      return {
+        url: 'https://github.com/monkins1010/ccminer/releases/latest/download/ccminer_CPU_3.8.3.zip',
+        filename: 'ccminer_CPU_3.8.3.zip',
+        needsExtraction: true,
+      };
+    }
 
     // Handle Termux specifically
     if (isTermux) {
@@ -306,6 +326,17 @@ export class MinerSoftwareService {
    */
   private getXmrigDownloadInfo(compatibility: SystemCompatibility): DownloadInfo | null {
     const { os, architecture } = compatibility;
+
+    if (process.platform === 'win32') {
+      if (architecture === 'x64' || architecture === 'x86_64') {
+        return {
+          url: 'https://github.com/xmrig/xmrig/releases/download/v6.25.0/xmrig-6.25.0-windows-x64.zip',
+          filename: 'xmrig-6.25.0-windows-x64.zip',
+          needsExtraction: true,
+        };
+      }
+      return null;
+    }
 
     if (os === 'linux') {
       if (architecture === 'arm64' || architecture === 'aarch64') {
@@ -367,10 +398,12 @@ export class MinerSoftwareService {
    */
   async setExecutablePermissions(minerName: string): Promise<boolean> {
     try {
-      const minerPath = path.join(this.appsDir, minerName, minerName);
+      const minerPath = path.join(this.appsDir, minerName, this.getMinerExecutableName(minerName));
       
       if (await this.fileExists(minerPath)) {
-        await this.execCommand(`chmod +x ${minerPath}`);
+        if (process.platform !== 'win32') {
+          await this.execCommand(`chmod +x ${minerPath}`);
+        }
         this.loggingService.log(
           `Set executable permissions for ${minerName}`,
           'INFO',
@@ -557,55 +590,58 @@ export class MinerSoftwareService {
       ),
     ]);
     const ccminerDir = path.join(this.appsDir, 'ccminer');
-    const ccminerPath = path.join(ccminerDir, 'ccminer');
+    const ccminerPath = path.join(ccminerDir, this.getMinerExecutableName('ccminer'));
     const configPath = path.join(ccminerDir, 'config.json');
 
     try {
       // Ensure directory exists
       await fs.promises.mkdir(ccminerDir, { recursive: true });
 
-      // Check if selected branch is available
-      const branchUrl = `https://raw.githubusercontent.com/Darktron/pre-compiled/${ccBranch}/ccminer`;
-      
-      try {
-        // Test if branch URL is accessible
-        const testCommand = process.platform === 'win32' 
-          ? `powershell -Command "try { Invoke-WebRequest -Uri '${branchUrl}' -Method Head | Out-Null; exit 0 } catch { exit 1 }"`
-          : `wget -q --spider "${branchUrl}"`;
-        
-        await this.execCommand(testCommand, 10000);
-        
-        this.loggingService.log(
-          `Downloading ccminer from branch: ${ccBranch}`,
-          'INFO',
-          'miner-software'
-        );
+      if (process.platform === 'win32') {
+        const zipUrl = 'https://github.com/monkins1010/ccminer/releases/latest/download/ccminer_CPU_3.8.3.zip';
+        const zipPath = path.join(ccminerDir, 'ccminer_CPU_3.8.3.zip');
 
-      } catch {
-        this.loggingService.log(
-          `Branch ${ccBranch} not available, falling back to generic`,
-          'WARN',
-          'miner-software'
-        );
-        // Fallback to generic version
-        const genericUrl = `https://raw.githubusercontent.com/Darktron/pre-compiled/generic/ccminer`;
-        
-        const downloadCommand = process.platform === 'win32'
-          ? `powershell -Command "Invoke-WebRequest -Uri '${genericUrl}' -OutFile '${ccminerPath}'"`
-          : `wget -q -O "${ccminerPath}" "${genericUrl}"`;
+        const downloadCommand = `powershell -Command "Invoke-WebRequest -Uri '${zipUrl}' -OutFile '${zipPath}'"`;
+        await this.execCommand(downloadCommand, 60000);
+
+        const extractCommand = `powershell -Command "Expand-Archive -Path '${zipPath}' -DestinationPath '${ccminerDir}' -Force"`;
+        await this.execCommand(extractCommand, 60000);
+
+        const locateExeCommand = `powershell -Command "$exe = Get-ChildItem -Path '${ccminerDir}' -Recurse -Filter 'ccminer*.exe' | Select-Object -First 1; if (!$exe) { throw 'ccminer.exe not found after extraction' }; Copy-Item $exe.FullName '${ccminerPath}' -Force"`;
+        await this.execCommand(locateExeCommand, 60000);
+      } else {
+        // Check if selected branch is available
+        const branchUrl = `https://raw.githubusercontent.com/Darktron/pre-compiled/${ccBranch}/ccminer`;
+
+        try {
+          // Test if branch URL is accessible
+          const testCommand = `wget -q --spider "${branchUrl}"`;
+          await this.execCommand(testCommand, 10000);
+
+          this.loggingService.log(
+            `Downloading ccminer from branch: ${ccBranch}`,
+            'INFO',
+            'miner-software'
+          );
+        } catch {
+          this.loggingService.log(
+            `Branch ${ccBranch} not available, falling back to generic`,
+            'WARN',
+            'miner-software'
+          );
+          // Fallback to generic version
+          const genericUrl = `https://raw.githubusercontent.com/Darktron/pre-compiled/generic/ccminer`;
+
+          const downloadCommand = `wget -q -O "${ccminerPath}" "${genericUrl}"`;
+          await this.execCommand(downloadCommand, 60000);
+        }
+
+        // Download the ccminer binary
+        const downloadCommand = `wget -q -O "${ccminerPath}" "${branchUrl}"`;
         
         await this.execCommand(downloadCommand, 60000);
-      }
 
-      // Download the ccminer binary
-      const downloadCommand = process.platform === 'win32'
-        ? `powershell -Command "Invoke-WebRequest -Uri '${branchUrl}' -OutFile '${ccminerPath}'"`
-        : `wget -q -O "${ccminerPath}" "${branchUrl}"`;
-      
-      await this.execCommand(downloadCommand, 60000);
-
-      // Set executable permissions (Unix-like systems only)
-      if (process.platform !== 'win32') {
+        // Set executable permissions (Unix-like systems only)
         await this.execCommand(`chmod +x "${ccminerPath}"`);
       }
 
@@ -635,7 +671,59 @@ export class MinerSoftwareService {
       );
       return false;
     }
-  }  /**
+  }
+
+  /**
+   * Download and install XMRig binary for Windows
+   */
+  async downloadXmrigBinary(compatibility: SystemCompatibility): Promise<boolean> {
+    if (process.platform !== 'win32') {
+      return false;
+    }
+
+    const downloadInfo = this.getXmrigDownloadInfo(compatibility);
+    if (!downloadInfo) {
+      this.loggingService.log(
+        'No Windows XMRig download available for this architecture',
+        'WARN',
+        'miner-software',
+      );
+      return false;
+    }
+
+    const xmrigDir = path.join(this.appsDir, 'xmrig');
+    const xmrigPath = path.join(xmrigDir, this.getMinerExecutableName('xmrig'));
+    const zipPath = path.join(xmrigDir, downloadInfo.filename);
+
+    try {
+      await fs.promises.mkdir(xmrigDir, { recursive: true });
+
+      const downloadCommand = `powershell -Command "Invoke-WebRequest -Uri '${downloadInfo.url}' -OutFile '${zipPath}'"`;
+      await this.execCommand(downloadCommand, 60000);
+
+      const extractCommand = `powershell -Command "Expand-Archive -Path '${zipPath}' -DestinationPath '${xmrigDir}' -Force"`;
+      await this.execCommand(extractCommand, 60000);
+
+      const locateExeCommand = `powershell -Command "$exe = Get-ChildItem -Path '${xmrigDir}' -Recurse -Filter 'xmrig*.exe' | Select-Object -First 1; if (!$exe) { throw 'xmrig.exe not found after extraction' }; Copy-Item $exe.FullName '${xmrigPath}' -Force"`;
+      await this.execCommand(locateExeCommand, 60000);
+
+      this.loggingService.log(
+        'Successfully downloaded XMRig for Windows',
+        'INFO',
+        'miner-software',
+      );
+      return true;
+    } catch (error) {
+      this.loggingService.log(
+        `Failed to download XMRig for Windows: ${error.message}`,
+        'ERROR',
+        'miner-software',
+      );
+      return false;
+    }
+  }
+
+  /**
    * Compile and install XMRig for Linux/Termux systems
    */
   async compileAndInstallXmrig(compatibility: SystemCompatibility): Promise<boolean> {
@@ -649,7 +737,7 @@ export class MinerSoftwareService {
     }
 
     const xmrigDir = path.join(this.appsDir, 'xmrig');
-    const xmrigPath = path.join(xmrigDir, 'xmrig');
+    const xmrigPath = path.join(xmrigDir, this.getMinerExecutableName('xmrig'));
     
     // Early check: if binary already exists and is executable, skip compilation
     if (await this.fileExists(xmrigPath)) {

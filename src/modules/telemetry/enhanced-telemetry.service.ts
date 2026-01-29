@@ -167,8 +167,18 @@ export class EnhancedTelemetryService implements OnModuleInit, OnModuleDestroy {
 
     this.telemetryUpdateInFlight = true;
     try {
-      await this.getTelemetryData();
-        this.lastTelemetryGeneratedAt = new Date().toISOString();
+      // Add 30-second timeout to prevent hanging telemetry collection
+      const timeoutPromise = new Promise<void>((_, reject) => {
+        setTimeout(() => {
+          reject(new Error('Telemetry update timeout after 30 seconds'));
+        }, 30000);
+      });
+
+      await Promise.race([
+        this.getTelemetryData(),
+        timeoutPromise,
+      ]);
+      this.lastTelemetryGeneratedAt = new Date().toISOString();
     } catch (error) {
       this.loggingService.log(
         `❌ Telemetry update failed: ${error instanceof Error ? error.message : 'Unknown error'}`,

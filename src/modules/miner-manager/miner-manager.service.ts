@@ -8,7 +8,7 @@ import { FlightsheetService } from '../flightsheet/flightsheet.service';
 import { ConfigService } from '../config/config.service';
 import { ApiCommunicationService } from '../api-communication/api-communication.service';
 import { MinerSoftwareService } from '../miner-software/miner-software.service';
-import { exec } from 'child_process';
+import { exec, spawn, ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -18,6 +18,7 @@ export class MinerManagerService
 {
   private static isInitialized = false;
   private minerScreen = 'miner-session';
+  private minerProcess?: ChildProcess;
 
   // Consolidated monitoring
   private mainMonitoringInterval?: NodeJS.Timeout;
@@ -1500,6 +1501,12 @@ export class MinerManagerService
 
   public async isMinerRunningAsync(): Promise<boolean> {
     try {
+      if (process.platform === 'win32') {
+        const isRunning = !!this.minerProcess && this.minerProcess.exitCode === null;
+        this.updateMinerRunningCache(isRunning);
+        return isRunning;
+      }
+
       if (!(await this.isScreenAvailable())) {
         this.updateMinerRunningCache(false);
         return false;
@@ -1874,7 +1881,10 @@ export class MinerManagerService
       }
 
       const configPath = `apps/${miner}/config.json`;
-      const minerExecutable = `apps/${miner}/${miner}`;
+      const minerExecutableBase = `apps/${miner}/${miner}`;
+      const minerExecutable = process.platform === 'win32'
+        ? `${minerExecutableBase}.exe`
+        : minerExecutableBase;
 
       const configExists = await this.fileExists(configPath);
       const execExists = await this.fileExists(minerExecutable);
@@ -1935,10 +1945,18 @@ export class MinerManagerService
       // Clean up any existing miner sessions before starting a new one
       await this.cleanupAllMinerSessions();
 
-      await this.execCommand(`chmod +x ${minerExecutable}`);
-      exec(
-        `screen -dmS ${this.minerScreen} ${minerExecutable} -c ${configPath}`,
-      );
+      if (process.platform === 'win32') {
+        this.minerProcess = spawn(minerExecutable, ['-c', configPath], {
+          detached: true,
+          stdio: 'ignore',
+        });
+        this.minerProcess.unref();
+      } else {
+        await this.execCommand(`chmod +x ${minerExecutable}`);
+        exec(
+          `screen -dmS ${this.minerScreen} ${minerExecutable} -c ${configPath}`,
+        );
+      }
 
       this.loggingService.log(
         `✅ Started miner: ${miner} with config ${configPath}`,
@@ -1959,6 +1977,33 @@ export class MinerManagerService
 
   public async stopMiner(isManualStop: boolean = false): Promise<boolean> {
     try {
+      if (process.platform === 'win32') {
+        if (this.minerProcess?.pid) {
+          try {
+            process.kill(this.minerProcess.pid);
+          } catch {
+            try {
+              await this.execCommand(`taskkill /PID ${this.minerProcess.pid} /T /F`, 5000);
+            } catch {
+              // Ignore taskkill errors
+            }
+          }
+        }
+
+        this.minerProcess = undefined;
+        this.updateMinerRunningCache(false);
+
+        if (isManualStop) {
+          this.isManuallyStoppedByUser = true;
+          this.manualStopTime = new Date();
+          this.loggingService.log('✋ Miner manually stopped by user', 'INFO', 'miner-manager');
+        } else {
+          this.loggingService.log('✅ Miner stopped successfully', 'INFO', 'miner-manager');
+        }
+
+        return true;
+      }
+
       if (!(await this.isScreenAvailable())) {
         this.loggingService.log(
           'ℹ️ Screen not available, skipping miner stop',
@@ -2724,7 +2769,41 @@ export class MinerManagerService
         'miner-manager',
       );
 
+      if (process.platform === 'win32' && !compatibility.is64Bit) {
+        this.loggingService.log(
+          '❌ Windows 32-bit is not supported by ccminer/XMRig. Please use 64-bit Windows.',
+          'ERROR',
+          'miner-manager',
+        );
+        return false;
+      }
+
       if (minerName === 'xmrig') {
+        if (process.platform === 'win32') {
+          this.loggingService.log(
+            '📥 Downloading XMRig Windows binary...',
+            'INFO',
+            'miner-manager',
+          );
+
+          const success = await this.minerSoftwareService.downloadXmrigBinary(compatibility);
+          if (success) {
+            this.loggingService.log(
+              '🎉 XMRig Windows download completed successfully!',
+              'INFO',
+              'miner-manager',
+            );
+          } else {
+            this.loggingService.log(
+              '❌ XMRig Windows download failed',
+              'ERROR',
+              'miner-manager',
+            );
+          }
+
+          return success;
+        }
+
         // For XMRig, check prerequisites and compile
         this.loggingService.log(
           '🔍 Checking XMRig compilation prerequisites...',

@@ -324,6 +324,13 @@ export class HardwareInfoUtil {
   /** ✅ Get hardware brand */
   static async getBrand(systemType: string): Promise<string> {
     try {
+      if (process.platform === 'win32') {
+        const output = (await this.execCommand(
+          'powershell -Command "Get-CimInstance -ClassName Win32_ComputerSystem | Select-Object -First 1 -ExpandProperty Manufacturer"',
+          5000,
+        )).trim();
+        return output || 'Unknown';
+      }
       if (systemType === 'termux') {
         return await this.runCommandWithSuFallback('getprop ro.product.brand');
       }
@@ -435,6 +442,13 @@ export class HardwareInfoUtil {
   /** ✅ Get hardware model */
   static async getModel(systemType: string): Promise<string> {
     try {
+      if (process.platform === 'win32') {
+        const output = (await this.execCommand(
+          'powershell -Command "Get-CimInstance -ClassName Win32_ComputerSystem | Select-Object -First 1 -ExpandProperty Model"',
+          5000,
+        )).trim();
+        return output || 'Unknown';
+      }
       if (systemType === 'termux') {
         // Use hardware-specific properties first for more accurate detection
         // These are less likely to be affected by custom ROMs
@@ -666,6 +680,19 @@ export class HardwareInfoUtil {
   /** ✅ Get OS version */
   static async getOsVersion(): Promise<string> {
     try {
+      if (process.platform === 'win32') {
+        const output = (await this.execCommand(
+          'powershell -Command "Get-CimInstance -ClassName Win32_OperatingSystem | Select-Object -First 1 | ConvertTo-Json -Compress"',
+          5000,
+        )).trim();
+        if (output) {
+          const data = JSON.parse(output);
+          const caption = data.Caption || 'Windows';
+          const version = data.Version || '';
+          const build = data.BuildNumber ? `Build ${data.BuildNumber}` : '';
+          return [caption, version, build].filter(Boolean).join(' ');
+        }
+      }
       if (process.env.TERMUX_VERSION) {
         // We're in Termux, get Android version
         const releaseVer = await this.runCommandWithSuFallback(
@@ -701,6 +728,9 @@ export class HardwareInfoUtil {
   /** ✅ Get CPU core count */
   static async getCpuCount(): Promise<number> {
     try {
+      if (process.platform === 'win32') {
+        return os.cpus().length;
+      }
       return parseInt(
         (await this.execCommand("lscpu | grep '^CPU(s):' | awk '{print $2}'")).trim(),
       );
@@ -712,6 +742,15 @@ export class HardwareInfoUtil {
   /** ✅ Get CPU thread details (using `lscpu`) */
   static async getCpuThreads(): Promise<Array<any>> {
     try {
+      if (process.platform === 'win32') {
+        return os.cpus().map((cpu, index) => ({
+          model: cpu.model || `CPU ${index}`,
+          coreId: index,
+          maxMHz: cpu.speed || 0,
+          minMHz: Math.floor((cpu.speed || 0) * 0.3),
+          hashrate: 0,
+        }));
+      }
       // Get raw lscpu output
       const output = (await this.execCommand('lscpu')).split('\n');
       const threadList: any[] = [];
@@ -815,6 +854,9 @@ export class HardwareInfoUtil {
     
     log(`Getting CPU temperature for system type: ${systemType}`, 'DEBUG', 'hardware');
     try {
+      if (process.platform === 'win32') {
+        return await this.getWindowsCpuTemperature(log);
+      }
       switch (systemType) {
         case 'raspberry-pi':
           log('Using Raspberry Pi temperature method', 'DEBUG', 'hardware');
@@ -833,6 +875,29 @@ export class HardwareInfoUtil {
       log(`Failed to get CPU temperature: ${error instanceof Error ? error.message : String(error)}`, 'ERROR', 'hardware');
       return 0;
     }
+  }
+
+  /** ✅ Windows: Get CPU temperature via WMI (if available) */
+  private static async getWindowsCpuTemperature(log: (message: string, level: string, category: string) => void): Promise<number> {
+    try {
+      const output = (await this.execCommand(
+        'powershell -Command "Get-CimInstance -Namespace root/wmi -ClassName MSAcpi_ThermalZoneTemperature | Select-Object -First 1 -ExpandProperty CurrentTemperature"',
+        5000,
+      )).trim();
+
+      const rawValue = parseFloat(output);
+      if (!isNaN(rawValue) && rawValue > 0) {
+        // WMI temperature is in tenths of Kelvin
+        return Math.round((rawValue / 10 - 273.15) * 10) / 10;
+      }
+    } catch (error) {
+      log(
+        `Windows temperature read failed: ${error instanceof Error ? error.message : String(error)}`,
+        'DEBUG',
+        'hardware',
+      );
+    }
+    return 0;
   }
 
   /** ✅ Helper function to determine if error should be suppressed based on environment */

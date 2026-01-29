@@ -103,7 +103,17 @@ export class MinerDataService implements OnModuleInit, OnApplicationShutdown {
     }
 
     try {
-      const telemetryData = await this.telemetryService.getTelemetryData();
+      // Add 40-second timeout to prevent telemetry collection from hanging
+      const timeoutPromise = new Promise<null>((_, reject) => {
+        setTimeout(() => {
+          reject(new Error('Telemetry send timeout after 40 seconds'));
+        }, 40000);
+      });
+
+      const telemetryData = await Promise.race([
+        this.telemetryService.getTelemetryData(),
+        timeoutPromise,
+      ]);
       // Debug telemetry logging disabled to reduce noise
       // this.loggingService.log(
       //  `📡 Sending telemetry:\nminerId: ${this.minerId}\nData: ${JSON.stringify(telemetryData, null, 2)}`,

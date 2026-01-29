@@ -13,16 +13,18 @@ export class BatteryInfoUtil {
   }
   /** ✅ Get battery details based on system type */
   static async getBatteryInfo(systemType: string): Promise<any> {
-    if (process.platform === 'win32') {
-      return this.getDefaultBatteryInfo();
-    }
-
     const now = Date.now();
     if (
       this.batteryInfoCache &&
       now - this.batteryInfoCache.timestamp < this.BATTERY_INFO_TTL
     ) {
       return this.batteryInfoCache.data;
+    }
+
+    if (process.platform === 'win32') {
+      const data = await this.getWindowsBatteryInfo();
+      this.batteryInfoCache = { data, timestamp: Date.now() };
+      return data;
     }
 
     const data = await (async () => {
@@ -40,6 +42,56 @@ export class BatteryInfoUtil {
 
     this.batteryInfoCache = { data, timestamp: Date.now() };
     return data;
+  }
+
+  /** ✅ Get battery info on Windows via WMI (if available) */
+  private static async getWindowsBatteryInfo() {
+    try {
+      const result = (await this.execCommand(
+        'powershell -Command "Get-CimInstance -ClassName Win32_Battery | Select-Object -First 1 | ConvertTo-Json -Compress"',
+        5000,
+      )).trim();
+
+      if (!result) {
+        return this.getDefaultBatteryInfo();
+      }
+
+      const batteryData = JSON.parse(result);
+      const percentage = parseInt(batteryData.EstimatedChargeRemaining || '0', 10) || 0;
+      const statusCode = parseInt(batteryData.BatteryStatus || '0', 10) || 0;
+
+      const statusMap: Record<number, string> = {
+        1: 'DISCHARGING',
+        2: 'AC',
+        3: 'FULL',
+        4: 'LOW',
+        5: 'CRITICAL',
+        6: 'CHARGING',
+        7: 'CHARGING_HIGH',
+        8: 'CHARGING_LOW',
+        9: 'CHARGING_CRITICAL',
+        10: 'UNDEFINED',
+        11: 'PARTIALLY_CHARGED',
+      };
+
+      const status = statusMap[statusCode] || 'UNKNOWN';
+      const plugged = [2, 3, 6, 7, 8, 9, 11].includes(statusCode) ? 'AC' : 'BATTERY';
+
+      return {
+        health: 'GOOD',
+        percentage,
+        plugged,
+        status,
+        temperature: 0,
+        current: 0,
+        voltage: 0,
+        powerUsageWatts: 0,
+        powerUsageMilliWatts: 0,
+        estimatedMiningPowerWatts: 0,
+      };
+    } catch {
+      return this.getDefaultBatteryInfo();
+    }
   }
 
   /** ✅ Get battery info on Termux (Android) */
