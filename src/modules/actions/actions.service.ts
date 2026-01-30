@@ -1110,6 +1110,9 @@ export class ActionsService implements OnModuleInit, OnApplicationShutdown {
 # RefurbMiner Termux Update Wrapper Script
 # Generated at $(date)
 
+# Set strict error handling
+set -o pipefail
+
 # Wait a bit for the current process to exit
 sleep 5
 
@@ -1120,6 +1123,16 @@ echo "=== RefurbMiner Update Started at $(date) ===" > ${logPath}
 log_message() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a ${logPath}
 }
+
+# Function to handle errors gracefully
+handle_error() {
+    local error_msg="$1"
+    log_message "❌ ERROR: $error_msg"
+    log_message "Update process encountered an error, but will attempt recovery..."
+}
+
+# Trap errors to prevent script from silently failing
+trap 'handle_error "Unexpected error at line $LINENO"' ERR
 
 log_message "Starting RefurbMiner update process in Termux..."
 
@@ -1138,56 +1151,75 @@ npm cache clean --force >> ${logPath} 2>&1 || true
 
 # Execute the update script with full bash environment and save output
 log_message "Executing update script: ${updateScriptPath}"
-bash "${updateScriptPath}" >> ${logPath} 2>&1
-UPDATE_EXIT_CODE=$?
+log_message "------- UPDATE SCRIPT OUTPUT START -------"
 
+# Use timeout to prevent the update script from hanging indefinitely (2 hour limit)
+if command -v timeout &>/dev/null; then
+    timeout 7200 bash "${updateScriptPath}" >> ${logPath} 2>&1
+    UPDATE_EXIT_CODE=$?
+    if [ $UPDATE_EXIT_CODE -eq 124 ]; then
+        handle_error "Update script timed out after 2 hours"
+        UPDATE_EXIT_CODE=1
+    fi
+else
+    bash "${updateScriptPath}" >> ${logPath} 2>&1
+    UPDATE_EXIT_CODE=$?
+fi
+
+log_message "------- UPDATE SCRIPT OUTPUT END -------"
 log_message "Update script completed with exit code: $UPDATE_EXIT_CODE"
-
 # The update script handles everything (stopping/starting services, dependencies, notifications)
 # We just need to verify the result and send a final status notification
 if [ $UPDATE_EXIT_CODE -eq 0 ]; then
     log_message "✅ Update completed successfully!"
     
-    # Additional Termux-specific post-update steps
+    # Additional Termux-specific post-update steps (with error handling)
     log_message "Running post-update Termux optimizations..."
     
     # Navigate to the refurbminer directory for post-update steps
     cd /data/data/com.termux/files/home/refurbminer 2>/dev/null || cd ~/refurbminer 2>/dev/null || true
     
+    # Apply @swc/core fixes if needed (don't fail if this errors)
     if [ -d "node_modules/@swc/core" ] && [ ! -f "node_modules/@swc/core/.termux-fixed" ]; then
         log_message "Applying Termux compatibility fixes for @swc/core..."
-        
-        # Try to install the wasm fallback explicitly if native bindings failed
-        npm install @swc/wasm --save-optional >> ${logPath} 2>&1 || true
-        
-        # Mark as fixed to avoid repeating this
+        npm install @swc/wasm --save-optional >> ${logPath} 2>&1 || log_message "⚠️ @swc/wasm install failed, continuing anyway"
         touch "node_modules/@swc/core/.termux-fixed" 2>/dev/null || true
-        
         log_message "Applied @swc/core compatibility fixes"
     fi
     
-    # Run a quick dependency audit and fix if possible
+    # Run a quick dependency audit (don't fail if this errors)
     log_message "Running npm audit fix (non-breaking changes only)..."
-    npm audit fix --only=prod >> ${logPath} 2>&1 || true
+    npm audit fix --only=prod >> ${logPath} 2>&1 || log_message "⚠️ npm audit fix failed, continuing anyway"
     
-    # Verify that RefurbMiner is running in screen session
+    # Verify that RefurbMiner is running in screen session (with timeout)
+    log_message "Verifying RefurbMiner is running..."
     sleep 3
-    if screen -list 2>/dev/null | grep -q "refurbminer"; then
+    
+    if timeout 5 screen -list 2>/dev/null | grep -q "refurbminer"; then
         log_message "✅ RefurbMiner is running in screen session 'refurbminer'"
-        termux-notification --title "RefurbMiner Update Complete" --content "Update successful - RefurbMiner is running" || true
+        termux-notification --title "RefurbMiner Update Complete" --content "Update successful - RefurbMiner is running" 2>/dev/null || true
     else
-        log_message "⚠️ RefurbMiner screen session not found after update"
-        termux-notification --title "RefurbMiner Update" --content "Update completed but screen session verification failed" || true
+        log_message "⚠️ RefurbMiner screen session verification timed out or not found"
+        # Don't consider this a fatal error - the app might still be starting
+        log_message "Note: RefurbMiner may still be starting, check status manually"
+        termux-notification --title "RefurbMiner Update" --content "Update completed, checking app status..." 2>/dev/null || true
     fi
 else
     log_message "❌ Update failed with exit code $UPDATE_EXIT_CODE"
     
     # Try to provide helpful error information
-    if grep -q "@swc/core" ${logPath}; then
+    if grep -q "@swc/core" ${logPath} 2>/dev/null; then
         log_message "Note: @swc/core warnings are normal on Termux and don't prevent operation"
     fi
     
-    termux-notification --title "RefurbMiner Update Failed" --content "Update script failed with exit code $UPDATE_EXIT_CODE" || true
+    # Check if the app is at least running despite the error
+    if timeout 5 screen -list 2>/dev/null | grep -q "refurbminer"; then
+        log_message "ℹ️  RefurbMiner is running despite update exit code"
+        termux-notification --title "RefurbMiner Update" --content "Update had issues but app is running" 2>/dev/null || true
+    else
+        log_message "❌ RefurbMiner is not running after update failure"
+        termux-notification --title "RefurbMiner Update Failed" --content "Update failed with code $UPDATE_EXIT_CODE - app not running" 2>/dev/null || true
+    fi
 fi
 
 log_message "=== RefurbMiner Update Process Completed ==="
@@ -1195,9 +1227,11 @@ log_message "=== RefurbMiner Update Process Completed ==="
 # Make log readable
 chmod 644 ${logPath} 2>/dev/null || true
 
-# Clean up wrapper script
+# Clean up wrapper script (ignore errors)
 rm -f ${wrapperPath} 2>/dev/null || true
-`;
+
+# Exit with the update script's exit code
+exit $UPDATE_EXIT_CODE`;
 
         // Write wrapper script
         try {

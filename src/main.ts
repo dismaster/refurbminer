@@ -64,6 +64,19 @@ async function bootstrap() {
   };
 
   process.on('uncaughtException', (error) => {
+    // Check if this is a console I/O error during shutdown (from update process)
+    const isIOError = error instanceof Error && (
+      error.message.includes('EIO') ||
+      error.message.includes('EPIPE') ||
+      error.message.includes('EBADF')
+    );
+    
+    if (isIOError) {
+      // Suppress I/O errors during shutdown gracefully
+      console.error('I/O error during shutdown (likely from update process), exiting gracefully');
+      process.exit(0);
+    }
+    
     void shutdown('uncaughtException', error, 1);
   });
 

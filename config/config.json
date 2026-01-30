@@ -1,8 +1,8 @@
 {
-  "minerId": "",
+  "minerId": "67f38cb8e353aa486bc33a20",
   "rigId": "",
   "name": "Unnamed Rig",
-  "minerSoftware": "xmrig",
+  "minerSoftware": "ccminer",
   "thresholds": {
     "maxCpuTemp": 85,
     "maxBatteryTemp": 45,

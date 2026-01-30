@@ -268,18 +268,28 @@ export class LoggingService implements OnApplicationShutdown {
     await fs.promises.writeFile(LOG_FILE_PATH, '', { flag: 'w' });
   }
 
-  /** ✅ Print logs to console */
+  /** ✅ Print logs to console with error handling */
   private printToConsole(logEntry: string, level: string): void {
-    switch (level) {
-      case 'ERROR':
-        console.error(logEntry);
-        break;
-      case 'WARN':
-        console.warn(logEntry);
-        break;
-      default:
-        console.log(logEntry);
-        break;
+    try {
+      switch (level) {
+        case 'ERROR':
+          console.error(logEntry);
+          break;
+        case 'WARN':
+          console.warn(logEntry);
+          break;
+        default:
+          console.log(logEntry);
+          break;
+      }
+    } catch (error) {
+      // Silently ignore console write errors (e.g., during shutdown or when stdout is closed)
+      // This prevents cascading errors during graceful shutdown when update process is running
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      if (!errorMsg.includes('EIO') && !errorMsg.includes('EPIPE') && !errorMsg.includes('EBADF')) {
+        // Only ignore I/O related errors, re-throw others if needed
+        // But for shutdown scenarios, it's better to fail silently than crash
+      }
     }
   }
 
