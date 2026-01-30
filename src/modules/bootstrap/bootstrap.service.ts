@@ -782,6 +782,9 @@ export class BootstrapService implements OnModuleInit {
 
   /** Setup Termux repositories with fallback options */
   private async setupTermuxRepositories(): Promise<void> {
+    // First, fix any broken dpkg state before attempting package operations
+    await this.fixBrokenDpkgIfNeeded();
+
     const termuxRepos = [
       {
         name: 'Main Termux Repository',
@@ -1003,6 +1006,65 @@ export class BootstrapService implements OnModuleInit {
       normalized.includes('file has unexpected size') ||
       normalized.includes('some index files failed to download')
     );
+  }
+
+  /** Fix broken dpkg state before package operations */
+  private async fixBrokenDpkgIfNeeded(): Promise<void> {
+    try {
+      // Check if dpkg is in a broken state
+      const testResult = await execCommand('dpkg --audit', { 
+        stdio: 'ignore',
+        timeout: 5000 
+      }).catch(() => null);
+
+      // If dpkg --audit returns an error or finds issues, run recovery
+      if (!testResult || testResult.includes('error') || testResult.includes('broken')) {
+        this.loggingService.log(
+          '🔧 Detected broken dpkg state, running automatic recovery...',
+          'INFO',
+          'bootstrap',
+        );
+
+        const nonInteractiveEnv = {
+          ...process.env,
+          DEBIAN_FRONTEND: 'noninteractive',
+          NEEDRESTART_MODE: 'a',
+        };
+
+        // Step 1: dpkg --configure -a
+        try {
+          await execCommand(
+            'DEBIAN_FRONTEND=noninteractive dpkg --configure -a --force-confold --force-confdef',
+            { timeout: 60000, env: nonInteractiveEnv, stdio: 'ignore' },
+          );
+          this.loggingService.log(
+            '✅ dpkg recovery completed',
+            'DEBUG',
+            'bootstrap',
+          );
+        } catch (error) {
+          this.loggingService.log(
+            `⚠️ dpkg recovery had issues but continuing: ${error instanceof Error ? error.message : String(error)}`,
+            'WARN',
+            'bootstrap',
+          );
+        }
+
+        // Step 2: Clean package cache
+        try {
+          await execCommand('apt-get clean', { timeout: 30000, stdio: 'ignore' });
+        } catch {
+          // Ignore errors
+        }
+      }
+    } catch (error) {
+      // Don't block bootstrap if dpkg check fails
+      this.loggingService.log(
+        `⚠️ dpkg state check failed, continuing anyway: ${error instanceof Error ? error.message : String(error)}`,
+        'DEBUG',
+        'bootstrap',
+      );
+    }
   }
 
   /** Install individual network tools as fallback */
