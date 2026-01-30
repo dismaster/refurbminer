@@ -654,14 +654,26 @@ export class ActionsService implements OnModuleInit, OnApplicationShutdown {
         'actions',
       );
 
-      // Step 1: Try dpkg --configure -a to fix configuration issues
+      // Set non-interactive environment to avoid prompts
+      const nonInteractiveEnv = {
+        ...process.env,
+        DEBIAN_FRONTEND: 'noninteractive',
+        NEEDRESTART_MODE: 'a', // Restart services automatically
+      };
+
+      // Step 1: Try dpkg --configure -a with non-interactive flags
       try {
         this.loggingService.log(
-          '📋 Running: dpkg --configure -a',
+          '📋 Running: dpkg --configure -a (non-interactive)',
           'DEBUG',
           'actions',
         );
-        await execAsync('dpkg --configure -a', { timeout: 120000 }); // 2 minute timeout
+        // Use --force-confold to keep existing config files by default
+        // This prevents interactive prompts about config file conflicts
+        await execAsync(
+          'DEBIAN_FRONTEND=noninteractive dpkg --configure -a --force-confold --force-confdef',
+          { timeout: 120000, env: nonInteractiveEnv },
+        );
         this.loggingService.log(
           '✅ dpkg configuration recovered',
           'DEBUG',
@@ -675,14 +687,17 @@ export class ActionsService implements OnModuleInit, OnApplicationShutdown {
         );
       }
 
-      // Step 2: Try apt --fix-broken install to resolve dependency issues
+      // Step 2: Try apt --fix-broken install with non-interactive flags
       try {
         this.loggingService.log(
-          '🔗 Running: apt --fix-broken install',
+          '🔗 Running: apt --fix-broken install (non-interactive)',
           'DEBUG',
           'actions',
         );
-        await execAsync('apt --fix-broken install -y', { timeout: 180000 }); // 3 minute timeout
+        await execAsync(
+          'DEBIAN_FRONTEND=noninteractive apt --fix-broken install -y -o Dpkg::Options::="--force-confold" -o Dpkg::Options::="--force-confdef"',
+          { timeout: 180000, env: nonInteractiveEnv },
+        );
         this.loggingService.log(
           '✅ Broken dependencies resolved',
           'DEBUG',
@@ -703,7 +718,7 @@ export class ActionsService implements OnModuleInit, OnApplicationShutdown {
           'DEBUG',
           'actions',
         );
-        await execAsync('apt-get clean && apt-get autoclean', { timeout: 60000 }); // 1 minute timeout
+        await execAsync('apt-get clean && apt-get autoclean', { timeout: 60000 });
         this.loggingService.log(
           '✅ Cleaned up broken packages',
           'DEBUG',
