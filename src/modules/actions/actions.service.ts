@@ -1157,6 +1157,14 @@ export npm_config_target_arch=arm64
 export npm_config_cache=/data/data/com.termux/files/home/.npm
 export npm_config_prefer_offline=true
 
+# Pre-cleanup: Kill any zombie update processes from previous failed updates
+log_message "Checking for zombie update processes..."
+pkill -f "update_refurbminer.sh" 2>/dev/null || true
+pkill -f "update_wrapper.sh" 2>/dev/null || true
+pkill -f "screen.*-X.*quit" 2>/dev/null || true
+sleep 1
+log_message "Zombie process cleanup completed"
+
 # Pre-install known problematic packages with Termux-specific handling
 log_message "Preparing Termux environment for update..."
 
@@ -1167,6 +1175,10 @@ npm cache clean --force >> ${logPath} 2>&1 || true
 # Execute the update script with full bash environment and save output
 log_message "Executing update script: ${updateScriptPath}"
 log_message "------- UPDATE SCRIPT OUTPUT START -------"
+
+# Kill any screen commands that might be hung from previous attempts
+pkill -f "screen.*quit" 2>/dev/null || true
+sleep 1
 
 # Use timeout to prevent the update script from hanging indefinitely (2 hour limit)
 if command -v timeout &>/dev/null; then
