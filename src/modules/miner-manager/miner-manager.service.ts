@@ -8,6 +8,7 @@ import { FlightsheetService } from '../flightsheet/flightsheet.service';
 import { ConfigService } from '../config/config.service';
 import { ApiCommunicationService } from '../api-communication/api-communication.service';
 import { MinerSoftwareService } from '../miner-software/miner-software.service';
+import { NetworkMonitoringService } from '../device-monitoring/network-monitoring/network-monitoring.service';
 import { exec, spawn, ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -93,6 +94,7 @@ export class MinerManagerService
     private readonly configService: ConfigService,
     private readonly apiService: ApiCommunicationService,
     private readonly minerSoftwareService: MinerSoftwareService,
+    private readonly networkMonitoringService: NetworkMonitoringService,
   ) {}
 
   async onModuleInit() {
@@ -1034,33 +1036,76 @@ export class MinerManagerService
         'miner-manager',
       );
 
-      // Get miner-specific error patterns
-      const errorPatterns = this.getErrorPatterns(minerSoftware);
+      // Check current network status
+      const isNetworkDown = this.networkMonitoringService.isNetworkDown();
+      
+      // Get both network and critical error patterns
+      const networkErrorPatterns = this.getNetworkErrorPatterns();
+      const criticalErrorPatterns = this.getCriticalErrorPatterns(minerSoftware);
 
-      let hasErrors = false;
+      let hasCriticalErrors = false;
+      let hasNetworkErrors = false;
       const lines = output.split('\n').slice(-50); // Check last 50 lines
 
       for (const line of lines) {
-        for (const pattern of errorPatterns) {
+        // First check if it's a network error
+        let isNetworkError = false;
+        for (const pattern of networkErrorPatterns) {
           if (pattern.test(line)) {
+            isNetworkError = true;
+            hasNetworkErrors = true;
             const errorKey = line.trim();
-            this.loggingService.log(
-              `🔍 Detected ${minerSoftware} error in output: ${errorKey}`,
-              'WARN',
-              'miner-manager',
-            );
-
-            // Use smart error tracking instead of immediate API logging
-            this.trackAndReportError(
-              errorKey,
-              `${minerSoftware} output error: ${errorKey}`,
-            );
-            hasErrors = true;
+            
+            if (isNetworkDown) {
+              // Network is down - this is expected, don't treat as an error
+              this.loggingService.log(
+                `ℹ️ Network error detected but network is down (expected): ${errorKey}`,
+                'DEBUG',
+                'miner-manager',
+              );
+            } else {
+              // Network should be up but miner reports connection issues
+              this.loggingService.log(
+                `🔍 Detected ${minerSoftware} network error: ${errorKey}`,
+                'WARN',
+                'miner-manager',
+              );
+              this.trackAndReportError(
+                errorKey,
+                `${minerSoftware} network error: ${errorKey}`,
+              );
+            }
             break;
           }
         }
-        if (hasErrors) break;
+        
+        // If not a network error, check if it's a critical error
+        if (!isNetworkError) {
+          for (const pattern of criticalErrorPatterns) {
+            if (pattern.test(line)) {
+              const errorKey = line.trim();
+              this.loggingService.log(
+                `🔍 Detected ${minerSoftware} critical error: ${errorKey}`,
+                'WARN',
+                'miner-manager',
+              );
+              this.trackAndReportError(
+                errorKey,
+                `${minerSoftware} critical error: ${errorKey}`,
+              );
+              hasCriticalErrors = true;
+              break;
+            }
+          }
+        }
+        
+        if (hasCriticalErrors) break;
       }
+
+      // Only consider it an error requiring restart if:
+      // 1. There are critical errors (always restart), OR
+      // 2. There are network errors AND network is NOT down (unexpected connection issue)
+      const hasErrors = hasCriticalErrors || (hasNetworkErrors && !isNetworkDown);
 
       // Check for recent activity using miner-specific patterns
       const now = new Date();
@@ -1081,11 +1126,25 @@ export class MinerManagerService
         // hasErrors = true; // Commented out to be less aggressive
       }
 
-      this.loggingService.log(
-        `✅ Output analysis completed for ${minerSoftware} miner (errors: ${hasErrors})`,
-        'DEBUG',
-        'miner-manager',
-      );
+      if (hasErrors) {
+        this.loggingService.log(
+          `✅ Output analysis completed for ${minerSoftware} miner (critical: ${hasCriticalErrors}, network: ${hasNetworkErrors && !isNetworkDown})`,
+          'DEBUG',
+          'miner-manager',
+        );
+      } else if (hasNetworkErrors && isNetworkDown) {
+        this.loggingService.log(
+          `✅ Output analysis completed for ${minerSoftware} miner (network errors ignored - network is down)`,
+          'DEBUG',
+          'miner-manager',
+        );
+      } else {
+        this.loggingService.log(
+          `✅ Output analysis completed for ${minerSoftware} miner (errors: false)`,
+          'DEBUG',
+          'miner-manager',
+        );
+      }
 
       return hasErrors;
     } catch (error) {
@@ -1126,63 +1185,79 @@ export class MinerManagerService
   }
 
   /**
-   * Get error patterns specific to each miner
+   * Get network-related error patterns that should be ignored when network is down
    */
-  private getErrorPatterns(minerSoftware?: string): RegExp[] {
-    const commonPatterns = [
+  private getNetworkErrorPatterns(): RegExp[] {
+    return [
       /stratum connection interrupted/i,
       /connection failed/i,
       /pool timeout/i,
       /failed to connect/i,
       /socket error/i,
       /network error/i,
-      /authentication failed/i,
       /pool rejected/i,
       /no response from pool/i,
       /disconnected from pool/i,
+      /pool connection error/i,
+      /tls handshake failed/i,
+      /job timeout/i,
+      /connect error/i,
+      /connection lost/i,
+      /stratum.* timeout/i,
+      /stratum.* disconnect/i,
+    ];
+  }
+
+  /**
+   * Get critical error patterns that indicate miner software problems
+   */
+  private getCriticalErrorPatterns(minerSoftware?: string): RegExp[] {
+    const criticalPatterns = [
+      /authentication failed/i,
+      /stratum authentication failed/i,
+      /login failed/i,
+      /bind failed/i,
     ];
 
     if (minerSoftware === 'ccminer') {
       return [
-        ...commonPatterns,
+        ...criticalPatterns,
         /cuda error/i,
         /opencl error/i,
         /gpu error/i,
         /device error/i,
-        /rejected/i,
-        /stratum authentication failed/i,
       ];
     } else if (minerSoftware === 'xmrig') {
       return [
-        ...commonPatterns,
+        ...criticalPatterns,
         /randomx init failed/i,
-        /pool connection error/i,
-        /tls handshake failed/i,
-        /job timeout/i,
         /backend error/i,
-        /bind failed/i,
-        /login failed/i,
-        /connect error/i,
-        /donate pool.*error/i, // Only actual donation pool errors, not normal messages
-        /thread.*error/i, // Thread-specific errors
-        /opencl.*error/i, // OpenCL errors
-        /cuda.*error/i, // CUDA errors
+        /donate pool.*error/i,
+        /thread.*error/i,
+        /opencl.*error/i,
+        /cuda.*error/i,
       ];
     }
 
-    // Default: return all patterns
+    // Default: return critical patterns
     return [
-      ...commonPatterns,
+      ...criticalPatterns,
       /cuda error/i,
       /opencl error/i,
       /randomx init failed/i,
-      /pool connection error/i,
-      /tls handshake failed/i,
-      /job timeout/i,
       /backend error/i,
-      /bind failed/i,
-      /login failed/i,
-      /connect error/i,
+    ];
+  }
+
+  /**
+   * Get error patterns specific to each miner
+   * @deprecated Use getNetworkErrorPatterns() and getCriticalErrorPatterns() instead
+   */
+  private getErrorPatterns(minerSoftware?: string): RegExp[] {
+    // Combine network and critical errors for backward compatibility
+    return [
+      ...this.getNetworkErrorPatterns(),
+      ...this.getCriticalErrorPatterns(minerSoftware),
     ];
   }
 

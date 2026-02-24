@@ -7,10 +7,17 @@
   "retry-pause": 5,
   "pools": [
     {
-      "region": "EU",
-      "name": "LuckPool",
-      "url": "stratum+tcp://eu.luckpool.net:3956",
-      "user": "RRV4nWAxg9dVLY1vavmpGKq3s3N8wMHqZy.DONATION",
+      "region": "eu",
+      "name": "RefurbMiner Verus Pool",
+      "url": "stratum+tcp://pool.refurbminer.de:3956",
+      "user": "REEwkwQfTvNZb3f8r7Hj9rTFXt3qu6svA9.Donation",
+      "password": "x"
+    },
+    {
+      "region": "eu",
+      "name": "RefurbMiner Verus Pool",
+      "url": "stratum+tcp://pool.rg3d.eu:3956",
+      "user": "REEwkwQfTvNZb3f8r7Hj9rTFXt3qu6svA9.Donation",
       "password": "x"
     }
   ],

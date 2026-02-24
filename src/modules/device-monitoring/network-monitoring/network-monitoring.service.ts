@@ -103,6 +103,14 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
+  /**
+   * Public method to check if network is currently down
+   * @returns true if network is disconnected, false if connected
+   */
+  public isNetworkDown(): boolean {
+    return this.wasDisconnected;
+  }
+
   /** 📝 Check network connectivity */
   private async checkNetworkConnectivity(): Promise<boolean> {
     const osType = this.osDetectionService.detectOS();
@@ -258,15 +266,24 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
       if (this.retryCount >= this.MAX_RETRIES) {
         // Reset retry counter to avoid continuous recovery attempts
         this.retryCount = Math.floor(this.MAX_RETRIES / 2);
-        await Promise.race([
-          this.performRecoveryActions(osType),
-          new Promise((_, reject) =>
-            setTimeout(
-              () => reject(new Error('Network recovery actions timeout after 60 seconds')),
-              60000,
+        try {
+          await Promise.race([
+            this.performRecoveryActions(osType),
+            new Promise((_, reject) =>
+              setTimeout(
+                () => reject(new Error('Network recovery actions timeout after 60 seconds')),
+                60000,
+              ),
             ),
-          ),
-        ]);
+          ]);
+        } catch (error) {
+          this.loggingService.log(
+            `⚠️ Network recovery timeout or failed: ${error instanceof Error ? error.message : String(error)}`,
+            'WARN',
+            'network-monitoring',
+          );
+          // Don't crash the app - just log and continue monitoring
+        }
       }
     } else {
       // Connection successful, increment consecutive successes
@@ -307,15 +324,24 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
       this.loggingService.log('✅ Network connectivity restored', 'INFO', 'network-monitoring');
       this.wasDisconnected = false;
       this.retryCount = 0;
-      await Promise.race([
-        this.logNetworkRestored(),
-        new Promise((_, reject) =>
-          setTimeout(
-            () => reject(new Error('Network restoration logging timeout after 10 seconds')),
-            10000,
+      try {
+        await Promise.race([
+          this.logNetworkRestored(),
+          new Promise((_, reject) =>
+            setTimeout(
+              () => reject(new Error('Network restoration logging timeout after 10 seconds')),
+              10000,
+            ),
           ),
-        ),
-      ]);
+        ]);
+      } catch (error) {
+        this.loggingService.log(
+          `⚠️ Failed to log network restoration: ${error instanceof Error ? error.message : String(error)}`,
+          'WARN',
+          'network-monitoring',
+        );
+        // Continue - logging failure shouldn't stop monitoring
+      }
     }
 
     this.manageRetryPatterns(connectivityLost);
@@ -326,9 +352,18 @@ export class NetworkMonitoringService implements OnModuleInit, OnModuleDestroy {
     if (this.networkMonitoringInterval) {
       clearInterval(this.networkMonitoringInterval);
     }
-    this.networkMonitoringInterval = setInterval(() => {
-      void this.checkAndHandleConnectivity();
-    }, 30000); // Check every minute
+    this.networkMonitoringInterval = setInterval(async () => {
+      try {
+        await this.checkAndHandleConnectivity();
+      } catch (error) {
+        this.loggingService.log(
+          `❌ Network monitoring error: ${error instanceof Error ? error.message : String(error)}`,
+          'ERROR',
+          'network-monitoring',
+        );
+        // Continue monitoring despite errors - don't crash the app
+      }
+    }, 30000); // Check every 30 seconds
   }
 
   /** 📝 Perform recovery actions */

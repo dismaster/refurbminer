@@ -12,7 +12,7 @@
 
 ## Description
 
-The RefurbMiner Client Version which submits collects device and miner data like hashrates, temperatures and settings.
+RefurbMiner client for collecting device + miner telemetry (hashrates, temperatures, settings) and serving the local dashboard/API.
 
 ### 📱 Termux Support
 
@@ -40,7 +40,11 @@ $ npm run build && npm start
 
 ## Resources
 
-[TBD]
+- Startup sequence: [docs/STARTUP_OVERVIEW.md](./docs/STARTUP_OVERVIEW.md)
+- Stabilization plan: [docs/STABILIZATION_PLAN.md](./docs/STABILIZATION_PLAN.md)
+- Crash triage runbook: [docs/CRASH_TRIAGE_RUNBOOK.md](./docs/CRASH_TRIAGE_RUNBOOK.md)
+- Improvements catalog: [docs/IMPROVEMENTS_CATALOG.md](./docs/IMPROVEMENTS_CATALOG.md)
+- Implementation log: [docs/IMPLEMENTATION_LOG.md](./docs/IMPLEMENTATION_LOG.md)
 
 ## Support
 
@@ -52,4 +56,4 @@ via Discord.
 
 ## License
 
-[TBD]
+RefurbMiner

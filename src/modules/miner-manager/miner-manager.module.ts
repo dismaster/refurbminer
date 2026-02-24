@@ -6,6 +6,7 @@ import { ApiCommunicationModule } from '../api-communication/api-communication.m
 import { FlightsheetModule } from '../flightsheet/flightsheet.module';
 import { ConfigModule } from '../config/config.module';
 import { MinerSoftwareModule } from '../miner-software/miner-software.module';
+import { NetworkMonitoringModule } from '../device-monitoring/network-monitoring/network-monitoring.module';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { MinerSoftwareModule } from '../miner-software/miner-software.module';
     FlightsheetModule,
     ConfigModule,
     MinerSoftwareModule,
+    NetworkMonitoringModule,
   ],
   providers: [MinerManagerService],
   controllers: [MinerManagerController],
