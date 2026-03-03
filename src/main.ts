@@ -110,6 +110,7 @@ async function bootstrap() {
   process.prependListener('SIGTERM', () => handleSignal('SIGTERM'));
   process.prependListener('SIGINT', () => handleSignal('SIGINT'));
   process.prependListener('SIGHUP', () => handleSignal('SIGHUP'));
+  process.prependListener('SIGTRAP', () => handleSignal('SIGTRAP'));
 
   // Useful on Windows terminals and some process managers.
   if (process.platform === 'win32') {
