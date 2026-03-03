@@ -1,4 +1,9 @@
-import { Module, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import {
+  Module,
+  OnModuleInit,
+  OnModuleDestroy,
+  OnApplicationShutdown,
+} from '@nestjs/common';
 import { join } from 'path';
 import { LoggingModule } from './modules/logging/logging.module';
 import { LoggingService } from './modules/logging/logging.service';
@@ -49,8 +54,18 @@ import { AppService } from './app.service';
   controllers: [AppController],
   providers: [AppService],
 })
-export class AppModule implements OnModuleInit, OnModuleDestroy {
+export class AppModule
+  implements OnModuleInit, OnModuleDestroy, OnApplicationShutdown
+{
   constructor(private readonly loggingService: LoggingService) {}
+
+  onApplicationShutdown(signal?: string) {
+    this.loggingService.log(
+      `📴 Application shutdown hook received${signal ? ` (signal: ${signal})` : ''}`,
+      'INFO',
+      'app',
+    );
+  }
   
   onModuleDestroy() {
     this.loggingService.log('💤 Application shutting down, cleaning up resources', 'INFO', 'app');
